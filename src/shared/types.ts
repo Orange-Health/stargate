@@ -1,0 +1,260 @@
+export type ConnectionConfig = {
+  jiraSite: string
+  jiraEmail: string
+  jiraToken: string
+  githubOrg: string
+  githubToken: string
+  jenkinsUrl: string
+  jenkinsUsername: string
+  jenkinsToken: string
+  jiraProject?: string
+}
+
+export type ConnectionStatus = {
+  connected: boolean
+  jiraUser?: string
+  githubUser?: string
+  jenkinsUser?: string
+  githubOrg?: string
+  projectKey?: string
+}
+
+export type JiraVersion = {
+  id: string
+  name: string
+  description?: string
+  startDate?: string
+  releaseDate?: string
+  overdue: boolean
+  issueCount?: number
+}
+
+export type JiraIssue = {
+  key: string
+  summary: string
+  status: string
+  assignee?: string
+  url: string
+  developmentSummary?: string
+}
+
+export type ReviewDecision =
+  | 'approved'
+  | 'changes_requested'
+  | 'review_required'
+
+export type CheckStatus = 'success' | 'failure' | 'pending' | 'none'
+
+export type PullRequest = {
+  id: number
+  number: number
+  repository: string
+  title: string
+  url: string
+  state: 'open' | 'closed'
+  draft: boolean
+  merged: boolean
+  baseBranch: string
+  headBranch: string
+  author: string
+  assignees: string[]
+  reviewDecision: ReviewDecision
+  mergeable: boolean | null
+  mergeableState: string
+  checks: CheckStatus
+  updatedAt: string
+}
+
+export type EligibilityReason =
+  | 'NO_MATCHING_PR'
+  | 'WRONG_BASE_BRANCH'
+  | 'REVIEW_REQUIRED'
+  | 'CHANGES_REQUESTED'
+  | 'HAS_CONFLICTS'
+  | 'MERGEABILITY_PENDING'
+  | 'CHECKS_PENDING'
+  | 'CHECKS_FAILED'
+  | 'DRAFT'
+  | 'ALREADY_MERGED'
+
+export type ReleaseItem = {
+  issue: JiraIssue
+  pullRequest?: PullRequest
+  eligible: boolean
+  blockingReasons: EligibilityReason[]
+  warningReasons: EligibilityReason[]
+}
+
+export type ServiceRelease = {
+  repository: string
+  items: ReleaseItem[]
+  eligibleCount: number
+  blockedCount: number
+  mergedCount: number
+}
+
+export type ProviderWarning = {
+  provider: 'jira' | 'github' | 'jenkins'
+  message: string
+}
+
+export type RateLimit = {
+  remaining: number
+  limit: number
+  resetsAt: string
+}
+
+export type ReleaseDashboard = {
+  version: JiraVersion
+  services: ServiceRelease[]
+  unmatched: ReleaseItem[]
+  warnings: ProviderWarning[]
+  githubRateLimit?: RateLimit
+  fetchedAt: string
+  cached: boolean
+}
+
+export type StagingEnvironment = 'qa' | 's1' | 's2' | 's3' | 's4' | 's5' | 's6'
+
+export type CreateStagingReleaseInput = {
+  repository: string
+  environment: StagingEnvironment
+  date: string
+}
+
+export type CreatedStagingRelease = {
+  id: number
+  repository: string
+  environment: StagingEnvironment
+  tag: string
+  sourceBranch: 'dev'
+  url: string
+  createdAt: string
+}
+
+export type BuildStatus =
+  | 'starting'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled'
+
+export type WorkflowRun = {
+  id: number
+  name: string
+  status: string
+  conclusion?: string
+  url: string
+  startedAt: string
+  updatedAt: string
+}
+
+export type TrackedStagingRelease = {
+  id: number
+  tag: string
+  environment: StagingEnvironment
+  url: string
+  createdAt: string
+  buildStatus: BuildStatus
+  runs: WorkflowRun[]
+}
+
+export type PromotionRoute = 'dev-to-release' | 'release-to-default'
+
+export type PromotionPullRequest = {
+  number: number
+  title: string
+  body?: string
+  url: string
+  baseBranch: string
+  headBranch: string
+  draft: boolean
+  mergeable: boolean | null
+  mergeableState: string
+  reviewDecision: ReviewDecision
+  checks: CheckStatus
+}
+
+export type PromotionStep = {
+  route: PromotionRoute
+  fromBranch: string
+  toBranch: string
+  commitsAhead: number
+  state: 'up_to_date' | 'needs_pr' | 'pr_open'
+  pullRequest?: PromotionPullRequest
+  previousTemplate?: {
+    title: string
+    body?: string
+    url: string
+  }
+}
+
+export type PendingBackMerge = {
+  number: number
+  title: string
+  url: string
+  fromBranch: string
+  toBranch: string
+}
+
+export type RepositoryReleaseState = {
+  repository: string
+  defaultBranch: string
+  stagingReleases: TrackedStagingRelease[]
+  promotionSteps: PromotionStep[]
+  pendingBackMerges: PendingBackMerge[]
+  jenkinsServices: string[]
+  fetchedAt: string
+}
+
+export type CreatePromotionPullRequestInput = {
+  repository: string
+  route: PromotionRoute
+}
+
+export type MergePromotionPullRequestInput = {
+  repository: string
+  pullNumber: number
+}
+
+export type MergePromotionPullRequestResult = {
+  merged: boolean
+  message: string
+  sha?: string
+}
+
+export type DeploymentEnvironment = 'qa' | 's1' | 's2' | 's3' | 's4' | 's5'
+
+export type TriggerDeploymentInput = {
+  repository: string
+  service: string
+  tag: string
+  environment: DeploymentEnvironment
+}
+
+export type TriggeredDeployment = {
+  queueId: number
+  queueUrl: string
+  buildUrl?: string
+  jobName: string
+  service: string
+  tag: string
+  environment: DeploymentEnvironment
+}
+
+export type JenkinsQueueStatus = {
+  queueId: number
+  status: 'queued' | 'started' | 'canceled'
+  buildUrl?: string
+  buildNumber?: number
+  message?: string
+}
+
+export type ApiErrorBody = {
+  error: {
+    code: string
+    message: string
+    provider?: 'jira' | 'github' | 'jenkins'
+    retryable?: boolean
+  }
+}

@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap');
+
+:root {
+  --sans: 'DM Sans', system-ui, sans-serif;
+  --serif: 'Newsreader', Georgia, serif;
+  --mono: 'DM Mono', ui-monospace, monospace;
+  --paper: #f9f9f6;
+  --paper-warm: #f2f1eb;
+  --ink: #17201a;
+  --ink-soft: #344139;
+  --muted: #788078;
+  --line: #dedfd9;
+  --line-strong: #c9cbc4;
+  --green: #28694e;
+  --green-light: #54a178;
+  --green-pale: #b9e7cd;
+  --green-faint: #e7f2eb;
+  --red: #a33d36;
+  --red-faint: #f8eae7;
+  --red-line: #ebcac5;
+  --amber: #8a621f;
+  --amber-faint: #f8f0dd;
+  --amber-line: #ebd8ae;
+  --purple: #665095;
+  --purple-faint: #eeeaf7;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--green-pale);
+}
