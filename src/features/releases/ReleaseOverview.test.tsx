@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { ReleaseDashboard } from '../../shared/types'
 import { ReleaseOverview } from './ReleaseOverview'
@@ -73,6 +73,18 @@ const dashboard: ReleaseDashboard = {
 }
 
 describe('ReleaseOverview', () => {
+  beforeEach(() => {
+    vi.spyOn(api, 'repositoryRisks').mockImplementation(async (repositories) =>
+      repositories.map((repository) => ({
+        repository,
+        backMergePending: false,
+        checkFailed: false,
+      })),
+    )
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+
   it('renders service readiness and explicit blocking reasons', () => {
     render(
       <ReleaseOverview
@@ -131,8 +143,71 @@ describe('ReleaseOverview', () => {
     ).not.toBeInTheDocument()
   })
 
+  it('refreshes the selected service on demand', async () => {
+    const user = userEvent.setup()
+    const refreshRepository = vi
+      .spyOn(api, 'refreshRepository')
+      .mockResolvedValue()
+    const onRefresh = vi.fn().mockResolvedValue(undefined)
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={dashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh service' }),
+    )
+
+    expect(refreshRepository).toHaveBeenCalledWith('orange/service-api')
+    expect(onRefresh).toHaveBeenCalled()
+  })
+
+  it('searches the service list by repository name', async () => {
+    const user = userEvent.setup()
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={dashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.type(screen.getByRole('searchbox', { name: 'Search services' }), 'missing')
+
+    expect(screen.getByText('No services match your search.')).toBeVisible()
+    expect(screen.getByText('No matching services')).toBeVisible()
+  })
+
   it('filters services with pending merges and issues', async () => {
     const user = userEvent.setup()
+    vi.mocked(api.repositoryRisks).mockResolvedValueOnce([
+      {
+        repository: 'orange/service-api',
+        backMergePending: true,
+        checkFailed: false,
+      },
+    ])
     const issueDashboard: ReleaseDashboard = {
       ...dashboard,
       services: [{ ...dashboard.services[0], backMergePending: true }],
@@ -153,7 +228,7 @@ describe('ReleaseOverview', () => {
     expect(
       screen.getByRole('button', { name: 'Pending merge 1' }),
     ).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Issues 1' }))
+    await user.click(await screen.findByRole('button', { name: 'Issues 1' }))
     expect(screen.getAllByText('service-api')).toHaveLength(2)
   })
 
@@ -219,6 +294,5 @@ describe('ReleaseOverview', () => {
     expect(onRefresh).toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Merge to dev' })).not.toBeInTheDocument()
     expect(screen.getByText('Merged')).toBeInTheDocument()
-    merge.mockRestore()
   })
 })

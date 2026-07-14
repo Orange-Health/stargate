@@ -95,4 +95,20 @@ describe('local API', () => {
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('INVALID_FEATURE_PR_MERGE')
   })
+
+  it('validates asynchronous repository risk requests', async () => {
+    const response = await request(createApp())
+      .post('/api/github/repository-risks')
+      .send({ repositories: ['../outside'] })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_REPOSITORIES')
+  })
+
+  it('validates service-level refresh requests', async () => {
+    const response = await request(createApp())
+      .post('/api/github/repository-refresh')
+      .send({ repository: '../outside' })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_REPOSITORY')
+  })
 })

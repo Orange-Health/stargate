@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../shared/api'
 import type {
   ConnectionStatus,
@@ -130,6 +130,7 @@ function ServiceDetail({
 }) {
   const name = service.repository.split('/').at(-1)
   const [merging, setMerging] = useState<number>()
+  const [refreshing, setRefreshing] = useState(false)
   const [mergeError, setMergeError] = useState('')
   const [optimisticallyMerged, setOptimisticallyMerged] = useState<Set<number>>(
     new Set(),
@@ -155,6 +156,28 @@ function ServiceDetail({
     }
   }
 
+  async function refreshService() {
+    setRefreshing(true)
+    setMergeError('')
+    try {
+      await api.refreshRepository(service.repository)
+      window.dispatchEvent(
+        new CustomEvent('service-refresh-requested', {
+          detail: { repository: service.repository },
+        }),
+      )
+      await onDataChanged()
+    } catch (reason) {
+      setMergeError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not refresh the service.',
+      )
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   return (
     <section className="detail-panel">
       <div className="detail-heading">
@@ -164,6 +187,14 @@ function ServiceDetail({
           <p className="muted">{service.repository}</p>
         </div>
         <div className="detail-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void refreshService()}
+            disabled={refreshing || merging !== undefined}
+          >
+            {refreshing ? 'Refreshing…' : '↻ Refresh service'}
+          </button>
           <button
             className="create-release-button"
             type="button"
@@ -312,26 +343,83 @@ export function ReleaseOverview({
   const [serviceFilter, setServiceFilter] = useState<
     'all' | 'pending' | 'issues'
   >('all')
+  const [serviceSearch, setServiceSearch] = useState('')
+  const [repositoryRisks, setRepositoryRisks] = useState<
+    Record<string, { backMergePending: boolean; checkFailed: boolean }>
+  >({})
+  const [risksLoading, setRisksLoading] = useState(false)
+
+  useEffect(() => {
+    const repositories =
+      dashboard?.services.map((service) => service.repository) ?? []
+    setRepositoryRisks({})
+    if (repositories.length === 0) {
+      setRisksLoading(false)
+      return
+    }
+    let active = true
+    setRisksLoading(true)
+    api
+      .repositoryRisks(repositories)
+      .then((risks) => {
+        if (!active) return
+        setRepositoryRisks(
+          Object.fromEntries(
+            risks.map((risk) => [
+              risk.repository,
+              {
+                backMergePending: risk.backMergePending,
+                checkFailed: risk.checkFailed,
+              },
+            ]),
+          ),
+        )
+      })
+      .catch(() => {
+        if (!active) return
+        setRepositoryRisks(
+          Object.fromEntries(
+            repositories.map((repository) => [
+              repository,
+              { backMergePending: false, checkFailed: true },
+            ]),
+          ),
+        )
+      })
+      .finally(() => {
+        if (active) setRisksLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [dashboard])
+
   const filteredServices = useMemo(() => {
     if (!dashboard) return []
+    let services = dashboard.services
     if (serviceFilter === 'pending') {
-      return dashboard.services.filter((service) =>
+      services = services.filter((service) =>
         service.items.some(
           (item) => item.pullRequest && !item.pullRequest.merged,
         ),
       )
     }
     if (serviceFilter === 'issues') {
-      return dashboard.services.filter(
+      services = services.filter(
         (service) =>
-          service.backMergePending ||
+          (repositoryRisks[service.repository]?.backMergePending ??
+            service.backMergePending) ||
           service.items.some((item) =>
             item.blockingReasons.includes('HAS_CONFLICTS'),
           ),
       )
     }
-    return dashboard.services
-  }, [dashboard, serviceFilter])
+    const query = serviceSearch.trim().toLowerCase()
+    if (!query) return services
+    return services.filter((service) =>
+      service.repository.toLowerCase().includes(query),
+    )
+  }, [dashboard, repositoryRisks, serviceFilter, serviceSearch])
   const selectedService = useMemo(
     () =>
       filteredServices.find(
@@ -360,11 +448,23 @@ export function ReleaseOverview({
   const issueServiceCount =
     dashboard?.services.filter(
       (service) =>
-        service.backMergePending ||
+        (repositoryRisks[service.repository]?.backMergePending ??
+          service.backMergePending) ||
         service.items.some((item) =>
           item.blockingReasons.includes('HAS_CONFLICTS'),
         ),
     ).length ?? 0
+  const selectedServiceWithRisk = selectedService
+    ? {
+        ...selectedService,
+        backMergePending:
+          repositoryRisks[selectedService.repository]?.backMergePending ??
+          selectedService.backMergePending,
+        riskCheckFailed:
+          repositoryRisks[selectedService.repository]?.checkFailed ??
+          selectedService.riskCheckFailed,
+      }
+    : undefined
 
   return (
     <div className="app-shell">
@@ -398,6 +498,7 @@ export function ReleaseOverview({
               onChange={(event) => {
                 setSelectedRepository('')
                 setServiceFilter('all')
+                setServiceSearch('')
                 onSelectVersion(event.target.value)
               }}
             >
@@ -507,6 +608,19 @@ export function ReleaseOverview({
                     {filteredServices.length}/{dashboard.services.length}
                   </span>
                 </div>
+                <label className="service-search">
+                  <span aria-hidden="true">⌕</span>
+                  <input
+                    type="search"
+                    value={serviceSearch}
+                    onChange={(event) => {
+                      setServiceSearch(event.target.value)
+                      setSelectedRepository('')
+                    }}
+                    placeholder="Search services"
+                    aria-label="Search services"
+                  />
+                </label>
                 <div className="service-filters" aria-label="Filter services">
                   <button
                     className={serviceFilter === 'all' ? 'active' : ''}
@@ -536,34 +650,51 @@ export function ReleaseOverview({
                       setSelectedRepository('')
                     }}
                   >
-                    Issues <span>{issueServiceCount}</span>
+                    Issues{' '}
+                    <span>{risksLoading ? '…' : issueServiceCount}</span>
                   </button>
                 </div>
                 <div className="service-list">
-                  {filteredServices.map((service) => (
-                    <ServiceCard
-                      service={service}
-                      selected={
-                        selectedService?.repository === service.repository
-                      }
-                      onClick={() => setSelectedRepository(service.repository)}
-                      key={service.repository}
-                    />
-                  ))}
+                  {filteredServices.length ? (
+                    filteredServices.map((service) => (
+                      <ServiceCard
+                        service={service}
+                        selected={
+                          selectedService?.repository === service.repository
+                        }
+                        onClick={() =>
+                          setSelectedRepository(service.repository)
+                        }
+                        key={service.repository}
+                      />
+                    ))
+                  ) : (
+                    <div className="service-search-empty">
+                      No services match your search.
+                    </div>
+                  )}
                 </div>
               </section>
-              {selectedService ? (
+              {selectedServiceWithRisk ? (
                 <ServiceDetail
-                  service={selectedService}
+                  service={selectedServiceWithRisk}
                   onCreateRelease={() =>
-                    setReleaseRepository(selectedService.repository)
+                    setReleaseRepository(selectedServiceWithRisk.repository)
                   }
                   onDataChanged={onRefresh}
                 />
               ) : (
                 <section className="detail-panel empty-state">
-                  <h2>No pull requests found</h2>
-                  <p>Review unmatched tickets below or refresh the release.</p>
+                  <h2>
+                    {serviceSearch
+                      ? 'No matching services'
+                      : 'No pull requests found'}
+                  </h2>
+                  <p>
+                    {serviceSearch
+                      ? 'Try a different service name.'
+                      : 'Review unmatched tickets below or refresh the release.'}
+                  </p>
                 </section>
               )}
             </div>

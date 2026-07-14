@@ -8,13 +8,18 @@ import type {
   PromotionRoute,
   PromotionStep,
   RepositoryReleaseState,
+  RepositoryRisk,
   ReviewDecision,
   StagingEnvironment,
   TrackedStagingRelease,
   WorkflowRun,
 } from '../../src/shared/types.js'
 import { ProviderError } from '../errors.js'
-import { githubApi, repositoryPath } from './github.js'
+import {
+  clearGitHubProviderCache,
+  githubApi,
+  repositoryPath,
+} from './github.js'
 import { servicesForRepository } from './jenkins.js'
 
 type GitHubRepository = {
@@ -70,6 +75,20 @@ type GitHubChecks = {
 
 const stagingTagPattern =
   /^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/
+const RISK_CACHE_MS = 45_000
+const riskCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<PendingBackMerge[]> }
+>()
+
+export function clearRepositoryCaches(
+  config: ConnectionConfig,
+  repository: string,
+  includeSearches = false,
+) {
+  clearGitHubProviderCache(repository, includeSearches)
+  riskCache.delete(`${config.githubOrg}:${repository}`.toLowerCase())
+}
 
 function assertConnectedRepository(
   config: ConnectionConfig,
@@ -391,11 +410,58 @@ export async function getRepositoryBackMergeStatus(
   repository: string,
 ) {
   assertConnectedRepository(config, repository)
-  const metadata = await githubApi<GitHubRepository>(
-    config,
-    `/repos/${repositoryPath(repository)}`,
+  const key = `${config.githubOrg}:${repository}`.toLowerCase()
+  const cached = riskCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+
+  const value = (async () => {
+    const metadata = await githubApi<GitHubRepository>(
+      config,
+      `/repos/${repositoryPath(repository)}`,
+    )
+    return pendingBackMerges(config, repository, metadata.default_branch)
+  })()
+  riskCache.set(key, { expiresAt: Date.now() + RISK_CACHE_MS, value })
+  value.catch(() => riskCache.delete(key))
+  return value
+}
+
+export async function getRepositoryRisks(
+  config: ConnectionConfig,
+  repositories: string[],
+): Promise<RepositoryRisk[]> {
+  const results: RepositoryRisk[] = new Array(repositories.length)
+  let cursor = 0
+  async function worker() {
+    while (cursor < repositories.length) {
+      const index = cursor++
+      const repository = repositories[index]
+      try {
+        const backMerges = await getRepositoryBackMergeStatus(
+          config,
+          repository,
+        )
+        results[index] = {
+          repository,
+          backMergePending: backMerges.length > 0,
+          checkFailed: false,
+        }
+      } catch {
+        results[index] = {
+          repository,
+          backMergePending: false,
+          checkFailed: true,
+        }
+      }
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(6, repositories.length) },
+      () => worker(),
+    ),
   )
-  return pendingBackMerges(config, repository, metadata.default_branch)
+  return results
 }
 
 export async function createPromotionPullRequest(
@@ -483,7 +549,7 @@ export async function mergePromotionPullRequest(
       409,
     )
   }
-  return githubApi<MergePromotionPullRequestResult>(
+  const result = await githubApi<MergePromotionPullRequestResult>(
     config,
     `/repos/${repositoryPath(repository)}/pulls/${pullNumber}/merge`,
     {
@@ -491,6 +557,8 @@ export async function mergePromotionPullRequest(
       body: JSON.stringify({ merge_method: 'merge' }),
     },
   )
+  clearRepositoryCaches(config, repository)
+  return result
 }
 
 export async function mergeFeaturePullRequest(
@@ -581,7 +649,7 @@ export async function mergeFeaturePullRequest(
     )
   }
 
-  return githubApi<MergePromotionPullRequestResult>(
+  const result = await githubApi<MergePromotionPullRequestResult>(
     config,
     `/repos/${repositoryPath(repository)}/pulls/${pullNumber}/merge`,
     {
@@ -589,4 +657,6 @@ export async function mergeFeaturePullRequest(
       body: JSON.stringify({ merge_method: 'merge' }),
     },
   )
+  clearRepositoryCaches(config, repository)
+  return result
 }

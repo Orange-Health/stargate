@@ -88,9 +88,11 @@ export function ServiceOperations({ repository }: Props) {
       }
     }
     window.addEventListener('staging-release-created', refresh)
+    window.addEventListener('service-refresh-requested', refresh)
     return () => {
       window.clearInterval(interval)
       window.removeEventListener('staging-release-created', refresh)
+      window.removeEventListener('service-refresh-requested', refresh)
     }
   }, [load, repository])
 

@@ -62,6 +62,34 @@ export type GitHubDiscovery = {
 }
 
 let latestRateLimit: RateLimit | undefined
+const PROVIDER_CACHE_MS = 30_000
+const pullCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<PullRequest> }
+>()
+const searchCache = new Map<
+  string,
+  {
+    expiresAt: number
+    value: Promise<Array<{ issueKey: string; item: GitHubSearchItem }>>
+  }
+>()
+
+export function clearGitHubProviderCache(
+  repository?: string,
+  includeSearches = false,
+) {
+  if (!repository) {
+    pullCache.clear()
+    searchCache.clear()
+    return
+  }
+  const prefix = `${repository.toLowerCase()}#`
+  for (const key of pullCache.keys()) {
+    if (key.startsWith(prefix)) pullCache.delete(key)
+  }
+  if (includeSearches) searchCache.clear()
+}
 
 function githubHeaders(config: ConnectionConfig) {
   return {
@@ -325,42 +353,54 @@ async function getPullRequest(
   repository: string,
   number: number,
 ): Promise<PullRequest> {
-  const base = `/repos/${repository}`
-  const pull = await githubFetch<GitHubPull>(
-    config,
-    `${base}/pulls/${number}`,
-  )
-  const [reviews, checks] = await Promise.all([
-    githubFetch<GitHubReview[]>(
-      config,
-      `${base}/pulls/${number}/reviews?per_page=100`,
-    ),
-    githubFetch<GitHubChecks>(
-      config,
-      `${base}/commits/${pull.head.sha}/check-runs?per_page=100`,
-    ),
-  ])
+  const cacheKey = `${repository.toLowerCase()}#${number}`
+  const cached = pullCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
 
-  return {
-    id: pull.id,
-    number: pull.number,
-    repository: pull.base.repo.full_name,
-    title: pull.title,
-    url: pull.html_url,
-    state: pull.state,
-    draft: pull.draft,
-    merged: pull.merged,
-    baseBranch: pull.base.ref,
-    headBranch: pull.head.ref,
-    author: pull.user.login,
-    assignees: pull.assignees.map((assignee) => assignee.login),
-    reviewDecision: reviewDecision(reviews),
-    mergeable: pull.mergeable,
-    mergeableState: pull.mergeable_state,
-    checks: checkStatus(checks),
-    updatedAt: pull.updated_at,
-    participants: pullParticipants(pull, reviews),
-  }
+  const value = (async () => {
+    const base = `/repos/${repository}`
+    const pull = await githubFetch<GitHubPull>(
+      config,
+      `${base}/pulls/${number}`,
+    )
+    const [reviews, checks] = await Promise.all([
+      githubFetch<GitHubReview[]>(
+        config,
+        `${base}/pulls/${number}/reviews?per_page=100`,
+      ),
+      githubFetch<GitHubChecks>(
+        config,
+        `${base}/commits/${pull.head.sha}/check-runs?per_page=100`,
+      ),
+    ])
+
+    return {
+      id: pull.id,
+      number: pull.number,
+      repository: pull.base.repo.full_name,
+      title: pull.title,
+      url: pull.html_url,
+      state: pull.state,
+      draft: pull.draft,
+      merged: pull.merged,
+      baseBranch: pull.base.ref,
+      headBranch: pull.head.ref,
+      author: pull.user.login,
+      assignees: pull.assignees.map((assignee) => assignee.login),
+      reviewDecision: reviewDecision(reviews),
+      mergeable: pull.mergeable,
+      mergeableState: pull.mergeable_state,
+      checks: checkStatus(checks),
+      updatedAt: pull.updated_at,
+      participants: pullParticipants(pull, reviews),
+    }
+  })()
+  pullCache.set(cacheKey, {
+    expiresAt: Date.now() + PROVIDER_CACHE_MS,
+    value,
+  })
+  value.catch(() => pullCache.delete(cacheKey))
+  return value
 }
 
 async function mapConcurrent<T, R>(
@@ -390,17 +430,29 @@ async function searchIssueKey(
   config: ConnectionConfig,
   issueKey: string,
 ): Promise<Array<{ issueKey: string; item: GitHubSearchItem }>> {
-  const query = encodeURIComponent(
-    `org:${config.githubOrg} is:pr in:title "${issueKey}"`,
-  )
-  const response = await githubFetch<{
-    items: GitHubSearchItem[]
-    incomplete_results: boolean
-  }>(config, `/search/issues?q=${query}&per_page=100`)
+  const cacheKey = `${config.githubOrg}:${issueKey}`.toLowerCase()
+  const cached = searchCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
 
-  return response.items
-    .filter((item) => titleContainsIssueKey(item.title, issueKey))
-    .map((item) => ({ issueKey, item }))
+  const value = (async () => {
+    const query = encodeURIComponent(
+      `org:${config.githubOrg} is:pr in:title "${issueKey}"`,
+    )
+    const response = await githubFetch<{
+      items: GitHubSearchItem[]
+      incomplete_results: boolean
+    }>(config, `/search/issues?q=${query}&per_page=100`)
+
+    return response.items
+      .filter((item) => titleContainsIssueKey(item.title, issueKey))
+      .map((item) => ({ issueKey, item }))
+  })()
+  searchCache.set(cacheKey, {
+    expiresAt: Date.now() + PROVIDER_CACHE_MS,
+    value,
+  })
+  value.catch(() => searchCache.delete(cacheKey))
+  return value
 }
 
 export async function discoverPullRequests(
@@ -412,7 +464,7 @@ export async function discoverPullRequests(
     issueKeys.map((key) => [key, []]),
   )
   const warnings: string[] = []
-  const searches = await mapConcurrent(issueKeys, 4, (key) =>
+  const searches = await mapConcurrent(issueKeys, 6, (key) =>
     searchIssueKey(config, key),
   )
   const uniquePulls = new Map<string, GitHubSearchItem>()
@@ -434,7 +486,7 @@ export async function discoverPullRequests(
   })
 
   const entries = [...uniquePulls.entries()]
-  const pulls = await mapConcurrent(entries, 4, async ([id, item]) => {
+  const pulls = await mapConcurrent(entries, 6, async ([id, item]) => {
     const repository = item.repository_url.split('/').slice(-2).join('/')
     return { id, pull: await getPullRequest(config, repository, item.number) }
   })

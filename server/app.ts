@@ -17,8 +17,10 @@ import {
   testGitHubConnection,
 } from './providers/github.js'
 import {
+  clearRepositoryCaches,
   createPromotionPullRequest,
   getRepositoryReleaseState,
+  getRepositoryRisks,
   mergeFeaturePullRequest,
   mergePromotionPullRequest,
 } from './providers/githubOperations.js'
@@ -94,6 +96,10 @@ const deploymentSchema = z.object({
     .string()
     .regex(/^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/),
   environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5']),
+})
+
+const repositoryRisksSchema = z.object({
+  repositories: z.array(repositorySchema).max(100),
 })
 
 export function createApp() {
@@ -239,6 +245,44 @@ export function createApp() {
     response.json(
       await getRepositoryReleaseState(requireConnection(), parsed.data),
     )
+  })
+
+  app.post('/api/github/repository-risks', async (request, response) => {
+    const parsed = repositoryRisksSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORIES',
+          message: 'A valid list of repositories is required.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json(
+      await getRepositoryRisks(
+        requireConnection(),
+        parsed.data.repositories,
+      ),
+    )
+  })
+
+  app.post('/api/github/repository-refresh', async (request, response) => {
+    const parsed = z.object({ repository: repositorySchema }).safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORY',
+          message: 'A valid repository is required.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    clearRepositoryCaches(
+      requireConnection(),
+      parsed.data.repository,
+      true,
+    )
+    response.status(204).end()
   })
 
   app.post('/api/github/promotion-pull-requests', async (request, response) => {

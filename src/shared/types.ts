@@ -220,6 +220,12 @@ export type RepositoryReleaseState = {
   fetchedAt: string
 }
 
+export type RepositoryRisk = {
+  repository: string
+  backMergePending: boolean
+  checkFailed: boolean
+}
+
 export type CreatePromotionPullRequestInput = {
   repository: string
   route: PromotionRoute

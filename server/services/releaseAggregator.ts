@@ -8,7 +8,6 @@ import type {
   ServiceRelease,
 } from '../../src/shared/types.js'
 import { discoverPullRequests } from '../providers/github.js'
-import { getRepositoryBackMergeStatus } from '../providers/githubOperations.js'
 import { getVersion, listVersionIssues } from '../providers/jira.js'
 
 const CACHE_TTL_MS = 45_000
@@ -16,32 +15,6 @@ const cache = new Map<
   string,
   { expiresAt: number; dashboard: ReleaseDashboard }
 >()
-
-async function settledConcurrent<T, R>(
-  values: T[],
-  concurrency: number,
-  mapper: (value: T) => Promise<R>,
-) {
-  const results: PromiseSettledResult<R>[] = new Array(values.length)
-  let cursor = 0
-  async function worker() {
-    while (cursor < values.length) {
-      const index = cursor++
-      try {
-        results[index] = {
-          status: 'fulfilled',
-          value: await mapper(values[index]),
-        }
-      } catch (reason) {
-        results[index] = { status: 'rejected', reason }
-      }
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, () => worker()),
-  )
-  return results
-}
 
 export function clearReleaseCache() {
   cache.clear()
@@ -154,20 +127,6 @@ export async function aggregateRelease(
   const services = [...serviceItems.entries()]
     .map(([repository, items]) => summarizeService(repository, items))
     .sort((a, b) => a.repository.localeCompare(b.repository))
-  const riskResults = await settledConcurrent(services, 4, (service) =>
-    getRepositoryBackMergeStatus(config, service.repository),
-  )
-  const riskWarnings: string[] = []
-  riskResults.forEach((result, index) => {
-    if (result.status === 'fulfilled') {
-      services[index].backMergePending = result.value.length > 0
-    } else {
-      services[index].riskCheckFailed = true
-      riskWarnings.push(
-        `Could not check pending back-merges for ${services[index].repository}.`,
-      )
-    }
-  })
 
   const dashboard: ReleaseDashboard = {
     version: { ...version, issueCount: issues.length },
@@ -175,7 +134,7 @@ export async function aggregateRelease(
     unmatched: unmatched.sort((a, b) =>
       a.issue.key.localeCompare(b.issue.key),
     ),
-    warnings: [...discovery.warnings, ...riskWarnings].map((message) => ({
+    warnings: discovery.warnings.map((message) => ({
       provider: 'github' as const,
       message,
     })),

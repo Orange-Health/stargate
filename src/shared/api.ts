@@ -13,6 +13,7 @@ import type {
   PromotionPullRequest,
   ReleaseDashboard,
   RepositoryReleaseState,
+  RepositoryRisk,
   TriggerDeploymentInput,
   TriggeredDeployment,
 } from './types.js'
@@ -84,6 +85,16 @@ export const api = {
     request<RepositoryReleaseState>(
       `/api/github/repository-state?repository=${encodeURIComponent(repository)}`,
     ),
+  repositoryRisks: (repositories: string[]) =>
+    request<RepositoryRisk[]>('/api/github/repository-risks', {
+      method: 'POST',
+      body: JSON.stringify({ repositories }),
+    }),
+  refreshRepository: (repository: string) =>
+    request<void>('/api/github/repository-refresh', {
+      method: 'POST',
+      body: JSON.stringify({ repository }),
+    }),
   createPromotionPullRequest: (input: CreatePromotionPullRequestInput) =>
     request<PromotionPullRequest>('/api/github/promotion-pull-requests', {
       method: 'POST',
