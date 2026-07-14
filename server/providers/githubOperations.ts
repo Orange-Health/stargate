@@ -398,6 +398,8 @@ export async function getRepositoryReleaseState(
     repository,
     defaultBranch: metadata.default_branch,
     stagingReleases,
+    deployedTags: [],
+    deploymentLookupFailed: false,
     promotionSteps,
     pendingBackMerges: backMerges,
     jenkinsServices: servicesForRepository(repository),

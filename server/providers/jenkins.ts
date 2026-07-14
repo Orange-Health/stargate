@@ -2,6 +2,7 @@ import Jenkins from 'jenkins'
 import type {
   ConnectionConfig,
   DeploymentEnvironment,
+  JenkinsDeployedTag,
   JenkinsQueueStatus,
   TriggerDeploymentInput,
   TriggeredDeployment,
@@ -77,6 +78,28 @@ const stagingTeams: Record<
   s5: 'Partnerships',
 }
 
+const teamEnvironments = new Map(
+  Object.entries(stagingTeams).map(([environment, team]) => [
+    team.toLowerCase(),
+    environment as DeploymentEnvironment,
+  ]),
+)
+const DEPLOYMENT_CACHE_MS = 30_000
+const deploymentCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<JenkinsDeployedTag[]> }
+>()
+
+type JenkinsBuild = {
+  number: number
+  url?: string
+  result?: string | null
+  timestamp?: number
+  actions?: Array<{
+    parameters?: Array<{ name: string; value: unknown }>
+  }>
+}
+
 type DeploymentSpec = {
   jobName: string
   parameters: Record<string, string | boolean>
@@ -98,6 +121,103 @@ export function servicesForRepository(repository: string) {
   return Object.entries(serviceToRepository)
     .filter(([, repositoryName]) => repositoryName === name)
     .map(([service]) => service)
+}
+
+function buildParameters(build: JenkinsBuild) {
+  return Object.fromEntries(
+    (build.actions ?? [])
+      .flatMap((action) => action.parameters ?? [])
+      .map((parameter) => [parameter.name, String(parameter.value)]),
+  )
+}
+
+export function deployedTagsFromBuilds(
+  qaBuilds: JenkinsBuild[],
+  stagingBuilds: JenkinsBuild[],
+  services: string[],
+): JenkinsDeployedTag[] {
+  const serviceSet = new Set(services.map((service) => service.toLowerCase()))
+  const deployments = new Map<string, JenkinsDeployedTag>()
+
+  function collect(builds: JenkinsBuild[], qa: boolean) {
+    for (const build of [...builds].sort((a, b) => b.number - a.number)) {
+      if (build.result !== 'SUCCESS') continue
+      const parameters = buildParameters(build)
+      const service = (parameters.SERVICE ?? parameters.SERVICE_NAME)?.toLowerCase()
+      const tag = parameters.IMAGE_TAG
+      const environment = qa
+        ? 'qa'
+        : teamEnvironments.get((parameters.TEAM ?? '').toLowerCase())
+      if (!service || !serviceSet.has(service) || !tag || !environment) continue
+      const key = `${service}:${environment}`
+      if (deployments.has(key)) continue
+      deployments.set(key, {
+        service,
+        tag,
+        environment,
+        buildNumber: build.number,
+        buildUrl: build.url ?? '',
+        deployedAt: new Date(build.timestamp ?? 0).toISOString(),
+      })
+    }
+  }
+
+  collect(qaBuilds, true)
+  collect(stagingBuilds, false)
+  return [...deployments.values()]
+}
+
+async function recentJobBuilds(
+  client: Jenkins,
+  jobName: string,
+): Promise<JenkinsBuild[]> {
+  const getJob = client.job.get as unknown as (
+    name: string,
+    options: { tree: string },
+  ) => Promise<{ builds?: JenkinsBuild[] }>
+  const job = await getJob.call(client.job, jobName, {
+    tree:
+      'builds[number,url,result,timestamp,actions[parameters[name,value]]]{0,200}',
+  })
+  return job.builds ?? []
+}
+
+export async function getCurrentDeployments(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<JenkinsDeployedTag[]> {
+  const services = servicesForRepository(repository)
+  if (services.length === 0) return []
+  const cacheKey = repository.toLowerCase()
+  const cached = deploymentCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+
+  const value = (async () => {
+    try {
+      const client = jenkinsClient(config)
+      const [qaBuilds, stagingBuilds] = await Promise.all([
+        recentJobBuilds(client, 'QA/QA-DEPLOYMENT'),
+        recentJobBuilds(client, 'DEV/DEV Deployer'),
+      ])
+      return deployedTagsFromBuilds(qaBuilds, stagingBuilds, services)
+    } catch (error) {
+      throw new ProviderError(
+        error instanceof Error
+          ? `Could not read current Jenkins deployments: ${error.message}`
+          : 'Could not read current Jenkins deployments.',
+        'JENKINS_DEPLOYMENT_LOOKUP_FAILED',
+        'jenkins',
+        502,
+        true,
+      )
+    }
+  })()
+  deploymentCache.set(cacheKey, {
+    expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
+    value,
+  })
+  value.catch(() => deploymentCache.delete(cacheKey))
+  return value
 }
 
 export function deploymentSpec(

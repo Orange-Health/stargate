@@ -150,6 +150,11 @@ export function ServiceOperations({ repository }: Props) {
           </div>
           <span className="auto-refresh">Live · 15s</span>
         </div>
+        {state?.deploymentLookupFailed && (
+          <p className="deployment-lookup-note">
+            Jenkins deployment status is temporarily unavailable.
+          </p>
+        )}
 
         {loading && !state ? (
           <div className="operation-loading">
@@ -157,8 +162,12 @@ export function ServiceOperations({ repository }: Props) {
           </div>
         ) : state?.stagingReleases.length ? (
           <div className="release-build-list">
-            {state.stagingReleases.map((release) => (
-              <article className="release-build-row" key={release.id}>
+            {state.stagingReleases.map((release) => {
+              const liveDeployments = state.deployedTags.filter(
+                (deployment) => deployment.tag === release.tag,
+              )
+              return (
+                <article className="release-build-row" key={release.id}>
                 <span
                   className={`build-indicator ${release.buildStatus}`}
                   aria-hidden="true"
@@ -171,6 +180,23 @@ export function ServiceOperations({ repository }: Props) {
                     {release.environment.toUpperCase()} ·{' '}
                     {timeAgo(release.createdAt)}
                   </span>
+                  {liveDeployments.length > 0 && (
+                    <div className="live-deployments">
+                      {liveDeployments.map((deployment) => (
+                        <a
+                          className="live-deployment"
+                          href={deployment.buildUrl || undefined}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={`${deployment.service} · Jenkins build #${deployment.buildNumber}`}
+                          key={`${deployment.service}-${deployment.environment}`}
+                        >
+                          <span aria-hidden="true">●</span> Live in{' '}
+                          {deployment.environment.toUpperCase()}
+                        </a>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <span className={`build-status ${release.buildStatus}`}>
                   {buildLabels[release.buildStatus]}
@@ -210,8 +236,9 @@ export function ServiceOperations({ repository }: Props) {
                     ))
                   )}
                 </div>
-              </article>
-            ))}
+                </article>
+              )
+            })}
           </div>
         ) : (
           <div className="operation-empty">

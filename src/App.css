@@ -641,9 +641,10 @@ button:disabled {
   border-radius: 9px;
   color: var(--muted);
   display: flex;
+  flex-direction: row;
   gap: 8px;
   margin-bottom: 10px;
-  padding: 0 11px;
+  padding: 0 12px;
   transition:
     border-color 150ms ease,
     box-shadow 150ms ease;
@@ -654,8 +655,13 @@ button:disabled {
   box-shadow: 0 0 0 3px var(--green-faint);
 }
 
-.service-search > span {
-  font-size: 18px;
+.service-search > svg {
+  flex: 0 0 auto;
+  height: 16px;
+  stroke: currentcolor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+  width: 16px;
 }
 
 .service-search input {
@@ -664,7 +670,7 @@ button:disabled {
   color: var(--ink);
   font: inherit;
   font-size: 13px;
-  min-height: 38px;
+  min-height: 40px;
   outline: 0;
   padding: 0;
   width: 100%;
@@ -1313,6 +1319,42 @@ button:disabled {
   color: var(--muted);
   font-size: 8px;
   margin-top: 3px;
+}
+
+.live-deployments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.release-build-main .live-deployment {
+  align-items: center;
+  background: var(--green-faint);
+  border: 1px solid color-mix(in srgb, var(--green) 45%, transparent);
+  border-radius: 999px;
+  color: var(--green-pale);
+  display: inline-flex;
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  gap: 4px;
+  overflow: visible;
+  padding: 3px 7px;
+  text-overflow: clip;
+  width: fit-content;
+}
+
+.release-build-main .live-deployment span {
+  color: var(--green);
+  font-size: 7px;
+  margin: 0;
+}
+
+.deployment-lookup-note {
+  color: var(--amber);
+  font-size: 11px;
+  margin: -8px 18px 12px;
 }
 
 .build-status {

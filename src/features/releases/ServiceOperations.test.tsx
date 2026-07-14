@@ -37,6 +37,17 @@ const repositoryState: RepositoryReleaseState = {
       runs: [],
     },
   ],
+  deployedTags: [
+    {
+      service: 'accounts',
+      tag: 'v-s1-v26.0713.1',
+      environment: 's1',
+      buildNumber: 2152,
+      buildUrl: 'https://jenkins.test/job/DEV/job/DEV%20Deployer/2152/',
+      deployedAt: '2026-07-13T11:30:00Z',
+    },
+  ],
+  deploymentLookupFailed: false,
   promotionSteps: [
     {
       route: 'dev-to-release',
@@ -89,6 +100,10 @@ describe('ServiceOperations', () => {
       'https://github.test/run/2',
     )
     expect(screen.getByText('Default ·')).toHaveTextContent('master')
+    expect(screen.getByRole('link', { name: 'Live in S1' })).toHaveAttribute(
+      'href',
+      'https://jenkins.test/job/DEV/job/DEV%20Deployer/2152/',
+    )
     expect(
       screen.getByRole('button', { name: 'Merge to master' }),
     ).toBeEnabled()

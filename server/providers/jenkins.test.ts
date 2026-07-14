@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  deployedTagsFromBuilds,
   deploymentSpec,
   servicesForRepository,
 } from './jenkins.js'
@@ -68,5 +69,62 @@ describe('deploymentSpec', () => {
         environment: 'qa',
       }),
     ).toThrow('is not mapped')
+  })
+})
+
+describe('deployedTagsFromBuilds', () => {
+  it('finds the latest successful tag for each Jenkins environment', () => {
+    const parameterAction = (
+      serviceName: string,
+      tag: string,
+      team: string,
+      qa = false,
+    ) => ({
+      parameters: [
+        { name: qa ? 'SERVICE' : 'SERVICE_NAME', value: serviceName },
+        { name: 'IMAGE_TAG', value: tag },
+        { name: 'TEAM', value: team },
+      ],
+    })
+
+    const deployments = deployedTagsFromBuilds(
+      [
+        {
+          number: 2152,
+          result: 'SUCCESS',
+          url: 'https://jenkins.test/qa/2152/',
+          timestamp: Date.parse('2026-07-14T08:00:00Z'),
+          actions: [parameterAction('accounts', 'v-qa-v26.0714.1', 'QA', true)],
+        },
+      ],
+      [
+        {
+          number: 300,
+          result: 'FAILURE',
+          actions: [parameterAction('accounts', 'v-s1-v26.0714.2', 'Doctors')],
+        },
+        {
+          number: 299,
+          result: 'SUCCESS',
+          url: 'https://jenkins.test/dev/299/',
+          timestamp: Date.parse('2026-07-14T07:00:00Z'),
+          actions: [parameterAction('accounts', 'v-s1-v26.0714.1', 'Doctors')],
+        },
+      ],
+      ['accounts'],
+    )
+
+    expect(deployments).toEqual([
+      expect.objectContaining({
+        environment: 'qa',
+        tag: 'v-qa-v26.0714.1',
+        buildNumber: 2152,
+      }),
+      expect.objectContaining({
+        environment: 's1',
+        tag: 'v-s1-v26.0714.1',
+        buildNumber: 299,
+      }),
+    ])
   })
 })

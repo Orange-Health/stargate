@@ -609,7 +609,14 @@ export function ReleaseOverview({
                   </span>
                 </div>
                 <label className="service-search">
-                  <span aria-hidden="true">⌕</span>
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <circle cx="11" cy="11" r="6.5" />
+                    <path d="m16 16 4 4" />
+                  </svg>
                   <input
                     type="search"
                     value={serviceSearch}

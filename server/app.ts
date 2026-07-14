@@ -29,6 +29,7 @@ import {
   testJiraConnection,
 } from './providers/jira.js'
 import {
+  getCurrentDeployments,
   getDeploymentQueueStatus,
   testJenkinsConnection,
   triggerDeployment,
@@ -242,9 +243,19 @@ export function createApp() {
       } satisfies ApiErrorBody)
       return
     }
-    response.json(
-      await getRepositoryReleaseState(requireConnection(), parsed.data),
-    )
+    const config = requireConnection()
+    const [state, deploymentResult] = await Promise.all([
+      getRepositoryReleaseState(config, parsed.data),
+      getCurrentDeployments(config, parsed.data).then(
+        (deployedTags) => ({ deployedTags, failed: false }),
+        () => ({ deployedTags: [], failed: true }),
+      ),
+    ])
+    response.json({
+      ...state,
+      deployedTags: deploymentResult.deployedTags,
+      deploymentLookupFailed: deploymentResult.failed,
+    })
   })
 
   app.post('/api/github/repository-risks', async (request, response) => {

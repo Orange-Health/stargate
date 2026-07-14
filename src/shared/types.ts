@@ -214,6 +214,8 @@ export type RepositoryReleaseState = {
   repository: string
   defaultBranch: string
   stagingReleases: TrackedStagingRelease[]
+  deployedTags: JenkinsDeployedTag[]
+  deploymentLookupFailed: boolean
   promotionSteps: PromotionStep[]
   pendingBackMerges: PendingBackMerge[]
   jenkinsServices: string[]
@@ -248,6 +250,15 @@ export type MergeFeaturePullRequestInput = {
 }
 
 export type DeploymentEnvironment = 'qa' | 's1' | 's2' | 's3' | 's4' | 's5'
+
+export type JenkinsDeployedTag = {
+  service: string
+  tag: string
+  environment: DeploymentEnvironment
+  buildNumber: number
+  buildUrl: string
+  deployedAt: string
+}
 
 export type TriggerDeploymentInput = {
   repository: string
