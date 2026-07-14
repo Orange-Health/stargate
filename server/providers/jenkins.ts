@@ -89,6 +89,13 @@ const deploymentCache = new Map<
   string,
   { expiresAt: number; value: Promise<JenkinsDeployedTag[]> }
 >()
+const deploymentBuildCache = new Map<
+  string,
+  {
+    expiresAt: number
+    value: Promise<{ qa: JenkinsBuild[]; staging: JenkinsBuild[] }>
+  }
+>()
 
 type JenkinsBuild = {
   number: number
@@ -182,6 +189,26 @@ async function recentJobBuilds(
   return job.builds ?? []
 }
 
+async function recentDeploymentBuilds(config: ConnectionConfig) {
+  const cacheKey = config.jenkinsUrl.toLowerCase()
+  const cached = deploymentBuildCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const value = (async () => {
+    const client = jenkinsClient(config)
+    const [qa, staging] = await Promise.all([
+      recentJobBuilds(client, 'QA/QA-DEPLOYMENT'),
+      recentJobBuilds(client, 'DEV/DEV Deployer'),
+    ])
+    return { qa, staging }
+  })()
+  deploymentBuildCache.set(cacheKey, {
+    expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
+    value,
+  })
+  value.catch(() => deploymentBuildCache.delete(cacheKey))
+  return value
+}
+
 export async function getCurrentDeployments(
   config: ConnectionConfig,
   repository: string,
@@ -194,12 +221,8 @@ export async function getCurrentDeployments(
 
   const value = (async () => {
     try {
-      const client = jenkinsClient(config)
-      const [qaBuilds, stagingBuilds] = await Promise.all([
-        recentJobBuilds(client, 'QA/QA-DEPLOYMENT'),
-        recentJobBuilds(client, 'DEV/DEV Deployer'),
-      ])
-      return deployedTagsFromBuilds(qaBuilds, stagingBuilds, services)
+      const builds = await recentDeploymentBuilds(config)
+      return deployedTagsFromBuilds(builds.qa, builds.staging, services)
     } catch (error) {
       throw new ProviderError(
         error instanceof Error

@@ -80,6 +80,10 @@ const riskCache = new Map<
   string,
   { expiresAt: number; value: Promise<PendingBackMerge[]> }
 >()
+const qaBuildCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<string | undefined> }
+>()
 
 export function clearRepositoryCaches(
   config: ConnectionConfig,
@@ -87,7 +91,9 @@ export function clearRepositoryCaches(
   includeSearches = false,
 ) {
   clearGitHubProviderCache(repository, includeSearches)
-  riskCache.delete(`${config.githubOrg}:${repository}`.toLowerCase())
+  const key = `${config.githubOrg}:${repository}`.toLowerCase()
+  riskCache.delete(key)
+  qaBuildCache.delete(key)
 }
 
 function assertConnectedRepository(
@@ -208,6 +214,40 @@ async function listTrackedReleases(
       }
     }),
   )
+}
+
+export async function getLatestSuccessfulQaTag(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<string | undefined> {
+  assertConnectedRepository(config, repository)
+  const cacheKey = `${config.githubOrg}:${repository}`.toLowerCase()
+  const cached = qaBuildCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+
+  const value = (async () => {
+    const releases = await githubApi<GitHubRelease[]>(
+      config,
+      `/repos/${repositoryPath(repository)}/releases?per_page=30`,
+    )
+    const qaReleases = releases
+      .filter(
+        (release) =>
+          release.prerelease && /^v-qa-v\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
+      )
+      .slice(0, 8)
+    for (const release of qaReleases) {
+      const runs = await listReleaseRuns(config, repository, release)
+      if (aggregateBuildStatus(runs) === 'succeeded') return release.tag_name
+    }
+    return undefined
+  })()
+  qaBuildCache.set(cacheKey, {
+    expiresAt: Date.now() + 30_000,
+    value,
+  })
+  value.catch(() => qaBuildCache.delete(cacheKey))
+  return value
 }
 
 function latestReviewDecision(reviews: GitHubReview[]): ReviewDecision {

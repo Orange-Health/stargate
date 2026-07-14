@@ -38,6 +38,7 @@ import {
   aggregateRelease,
   clearReleaseCache,
 } from './services/releaseAggregator.js'
+import { getDeploymentFreshness } from './services/deploymentFreshness.js'
 
 const connectionSchema = z.object({
   jiraSite: z
@@ -271,6 +272,25 @@ export function createApp() {
     }
     response.json(
       await getRepositoryRisks(
+        requireConnection(),
+        parsed.data.repositories,
+      ),
+    )
+  })
+
+  app.post('/api/deployment-freshness', async (request, response) => {
+    const parsed = repositoryRisksSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORIES',
+          message: 'A valid list of repositories is required.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json(
+      await getDeploymentFreshness(
         requireConnection(),
         parsed.data.repositories,
       ),

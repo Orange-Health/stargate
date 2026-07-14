@@ -228,6 +228,14 @@ export type RepositoryRisk = {
   checkFailed: boolean
 }
 
+export type DeploymentFreshness = {
+  repository: string
+  latestBuiltQaTag?: string
+  liveQaTags: string[]
+  outdated: boolean
+  checkFailed: boolean
+}
+
 export type CreatePromotionPullRequestInput = {
   repository: string
   route: PromotionRoute

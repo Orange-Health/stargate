@@ -104,6 +104,14 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_REPOSITORIES')
   })
 
+  it('validates deployment freshness requests', async () => {
+    const response = await request(createApp())
+      .post('/api/deployment-freshness')
+      .send({ repositories: ['../outside'] })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_REPOSITORIES')
+  })
+
   it('validates service-level refresh requests', async () => {
     const response = await request(createApp())
       .post('/api/github/repository-refresh')

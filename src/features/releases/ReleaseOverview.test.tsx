@@ -81,6 +81,15 @@ describe('ReleaseOverview', () => {
         checkFailed: false,
       })),
     )
+    vi.spyOn(api, 'deploymentFreshness').mockImplementation(
+      async (repositories) =>
+        repositories.map((repository) => ({
+          repository,
+          liveQaTags: [],
+          outdated: false,
+          checkFailed: false,
+        })),
+    )
   })
 
   afterEach(() => vi.restoreAllMocks())
@@ -197,6 +206,55 @@ describe('ReleaseOverview', () => {
 
     expect(screen.getByText('No services match your search.')).toBeVisible()
     expect(screen.getByText('No matching services')).toBeVisible()
+  })
+
+  it('filters services whose latest QA build is not live', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.deploymentFreshness).mockResolvedValueOnce([
+      {
+        repository: 'orange/service-api',
+        latestBuiltQaTag: 'v-qa-v26.0714.2',
+        liveQaTags: ['v-qa-v26.0714.1'],
+        outdated: true,
+        checkFailed: false,
+      },
+      {
+        repository: 'orange/other-api',
+        latestBuiltQaTag: 'v-qa-v26.0714.1',
+        liveQaTags: ['v-qa-v26.0714.1'],
+        outdated: false,
+        checkFailed: false,
+      },
+    ])
+    const freshnessDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        ...dashboard.services,
+        {
+          ...dashboard.services[0],
+          repository: 'orange/other-api',
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={freshnessDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Outdated 1' }),
+    )
+
+    expect(screen.queryByText('orange/other-api')).not.toBeInTheDocument()
+    expect(screen.getAllByText('orange/service-api').length).toBeGreaterThan(0)
   })
 
   it('filters services with pending merges and issues', async () => {

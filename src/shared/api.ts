@@ -5,6 +5,7 @@ import type {
   CreatePromotionPullRequestInput,
   CreatedStagingRelease,
   CreateStagingReleaseInput,
+  DeploymentFreshness,
   JiraVersion,
   JenkinsQueueStatus,
   MergeFeaturePullRequestInput,
@@ -87,6 +88,11 @@ export const api = {
     ),
   repositoryRisks: (repositories: string[]) =>
     request<RepositoryRisk[]>('/api/github/repository-risks', {
+      method: 'POST',
+      body: JSON.stringify({ repositories }),
+    }),
+  deploymentFreshness: (repositories: string[]) =>
+    request<DeploymentFreshness[]>('/api/deployment-freshness', {
       method: 'POST',
       body: JSON.stringify({ repositories }),
     }),

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../../shared/api'
 import type {
   ConnectionStatus,
+  DeploymentFreshness,
   EligibilityReason,
   JiraVersion,
   ReleaseDashboard,
@@ -341,13 +342,17 @@ export function ReleaseOverview({
   const [selectedRepository, setSelectedRepository] = useState('')
   const [releaseRepository, setReleaseRepository] = useState('')
   const [serviceFilter, setServiceFilter] = useState<
-    'all' | 'pending' | 'issues'
+    'all' | 'pending' | 'issues' | 'outdated'
   >('all')
   const [serviceSearch, setServiceSearch] = useState('')
   const [repositoryRisks, setRepositoryRisks] = useState<
     Record<string, { backMergePending: boolean; checkFailed: boolean }>
   >({})
   const [risksLoading, setRisksLoading] = useState(false)
+  const [deploymentFreshness, setDeploymentFreshness] = useState<
+    Record<string, DeploymentFreshness>
+  >({})
+  const [freshnessLoading, setFreshnessLoading] = useState(false)
 
   useEffect(() => {
     const repositories =
@@ -394,6 +399,50 @@ export function ReleaseOverview({
     }
   }, [dashboard])
 
+  useEffect(() => {
+    const repositories =
+      dashboard?.services.map((service) => service.repository) ?? []
+    setDeploymentFreshness({})
+    if (repositories.length === 0) {
+      setFreshnessLoading(false)
+      return
+    }
+    let active = true
+    setFreshnessLoading(true)
+    api
+      .deploymentFreshness(repositories)
+      .then((statuses) => {
+        if (!active) return
+        setDeploymentFreshness(
+          Object.fromEntries(
+            statuses.map((status) => [status.repository, status]),
+          ),
+        )
+      })
+      .catch(() => {
+        if (!active) return
+        setDeploymentFreshness(
+          Object.fromEntries(
+            repositories.map((repository) => [
+              repository,
+              {
+                repository,
+                liveQaTags: [],
+                outdated: false,
+                checkFailed: true,
+              },
+            ]),
+          ),
+        )
+      })
+      .finally(() => {
+        if (active) setFreshnessLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [dashboard])
+
   const filteredServices = useMemo(() => {
     if (!dashboard) return []
     let services = dashboard.services
@@ -414,12 +463,23 @@ export function ReleaseOverview({
           ),
       )
     }
+    if (serviceFilter === 'outdated') {
+      services = services.filter(
+        (service) => deploymentFreshness[service.repository]?.outdated,
+      )
+    }
     const query = serviceSearch.trim().toLowerCase()
     if (!query) return services
     return services.filter((service) =>
       service.repository.toLowerCase().includes(query),
     )
-  }, [dashboard, repositoryRisks, serviceFilter, serviceSearch])
+  }, [
+    dashboard,
+    deploymentFreshness,
+    repositoryRisks,
+    serviceFilter,
+    serviceSearch,
+  ])
   const selectedService = useMemo(
     () =>
       filteredServices.find(
@@ -453,6 +513,10 @@ export function ReleaseOverview({
         service.items.some((item) =>
           item.blockingReasons.includes('HAS_CONFLICTS'),
         ),
+    ).length ?? 0
+  const outdatedServiceCount =
+    dashboard?.services.filter(
+      (service) => deploymentFreshness[service.repository]?.outdated,
     ).length ?? 0
   const selectedServiceWithRisk = selectedService
     ? {
@@ -659,6 +723,20 @@ export function ReleaseOverview({
                   >
                     Issues{' '}
                     <span>{risksLoading ? '…' : issueServiceCount}</span>
+                  </button>
+                  <button
+                    className={serviceFilter === 'outdated' ? 'active' : ''}
+                    type="button"
+                    onClick={() => {
+                      setServiceFilter('outdated')
+                      setSelectedRepository('')
+                    }}
+                    title="Latest successful QA build is not currently deployed in QA"
+                  >
+                    Outdated{' '}
+                    <span>
+                      {freshnessLoading ? '…' : outdatedServiceCount}
+                    </span>
                   </button>
                 </div>
                 <div className="service-list">
