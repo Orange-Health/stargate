@@ -119,6 +119,13 @@ export function promotionBranches(
     : { fromBranch: 'release', toBranch: defaultBranch }
 }
 
+export function hasActualMergeConflict(
+  mergeable: boolean | null,
+  mergeableState: string,
+) {
+  return mergeable === false || mergeableState === 'dirty'
+}
+
 async function listReleaseRuns(
   config: ConnectionConfig,
   repository: string,
@@ -379,6 +386,18 @@ export async function getRepositoryReleaseState(
   }
 }
 
+export async function getRepositoryBackMergeStatus(
+  config: ConnectionConfig,
+  repository: string,
+) {
+  assertConnectedRepository(config, repository)
+  const metadata = await githubApi<GitHubRepository>(
+    config,
+    `/repos/${repositoryPath(repository)}`,
+  )
+  return pendingBackMerges(config, repository, metadata.default_branch)
+}
+
 export async function createPromotionPullRequest(
   config: ConnectionConfig,
   repository: string,
@@ -464,6 +483,104 @@ export async function mergePromotionPullRequest(
       409,
     )
   }
+  return githubApi<MergePromotionPullRequestResult>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls/${pullNumber}/merge`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ merge_method: 'merge' }),
+    },
+  )
+}
+
+export async function mergeFeaturePullRequest(
+  config: ConnectionConfig,
+  repository: string,
+  pullNumber: number,
+): Promise<MergePromotionPullRequestResult> {
+  assertConnectedRepository(config, repository)
+  const metadata = await githubApi<GitHubRepository>(
+    config,
+    `/repos/${repositoryPath(repository)}`,
+  )
+  const backMerges = await pendingBackMerges(
+    config,
+    repository,
+    metadata.default_branch,
+  )
+  if (backMerges.length > 0) {
+    throw new ProviderError(
+      `Resolve pending back-merge PRs first: ${backMerges.map((pull) => `#${pull.number}`).join(', ')}.`,
+      'PENDING_BACK_MERGES',
+      'github',
+      409,
+    )
+  }
+
+  const pull = await githubApi<GitHubPull>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls/${pullNumber}`,
+  )
+  if (pull.base.ref !== 'dev') {
+    throw new ProviderError(
+      'Only feature PRs targeting dev can be merged from this action.',
+      'INVALID_FEATURE_PR',
+      'github',
+      409,
+    )
+  }
+  if (!/\bOH-\d+\b/i.test(pull.title)) {
+    throw new ProviderError(
+      'The PR title must contain an OH Jira ticket key.',
+      'MISSING_JIRA_KEY',
+      'github',
+      409,
+    )
+  }
+  if (pull.draft || pull.merged_at) {
+    throw new ProviderError(
+      pull.draft ? 'Draft PRs cannot be merged.' : 'This PR is already merged.',
+      'FEATURE_PR_NOT_OPEN',
+      'github',
+      409,
+    )
+  }
+  const details = await promotionPullDetails(config, repository, pull)
+  if (details.reviewDecision !== 'approved') {
+    throw new ProviderError(
+      details.reviewDecision === 'changes_requested'
+        ? 'The PR has requested changes.'
+        : 'The PR requires approval.',
+      'FEATURE_PR_NOT_APPROVED',
+      'github',
+      409,
+    )
+  }
+  if (details.mergeable === null) {
+    throw new ProviderError(
+      'GitHub is still calculating mergeability.',
+      'FEATURE_PR_NOT_MERGEABLE',
+      'github',
+      409,
+    )
+  }
+  if (hasActualMergeConflict(details.mergeable, details.mergeableState)) {
+    throw new ProviderError(
+      'The PR has merge conflicts.',
+      'FEATURE_PR_NOT_MERGEABLE',
+      'github',
+      409,
+    )
+  }
+  if (details.checks === 'pending') {
+    throw new ProviderError(
+      'Required checks are still pending.',
+      'FEATURE_PR_CHECKS_BLOCKING',
+      'github',
+      409,
+    )
+  }
+
   return githubApi<MergePromotionPullRequestResult>(
     config,
     `/repos/${repositoryPath(repository)}/pulls/${pullNumber}/merge`,

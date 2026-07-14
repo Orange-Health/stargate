@@ -69,6 +69,11 @@ export type PullRequest = {
   mergeableState: string
   checks: CheckStatus
   updatedAt: string
+  participants?: Array<{
+    login: string
+    avatarUrl: string
+    role: 'author' | 'assignee' | 'reviewer'
+  }>
 }
 
 export type EligibilityReason =
@@ -97,6 +102,8 @@ export type ServiceRelease = {
   eligibleCount: number
   blockedCount: number
   mergedCount: number
+  backMergePending: boolean
+  riskCheckFailed?: boolean
 }
 
 export type ProviderWarning = {
@@ -227,6 +234,11 @@ export type MergePromotionPullRequestResult = {
   merged: boolean
   message: string
   sha?: string
+}
+
+export type MergeFeaturePullRequestInput = {
+  repository: string
+  pullNumber: number
 }
 
 export type DeploymentEnvironment = 'qa' | 's1' | 's2' | 's3' | 's4' | 's5'

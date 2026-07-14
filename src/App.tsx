@@ -128,7 +128,7 @@ function App() {
       loading={loading}
       error={error}
       onSelectVersion={selectVersion}
-      onRefresh={() => void loadDashboard(selectedVersionId, true)}
+      onRefresh={() => loadDashboard(selectedVersionId, true)}
       onDisconnect={() => void disconnect()}
     />
   )

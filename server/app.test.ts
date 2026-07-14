@@ -87,4 +87,12 @@ describe('local API', () => {
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('INVALID_QUEUE_ITEM')
   })
+
+  it('validates feature PR merge inputs', async () => {
+    const response = await request(createApp())
+      .post('/api/github/feature-pull-requests/merge')
+      .send({ repository: 'Orange-Health/accounts', pullNumber: 0 })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_FEATURE_PR_MERGE')
+  })
 })

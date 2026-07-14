@@ -1,8 +1,9 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type ClipboardEvent, type FormEvent } from 'react'
 import type {
   ConnectionConfig,
   ConnectionStatus,
 } from '../../shared/types'
+import { ThemeToggle } from '../theme/ThemeToggle'
 
 type Props = {
   onConnect: (config: ConnectionConfig) => Promise<ConnectionStatus>
@@ -29,6 +30,7 @@ export function ConnectionScreen({ onConnect }: Props) {
   const [config, setConfig] = useState(initialConfig)
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [bulkPasteMessage, setBulkPasteMessage] = useState('')
 
   function update(field: keyof ConnectionConfig, value: string) {
     setConfig((current) => ({ ...current, [field]: value }))
@@ -49,6 +51,42 @@ export function ConnectionScreen({ onConnect }: Props) {
         [field]: value,
       },
     }))
+  }
+
+  function pasteCredentials(event: ClipboardEvent<HTMLInputElement>) {
+    const lines = event.clipboardData
+      .getData('text')
+      .replace(/\r/g, '')
+      .split('\n')
+      .map((line) => line.trim())
+    if (lines.length < 7) return
+
+    event.preventDefault()
+    const [
+      jiraEmail,
+      jiraToken,
+      githubToken,
+      jenkinsUsername,
+      jenkinsToken,
+      productionUsername,
+      productionToken,
+    ] = lines
+    setConfig((current) => ({
+      ...current,
+      jiraEmail,
+      jiraToken,
+      githubToken,
+      jenkinsUsername,
+      jenkinsToken,
+      productionJenkins: {
+        jenkinsUrl:
+          current.productionJenkins?.jenkinsUrl ??
+          'https://pitstop.orangehealth.dev',
+        jenkinsUsername: productionUsername,
+        jenkinsToken: productionToken,
+      },
+    }))
+    setBulkPasteMessage('All seven credentials were populated.')
   }
 
   async function submit(event: FormEvent) {
@@ -77,6 +115,7 @@ export function ConnectionScreen({ onConnect }: Props) {
 
   return (
     <main className="connection-layout">
+      <ThemeToggle className="connection-theme-toggle" />
       <section className="connection-intro">
         <div className="brand-mark">RD</div>
         <p className="eyebrow">Release operations</p>
@@ -123,12 +162,17 @@ export function ConnectionScreen({ onConnect }: Props) {
                 Email
                 <input
                   type="email"
+                  aria-label="Email"
                   value={config.jiraEmail}
                   onChange={(event) => update('jiraEmail', event.target.value)}
+                  onPaste={pasteCredentials}
                   placeholder="you@company.com"
                   autoComplete="username"
                   required
                 />
+                <small className="paste-hint">
+                  Paste the 7-line credential bundle here to fill all services.
+                </small>
               </label>
               <label>
                 Jira API token
@@ -256,6 +300,12 @@ export function ConnectionScreen({ onConnect }: Props) {
               Prod-new-cluster-deployment.
             </p>
           </fieldset>
+
+          {bulkPasteMessage && (
+            <div className="bulk-paste-success" role="status">
+              <span aria-hidden="true">✓</span> {bulkPasteMessage}
+            </div>
+          )}
 
           {error && (
             <div className="alert error" role="alert">

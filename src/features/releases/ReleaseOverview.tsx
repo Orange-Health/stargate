@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { api } from '../../shared/api'
 import type {
   ConnectionStatus,
   EligibilityReason,
@@ -9,6 +10,7 @@ import type {
 } from '../../shared/types'
 import { StagingReleaseDialog } from './StagingReleaseDialog'
 import { ServiceOperations } from './ServiceOperations'
+import { ThemeToggle } from '../theme/ThemeToggle'
 
 type Props = {
   connection: ConnectionStatus
@@ -18,7 +20,7 @@ type Props = {
   loading: boolean
   error?: string
   onSelectVersion: (versionId: string) => void
-  onRefresh: () => void
+  onRefresh: () => void | Promise<void>
   onDisconnect: () => void
 }
 
@@ -75,7 +77,7 @@ function ServiceCard({
 }) {
   const name = service.repository.split('/').at(-1)
   const total = service.items.length
-  const completed = service.eligibleCount + service.mergedCount
+  const completed = service.mergedCount
   const progress = total === 0 ? 0 : Math.round((completed / total) * 100)
 
   return (
@@ -120,11 +122,39 @@ function ServiceCard({
 function ServiceDetail({
   service,
   onCreateRelease,
+  onDataChanged,
 }: {
   service: ServiceRelease
   onCreateRelease: () => void
+  onDataChanged: () => void | Promise<void>
 }) {
   const name = service.repository.split('/').at(-1)
+  const [merging, setMerging] = useState<number>()
+  const [mergeError, setMergeError] = useState('')
+  const [optimisticallyMerged, setOptimisticallyMerged] = useState<Set<number>>(
+    new Set(),
+  )
+
+  async function mergePullRequest(pullNumber: number) {
+    if (!window.confirm(`Merge feature PR #${pullNumber} into dev?`)) return
+    setMerging(pullNumber)
+    setMergeError('')
+    try {
+      await api.mergeFeaturePullRequest({
+        repository: service.repository,
+        pullNumber,
+      })
+      setOptimisticallyMerged((current) => new Set(current).add(pullNumber))
+      await onDataChanged()
+    } catch (reason) {
+      setMergeError(
+        reason instanceof Error ? reason.message : 'Could not merge the PR.',
+      )
+    } finally {
+      setMerging(undefined)
+    }
+  }
+
   return (
     <section className="detail-panel">
       <div className="detail-heading">
@@ -148,18 +178,36 @@ function ServiceDetail({
         </div>
       </div>
 
+      {mergeError && (
+        <div className="alert error detail-alert" role="alert">
+          {mergeError}
+        </div>
+      )}
+
       <div className="pr-list">
-        {service.items.map((item) => (
-          <article
-            className="pr-row"
-            key={`${item.issue.key}-${item.pullRequest?.id ?? 'unmatched'}`}
-          >
+        {service.items.map((item) => {
+          const mergeReady =
+            item.eligible &&
+            !item.warningReasons.includes('CHECKS_PENDING') &&
+            !service.backMergePending &&
+            !item.pullRequest?.merged &&
+            !optimisticallyMerged.has(item.pullRequest?.number ?? -1)
+          return (
+            <article
+              className="pr-row"
+              key={`${item.issue.key}-${item.pullRequest?.id ?? 'unmatched'}`}
+            >
             <div className="pr-main">
               <div className="pr-title-row">
                 <a href={item.issue.url} target="_blank" rel="noreferrer">
                   {item.issue.key}
                 </a>
-                <ItemStatus item={item} />
+                {item.pullRequest &&
+                optimisticallyMerged.has(item.pullRequest.number) ? (
+                  <span className="status-pill merged">Merged</span>
+                ) : (
+                  <ItemStatus item={item} />
+                )}
               </div>
               <h3>
                 {item.pullRequest ? (
@@ -175,12 +223,36 @@ function ServiceDetail({
                 )}
               </h3>
               {item.pullRequest && (
-                <p className="branch-line">
-                  <code>{item.pullRequest.headBranch}</code>
-                  <span>→</span>
-                  <code>{item.pullRequest.baseBranch}</code>
-                  <span>#{item.pullRequest.number}</span>
-                </p>
+                <>
+                  <p className="branch-line">
+                    <code>{item.pullRequest.headBranch}</code>
+                    <span>→</span>
+                    <code>{item.pullRequest.baseBranch}</code>
+                    <span>#{item.pullRequest.number}</span>
+                  </p>
+                  {Boolean(item.pullRequest.participants?.length) && (
+                    <div
+                      className="participant-list"
+                      aria-label="People involved"
+                    >
+                      {item.pullRequest.participants
+                        ?.slice(0, 6)
+                        .map((person) => (
+                          <img
+                            src={person.avatarUrl}
+                            alt={person.login}
+                            title={`${person.login} · ${person.role}`}
+                            key={person.login}
+                          />
+                        ))}
+                      {(item.pullRequest.participants?.length ?? 0) > 6 && (
+                        <span>
+                          +{(item.pullRequest.participants?.length ?? 0) - 6}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <div className="reason-list">
@@ -197,9 +269,24 @@ function ServiceDetail({
               {item.eligible && item.warningReasons.length === 0 && (
                 <span className="reason success">All criteria met</span>
               )}
+              {mergeReady && item.pullRequest && (
+                <button
+                  className="merge-feature-button"
+                  type="button"
+                  disabled={merging === item.pullRequest.number}
+                  onClick={() =>
+                    void mergePullRequest(item.pullRequest!.number)
+                  }
+                >
+                  {merging === item.pullRequest.number
+                    ? 'Merging…'
+                    : 'Merge to dev'}
+                </button>
+              )}
             </div>
           </article>
-        ))}
+          )
+        })}
       </div>
       <ServiceOperations
         key={service.repository}
@@ -222,23 +309,62 @@ export function ReleaseOverview({
 }: Props) {
   const [selectedRepository, setSelectedRepository] = useState('')
   const [releaseRepository, setReleaseRepository] = useState('')
+  const [serviceFilter, setServiceFilter] = useState<
+    'all' | 'pending' | 'issues'
+  >('all')
+  const filteredServices = useMemo(() => {
+    if (!dashboard) return []
+    if (serviceFilter === 'pending') {
+      return dashboard.services.filter((service) =>
+        service.items.some(
+          (item) => item.pullRequest && !item.pullRequest.merged,
+        ),
+      )
+    }
+    if (serviceFilter === 'issues') {
+      return dashboard.services.filter(
+        (service) =>
+          service.backMergePending ||
+          service.items.some((item) =>
+            item.blockingReasons.includes('HAS_CONFLICTS'),
+          ),
+      )
+    }
+    return dashboard.services
+  }, [dashboard, serviceFilter])
   const selectedService = useMemo(
     () =>
-      dashboard?.services.find(
+      filteredServices.find(
         (service) => service.repository === selectedRepository,
-      ) ?? dashboard?.services[0],
-    [dashboard, selectedRepository],
+      ) ?? filteredServices[0],
+    [filteredServices, selectedRepository],
   )
-  const totalItems =
-    dashboard?.services.reduce(
-      (sum, service) => sum + service.items.length,
-      0,
-    ) ?? 0
-  const readyItems =
-    dashboard?.services.reduce(
-      (sum, service) => sum + service.eligibleCount + service.mergedCount,
-      0,
-    ) ?? 0
+  const mergedIssueKeys = new Set(
+    dashboard?.services.flatMap((service) =>
+      service.items
+        .filter(
+          (item) =>
+            item.pullRequest?.merged && item.pullRequest.baseBranch === 'dev',
+        )
+        .map((item) => item.issue.key),
+    ) ?? [],
+  )
+  const totalItems = dashboard?.version.issueCount ?? 0
+  const readyItems = mergedIssueKeys.size
+  const pendingServiceCount =
+    dashboard?.services.filter((service) =>
+      service.items.some(
+        (item) => item.pullRequest && !item.pullRequest.merged,
+      ),
+    ).length ?? 0
+  const issueServiceCount =
+    dashboard?.services.filter(
+      (service) =>
+        service.backMergePending ||
+        service.items.some((item) =>
+          item.blockingReasons.includes('HAS_CONFLICTS'),
+        ),
+    ).length ?? 0
 
   return (
     <div className="app-shell">
@@ -251,6 +377,7 @@ export function ReleaseOverview({
           </span>
         </div>
         <div className="topbar-actions">
+          <ThemeToggle />
           <span className="connection-dot" />
           <span className="connected-label">
             {connection.githubOrg} · {connection.projectKey}
@@ -270,6 +397,7 @@ export function ReleaseOverview({
               value={selectedVersionId}
               onChange={(event) => {
                 setSelectedRepository('')
+                setServiceFilter('all')
                 onSelectVersion(event.target.value)
               }}
             >
@@ -343,7 +471,7 @@ export function ReleaseOverview({
                 <div>
                   <strong>Release readiness</strong>
                   <p>
-                    {readyItems} of {totalItems} pull requests clear
+                    {readyItems} of {totalItems} tickets merged to dev
                   </p>
                 </div>
               </div>
@@ -375,10 +503,44 @@ export function ReleaseOverview({
                     <p className="eyebrow">Release scope</p>
                     <h2>Services</h2>
                   </div>
-                  <span>{dashboard.services.length}</span>
+                  <span>
+                    {filteredServices.length}/{dashboard.services.length}
+                  </span>
+                </div>
+                <div className="service-filters" aria-label="Filter services">
+                  <button
+                    className={serviceFilter === 'all' ? 'active' : ''}
+                    type="button"
+                    onClick={() => {
+                      setServiceFilter('all')
+                      setSelectedRepository('')
+                    }}
+                  >
+                    All <span>{dashboard.services.length}</span>
+                  </button>
+                  <button
+                    className={serviceFilter === 'pending' ? 'active' : ''}
+                    type="button"
+                    onClick={() => {
+                      setServiceFilter('pending')
+                      setSelectedRepository('')
+                    }}
+                  >
+                    Pending merge <span>{pendingServiceCount}</span>
+                  </button>
+                  <button
+                    className={serviceFilter === 'issues' ? 'active' : ''}
+                    type="button"
+                    onClick={() => {
+                      setServiceFilter('issues')
+                      setSelectedRepository('')
+                    }}
+                  >
+                    Issues <span>{issueServiceCount}</span>
+                  </button>
                 </div>
                 <div className="service-list">
-                  {dashboard.services.map((service) => (
+                  {filteredServices.map((service) => (
                     <ServiceCard
                       service={service}
                       selected={
@@ -396,6 +558,7 @@ export function ReleaseOverview({
                   onCreateRelease={() =>
                     setReleaseRepository(selectedService.repository)
                   }
+                  onDataChanged={onRefresh}
                 />
               ) : (
                 <section className="detail-panel empty-state">

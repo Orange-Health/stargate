@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { WorkflowRun } from '../../src/shared/types.js'
 import {
   aggregateBuildStatus,
+  hasActualMergeConflict,
   promotionBranches,
 } from './githubOperations.js'
 
@@ -76,5 +77,15 @@ describe('promotionBranches', () => {
       fromBranch: 'release',
       toBranch: 'master',
     })
+  })
+})
+
+describe('merge conflict classification', () => {
+  it('does not treat bypassable branch protection as a conflict', () => {
+    expect(hasActualMergeConflict(true, 'blocked')).toBe(false)
+  })
+
+  it('detects actual Git merge conflicts', () => {
+    expect(hasActualMergeConflict(false, 'dirty')).toBe(true)
   })
 })

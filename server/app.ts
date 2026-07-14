@@ -19,6 +19,7 @@ import {
 import {
   createPromotionPullRequest,
   getRepositoryReleaseState,
+  mergeFeaturePullRequest,
   mergePromotionPullRequest,
 } from './providers/githubOperations.js'
 import {
@@ -275,6 +276,29 @@ export function createApp() {
       }
       response.json(
         await mergePromotionPullRequest(
+          requireConnection(),
+          parsed.data.repository,
+          parsed.data.pullNumber,
+        ),
+      )
+    },
+  )
+
+  app.post(
+    '/api/github/feature-pull-requests/merge',
+    async (request, response) => {
+      const parsed = mergePromotionSchema.safeParse(request.body)
+      if (!parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_FEATURE_PR_MERGE',
+            message: 'Repository and a valid pull request number are required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        await mergeFeaturePullRequest(
           requireConnection(),
           parsed.data.repository,
           parsed.data.pullNumber,

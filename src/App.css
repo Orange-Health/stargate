@@ -27,10 +27,87 @@
   width: 36px;
 }
 
+.theme-toggle {
+  align-items: center;
+  background: var(--paper-warm);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11px;
+  gap: 6px;
+  min-height: 31px;
+  padding: 0 10px;
+  text-transform: capitalize;
+}
+
+.theme-toggle:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.theme-toggle span {
+  font-size: 15px;
+}
+
+.connection-theme-toggle {
+  position: fixed;
+  right: 22px;
+  top: 20px;
+  z-index: 5;
+}
+
 .connection-layout {
   display: grid;
   grid-template-columns: minmax(340px, 0.86fr) minmax(520px, 1.14fr);
   min-height: 100vh;
+}
+
+:root[data-theme='light'] .connection-intro {
+  background:
+    radial-gradient(circle at 15% 8%, rgb(59 130 246 / 16%), transparent 34%),
+    var(--paper-warm);
+}
+
+:root[data-theme='light'] .topbar {
+  background: rgb(247 249 252 / 90%);
+}
+
+:root[data-theme='light'] .service-operations {
+  background: #e9eef6;
+}
+
+:root[data-theme='light'] .build-status.running {
+  background: #dcecff;
+  color: #1e5ca4;
+}
+
+:root[data-theme='light'] .primary-button,
+:root[data-theme='light'] .create-release-button,
+:root[data-theme='light'] .merge-feature-button,
+:root[data-theme='light'] .deploy-button,
+:root[data-theme='light'] .journey-action.merge {
+  background: #1d4ed8;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgb(29 78 216 / 18%);
+}
+
+:root[data-theme='light'] .primary-button:hover:not(:disabled),
+:root[data-theme='light'] .create-release-button:hover,
+:root[data-theme='light'] .merge-feature-button:hover:not(:disabled),
+:root[data-theme='light'] .deploy-button:hover:not(:disabled),
+:root[data-theme='light'] .journey-action.merge:hover:not(:disabled) {
+  background: #1e40af;
+}
+
+:root[data-theme='light'] .primary-button:disabled,
+:root[data-theme='light'] .merge-feature-button:disabled,
+:root[data-theme='light'] .deploy-button:disabled,
+:root[data-theme='light'] .journey-action.merge:disabled {
+  background: #b9c5d6;
+  color: #5f6f85;
+  box-shadow: none;
 }
 
 .connection-intro {
@@ -178,6 +255,25 @@ legend {
   font-size: 12px;
   line-height: 1.5;
   margin: -4px 0 0;
+}
+
+.paste-hint {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.bulk-paste-success {
+  align-items: center;
+  background: var(--green-faint);
+  border: 1px solid var(--green);
+  border-radius: 9px;
+  color: var(--green-pale);
+  display: flex;
+  font-size: 13px;
+  gap: 8px;
+  padding: 11px 13px;
 }
 
 .field-row {
@@ -538,6 +634,38 @@ button:disabled {
   gap: 8px;
 }
 
+.service-filters {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.service-filters button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11px;
+  gap: 5px;
+  min-height: 31px;
+  padding: 0 8px;
+}
+
+.service-filters button:hover,
+.service-filters button.active {
+  background: var(--green-faint);
+  border-color: var(--green);
+  color: var(--green-pale);
+}
+
+.service-filters button span {
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
 .service-card {
   background: transparent;
   border: 1px solid transparent;
@@ -858,6 +986,49 @@ button:disabled {
 .pr-main h3 a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.participant-list {
+  align-items: center;
+  display: flex;
+  margin-top: 9px;
+  padding-left: 3px;
+}
+
+.participant-list img,
+.participant-list > span {
+  background: var(--paper-warm);
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  height: 25px;
+  margin-left: -4px;
+  object-fit: cover;
+  width: 25px;
+}
+
+.participant-list > span {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  font-size: 9px;
+  justify-content: center;
+}
+
+.merge-feature-button {
+  background: var(--green);
+  border: 0;
+  border-radius: 7px;
+  color: #07111f;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 4px;
+  min-height: 31px;
+  padding: 0 10px;
+}
+
+.detail-alert {
+  margin: 14px 24px 0;
 }
 
 .branch-line {

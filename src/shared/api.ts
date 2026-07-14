@@ -7,6 +7,7 @@ import type {
   CreateStagingReleaseInput,
   JiraVersion,
   JenkinsQueueStatus,
+  MergeFeaturePullRequestInput,
   MergePromotionPullRequestInput,
   MergePromotionPullRequestResult,
   PromotionPullRequest,
@@ -91,6 +92,14 @@ export const api = {
   mergePromotionPullRequest: (input: MergePromotionPullRequestInput) =>
     request<MergePromotionPullRequestResult>(
       '/api/github/promotion-pull-requests/merge',
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      },
+    ),
+  mergeFeaturePullRequest: (input: MergeFeaturePullRequestInput) =>
+    request<MergePromotionPullRequestResult>(
+      '/api/github/feature-pull-requests/merge',
       {
         method: 'POST',
         body: JSON.stringify(input),

@@ -4,6 +4,40 @@ import { describe, expect, it, vi } from 'vitest'
 import { ConnectionScreen } from './ConnectionScreen'
 
 describe('ConnectionScreen', () => {
+  it('populates every credential from a seven-line paste', async () => {
+    const user = userEvent.setup()
+    render(<ConnectionScreen onConnect={vi.fn()} />)
+
+    const email = screen.getByLabelText('Email')
+    await user.click(email)
+    await user.paste(
+      [
+        'rm@orange.test',
+        'jira-token',
+        'github-token',
+        'stage-user',
+        'stage-token',
+        'prod-user',
+        'prod-token',
+      ].join('\n'),
+    )
+
+    expect(email).toHaveValue('rm@orange.test')
+    expect(screen.getByLabelText('Jira API token')).toHaveValue('jira-token')
+    expect(screen.getByLabelText('Personal access token')).toHaveValue(
+      'github-token',
+    )
+    expect(screen.getByLabelText('Staging username')).toHaveValue('stage-user')
+    expect(screen.getByLabelText('Staging API token')).toHaveValue('stage-token')
+    expect(screen.getByLabelText('Production username')).toHaveValue('prod-user')
+    expect(screen.getByLabelText('Production API token')).toHaveValue(
+      'prod-token',
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'All seven credentials were populated.',
+    )
+  })
+
   it('submits runtime credentials without rendering their values afterward', async () => {
     const user = userEvent.setup()
     const onConnect = vi.fn().mockResolvedValue({

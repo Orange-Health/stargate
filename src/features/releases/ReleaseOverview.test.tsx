@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { api } from '../../shared/api'
 import type { ReleaseDashboard } from '../../shared/types'
 import { ReleaseOverview } from './ReleaseOverview'
 
@@ -18,6 +19,7 @@ const dashboard: ReleaseDashboard = {
       eligibleCount: 0,
       blockedCount: 1,
       mergedCount: 0,
+      backMergePending: false,
       items: [
         {
           issue: {
@@ -127,5 +129,96 @@ describe('ReleaseOverview', () => {
     expect(
       screen.queryByRole('option', { name: 'Production' }),
     ).not.toBeInTheDocument()
+  })
+
+  it('filters services with pending merges and issues', async () => {
+    const user = userEvent.setup()
+    const issueDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [{ ...dashboard.services[0], backMergePending: true }],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={issueDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByRole('button', { name: 'Pending merge 1' }),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Issues 1' }))
+    expect(screen.getAllByText('service-api')).toHaveLength(2)
+  })
+
+  it('shows participants and merges a ready feature PR', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const merge = vi
+      .spyOn(api, 'mergeFeaturePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Merged' })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const readyItem = {
+      ...dashboard.services[0].items[0],
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        baseBranch: 'dev',
+        reviewDecision: 'approved' as const,
+        checks: 'failure' as const,
+        participants: [
+          {
+            login: 'reviewer',
+            avatarUrl: 'https://avatars.test/reviewer.png',
+            role: 'reviewer' as const,
+          },
+        ],
+      },
+      eligible: true,
+      blockingReasons: [],
+      warningReasons: ['CHECKS_FAILED' as const],
+    }
+    const readyDashboard: ReleaseDashboard = {
+      ...dashboard,
+      version: { ...dashboard.version, issueCount: 1 },
+      unmatched: [],
+      services: [
+        {
+          ...dashboard.services[0],
+          eligibleCount: 1,
+          blockedCount: 0,
+          items: [readyItem],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[readyDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={readyDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByAltText('reviewer')).toBeInTheDocument()
+    expect(screen.getByText('0 of 1 tickets merged to dev')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Merge to dev' }))
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'orange/service-api',
+      pullNumber: 8,
+    })
+    expect(onRefresh).toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: 'Merge to dev' })).not.toBeInTheDocument()
+    expect(screen.getByText('Merged')).toBeInTheDocument()
+    merge.mockRestore()
   })
 })

@@ -28,13 +28,13 @@ type GitHubPull = {
   mergeable_state: string
   base: { ref: string; repo: { full_name: string } }
   head: { ref: string; sha: string }
-  user: { login: string }
-  assignees: Array<{ login: string }>
+  user: { login: string; avatar_url: string }
+  assignees: Array<{ login: string; avatar_url: string }>
   updated_at: string
 }
 
 type GitHubReview = {
-  user: { login: string }
+  user: { login: string; avatar_url: string }
   state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
   submitted_at?: string
 }
@@ -285,6 +285,41 @@ function checkStatus(checks: GitHubChecks): CheckStatus {
   return 'success'
 }
 
+function pullParticipants(pull: GitHubPull, reviews: GitHubReview[]) {
+  const participants = new Map<
+    string,
+    {
+      login: string
+      avatarUrl: string
+      role: 'author' | 'assignee' | 'reviewer'
+    }
+  >()
+  participants.set(pull.user.login, {
+    login: pull.user.login,
+    avatarUrl: pull.user.avatar_url,
+    role: 'author',
+  })
+  for (const assignee of pull.assignees) {
+    if (!participants.has(assignee.login)) {
+      participants.set(assignee.login, {
+        login: assignee.login,
+        avatarUrl: assignee.avatar_url,
+        role: 'assignee',
+      })
+    }
+  }
+  for (const review of reviews) {
+    if (!participants.has(review.user.login)) {
+      participants.set(review.user.login, {
+        login: review.user.login,
+        avatarUrl: review.user.avatar_url,
+        role: 'reviewer',
+      })
+    }
+  }
+  return [...participants.values()]
+}
+
 async function getPullRequest(
   config: ConnectionConfig,
   repository: string,
@@ -324,6 +359,7 @@ async function getPullRequest(
     mergeableState: pull.mergeable_state,
     checks: checkStatus(checks),
     updatedAt: pull.updated_at,
+    participants: pullParticipants(pull, reviews),
   }
 }
 
