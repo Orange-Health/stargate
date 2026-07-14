@@ -93,11 +93,14 @@ describe('staging release tags', () => {
     expect(releaseRequest[0]).toBe(
       'https://api.github.com/repos/orange/service-api/releases',
     )
-    expect(JSON.parse(String(releaseRequest[1]?.body))).toMatchObject({
+    const releaseBody = JSON.parse(String(releaseRequest[1]?.body))
+    expect(releaseBody).toMatchObject({
       tag_name: 'v-qa-v26.0713.3',
       target_commitish: 'dev',
       prerelease: true,
       draft: false,
+      generate_release_notes: true,
     })
+    expect(releaseBody).not.toHaveProperty('body')
   })
 })

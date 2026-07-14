@@ -231,10 +231,9 @@ export async function createStagingRelease(
           tag_name: tag,
           target_commitish: 'dev',
           name: tag,
-          body: `Staging ${environment.toUpperCase()} release from dev.`,
           draft: false,
           prerelease: true,
-          generate_release_notes: false,
+          generate_release_notes: true,
         }),
       })
       return {
