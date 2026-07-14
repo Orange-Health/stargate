@@ -94,6 +94,77 @@ describe('ReleaseOverview', () => {
 
   afterEach(() => vi.restoreAllMocks())
 
+  it('shows the current Jira or GitHub operation while loading', () => {
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        loading
+        dashboardProgress={{
+          phase: 'github-search',
+          message: 'Searching GitHub for pull requests linked to OH-123…',
+          current: 3,
+          total: 8,
+        }}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByText(
+        'Searching GitHub for pull requests linked to OH-123…',
+      ),
+    ).toBeVisible()
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuenow',
+      '3',
+    )
+  })
+
+  it('uses the themed release picker to change releases', async () => {
+    const user = userEvent.setup()
+    const onSelectVersion = vi.fn()
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[
+          dashboard.version,
+          {
+            ...dashboard.version,
+            id: '10352',
+            name: 'OH Release 26.0723',
+          },
+        ]}
+        selectedVersionId="10351"
+        dashboard={dashboard}
+        loading={false}
+        onSelectVersion={onSelectVersion}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Active Jira release' }),
+    )
+    await user.click(
+      screen.getByRole('option', { name: /OH Release 26\.0723/ }),
+    )
+
+    expect(onSelectVersion).toHaveBeenCalledWith('10352')
+  })
+
   it('renders service readiness and explicit blocking reasons', () => {
     render(
       <ReleaseOverview
@@ -154,9 +225,34 @@ describe('ReleaseOverview', () => {
 
   it('refreshes the selected service on demand', async () => {
     const user = userEvent.setup()
-    const refreshRepository = vi
-      .spyOn(api, 'refreshRepository')
-      .mockResolvedValue()
+    const refreshedService = {
+      ...dashboard.services[0],
+      items: [
+        {
+          ...dashboard.services[0].items[0],
+          pullRequest: {
+            ...dashboard.services[0].items[0].pullRequest!,
+            title: 'OH-123 Refreshed pull request',
+          },
+        },
+      ],
+    }
+    const refreshService = vi.spyOn(api, 'refreshService').mockResolvedValue({
+      service: refreshedService,
+      repositoryState: {
+        repository: 'orange/service-api',
+        defaultBranch: 'main',
+        stagingReleases: [],
+        productionReleases: [],
+        deployedTags: [],
+        deploymentLookupFailed: false,
+        productionReady: false,
+        promotionSteps: [],
+        pendingBackMerges: [],
+        jenkinsServices: [],
+        fetchedAt: new Date().toISOString(),
+      },
+    })
     const onRefresh = vi.fn().mockResolvedValue(undefined)
     render(
       <ReleaseOverview
@@ -179,8 +275,15 @@ describe('ReleaseOverview', () => {
       screen.getByRole('button', { name: '↻ Refresh service' }),
     )
 
-    expect(refreshRepository).toHaveBeenCalledWith('orange/service-api')
-    expect(onRefresh).toHaveBeenCalled()
+    expect(refreshService).toHaveBeenCalledWith(
+      '10351',
+      'orange/service-api',
+      ['OH-123'],
+    )
+    expect(
+      screen.getByText('OH-123 Refreshed pull request'),
+    ).toBeVisible()
+    expect(onRefresh).not.toHaveBeenCalled()
   })
 
   it('searches the service list by repository name', async () => {

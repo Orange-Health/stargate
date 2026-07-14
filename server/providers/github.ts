@@ -1,7 +1,9 @@
 import type {
   CheckStatus,
   ConnectionConfig,
+  CreatedProductionRelease,
   CreatedStagingRelease,
+  DashboardProgress,
   PullRequest,
   RateLimit,
   ReviewDecision,
@@ -187,6 +189,47 @@ export function nextStagingTag(
   return `${prefix}${highest + 1}`
 }
 
+const frontendProductionRepositories = new Set([
+  'asbru',
+  'bifrost',
+  'occ-web',
+  'sapphire-web',
+])
+
+export function productionTagPrefix(repository: string, date: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
+  if (!match) throw new Error('Release date must use YYYY-MM-DD.')
+  const [, year, month, day] = match
+  const parsed = new Date(`${date}T00:00:00Z`)
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.getUTCFullYear() !== Number(year) ||
+    parsed.getUTCMonth() + 1 !== Number(month) ||
+    parsed.getUTCDate() !== Number(day)
+  ) {
+    throw new Error('Release date is invalid.')
+  }
+  const name = repository.split('/').at(-1)?.toLowerCase()
+  const prefix = frontendProductionRepositories.has(name ?? '')
+    ? 'v-prod-'
+    : 'v-'
+  return `${prefix}${year.slice(-2)}.${month}${day}.`
+}
+
+export function nextProductionTag(
+  repository: string,
+  date: string,
+  existingTags: string[],
+) {
+  const prefix = productionTagPrefix(repository, date)
+  const highest = existingTags.reduce((current, tag) => {
+    if (!tag.startsWith(prefix)) return current
+    const suffix = tag.slice(prefix.length)
+    return /^\d+$/.test(suffix) ? Math.max(current, Number(suffix)) : current
+  }, 0)
+  return `${prefix}${highest + 1}`
+}
+
 async function existingTags(
   config: ConnectionConfig,
   repository: string,
@@ -254,6 +297,61 @@ export async function createStagingRelease(
   }
 
   throw new Error('Could not reserve the next staging tag.')
+}
+
+export async function createProductionRelease(
+  config: ConnectionConfig,
+  repository: string,
+  date: string,
+): Promise<CreatedProductionRelease> {
+  const [owner] = repository.split('/')
+  if (owner.toLowerCase() !== config.githubOrg.toLowerCase()) {
+    throw new Error('Releases can only be created in the connected organization.')
+  }
+
+  const path = repositoryPath(repository)
+  await githubFetch(config, `/repos/${path}/branches/release`)
+  const prefix = productionTagPrefix(repository, date)
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const tag = nextProductionTag(
+      repository,
+      date,
+      await existingTags(config, repository, prefix),
+    )
+    try {
+      const release = await githubFetch<{
+        id: number
+        html_url: string
+        created_at: string
+      }>(config, `/repos/${path}/releases`, {
+        method: 'POST',
+        body: JSON.stringify({
+          tag_name: tag,
+          target_commitish: 'release',
+          name: tag,
+          draft: false,
+          prerelease: false,
+          generate_release_notes: true,
+        }),
+      })
+      return {
+        id: release.id,
+        repository,
+        tag,
+        sourceBranch: 'release',
+        url: release.html_url,
+        createdAt: release.created_at,
+      }
+    } catch (error) {
+      if (attempt < 2 && error instanceof ProviderError && error.status === 422) {
+        continue
+      }
+      throw error
+    }
+  }
+
+  throw new Error('Could not reserve the next production tag.')
 }
 
 export async function testGitHubConnection(config: ConnectionConfig) {
@@ -457,15 +555,24 @@ async function searchIssueKey(
 export async function discoverPullRequests(
   config: ConnectionConfig,
   issueKeys: string[],
+  reportProgress?: (progress: DashboardProgress) => void,
 ): Promise<GitHubDiscovery> {
   latestRateLimit = undefined
   const byIssue = new Map<string, PullRequest[]>(
     issueKeys.map((key) => [key, []]),
   )
   const warnings: string[] = []
-  const searches = await mapConcurrent(issueKeys, 6, (key) =>
-    searchIssueKey(config, key),
-  )
+  let searchesStarted = 0
+  const searches = await mapConcurrent(issueKeys, 6, (key) => {
+    searchesStarted += 1
+    reportProgress?.({
+      phase: 'github-search',
+      message: `Searching GitHub for pull requests linked to ${key}…`,
+      current: searchesStarted,
+      total: issueKeys.length,
+    })
+    return searchIssueKey(config, key)
+  })
   const uniquePulls = new Map<string, GitHubSearchItem>()
   const pullToIssues = new Map<string, Set<string>>()
 
@@ -485,8 +592,16 @@ export async function discoverPullRequests(
   })
 
   const entries = [...uniquePulls.entries()]
+  let detailsStarted = 0
   const pulls = await mapConcurrent(entries, 6, async ([id, item]) => {
     const repository = item.repository_url.split('/').slice(-2).join('/')
+    detailsStarted += 1
+    reportProgress?.({
+      phase: 'github-details',
+      message: `Loading ${repository} pull request #${item.number}…`,
+      current: detailsStarted,
+      total: entries.length,
+    })
     return { id, pull: await getPullRequest(config, repository, item.number) }
   })
 

@@ -11,6 +11,7 @@ import type {
   RepositoryRisk,
   ReviewDecision,
   StagingEnvironment,
+  TrackedProductionRelease,
   TrackedStagingRelease,
   WorkflowRun,
 } from '../../src/shared/types.js'
@@ -186,7 +187,10 @@ async function listReleaseRuns(
 async function listTrackedReleases(
   config: ConnectionConfig,
   repository: string,
-): Promise<TrackedStagingRelease[]> {
+): Promise<{
+  stagingReleases: TrackedStagingRelease[]
+  productionReleases: TrackedProductionRelease[]
+}> {
   const releases = await githubApi<GitHubRelease[]>(
     config,
     `/repos/${repositoryPath(repository)}/releases?per_page=30`,
@@ -198,7 +202,15 @@ async function listTrackedReleases(
     )
     .slice(0, 12)
 
-  return Promise.all(
+  const production = releases
+    .filter(
+      (release) =>
+        !release.prerelease &&
+        /^v(?:-prod)?-\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
+    )
+    .slice(0, 12)
+
+  const stagingReleases = await Promise.all(
     staging.map(async (release) => {
       const runs = await listReleaseRuns(config, repository, release)
       return {
@@ -214,6 +226,20 @@ async function listTrackedReleases(
       }
     }),
   )
+  const productionReleases = await Promise.all(
+    production.map(async (release) => {
+      const runs = await listReleaseRuns(config, repository, release)
+      return {
+        id: release.id,
+        tag: release.tag_name,
+        url: release.html_url,
+        createdAt: release.created_at,
+        buildStatus: aggregateBuildStatus(runs),
+        runs,
+      }
+    }),
+  )
+  return { stagingReleases, productionReleases }
 }
 
 export async function getLatestSuccessfulQaTag(
@@ -348,7 +374,7 @@ async function promotionStep(
 ): Promise<PromotionStep> {
   const { fromBranch, toBranch } = promotionBranches(route, defaultBranch)
   const [comparison, openPulls, closedPulls] = await Promise.all([
-    githubApi<{ ahead_by: number }>(
+    githubApi<{ ahead_by: number; behind_by: number }>(
       config,
       `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
     ),
@@ -362,6 +388,7 @@ async function promotionStep(
     fromBranch,
     toBranch,
     commitsAhead: comparison.ahead_by,
+    commitsBehind: comparison.behind_by,
     state: openPull
       ? 'pr_open'
       : comparison.ahead_by > 0
@@ -416,7 +443,7 @@ export async function getRepositoryReleaseState(
     config,
     `/repos/${repositoryPath(repository)}`,
   )
-  const [stagingReleases, promotionSteps, backMerges] = await Promise.all([
+  const [trackedReleases, promotionSteps, backMerges] = await Promise.all([
     listTrackedReleases(config, repository),
     Promise.all([
       promotionStep(
@@ -437,13 +464,43 @@ export async function getRepositoryReleaseState(
   return {
     repository,
     defaultBranch: metadata.default_branch,
-    stagingReleases,
+    stagingReleases: trackedReleases.stagingReleases,
+    productionReleases: trackedReleases.productionReleases,
     deployedTags: [],
     deploymentLookupFailed: false,
+    productionReady: promotionSteps.some(
+      (step) =>
+        step.route === 'release-to-default' &&
+        step.commitsAhead === 0 &&
+        step.commitsBehind === 0,
+    ),
     promotionSteps,
     pendingBackMerges: backMerges,
     jenkinsServices: servicesForRepository(repository),
     fetchedAt: new Date().toISOString(),
+  }
+}
+
+export async function assertProductionBranchesIdentical(
+  config: ConnectionConfig,
+  repository: string,
+) {
+  assertConnectedRepository(config, repository)
+  const metadata = await githubApi<GitHubRepository>(
+    config,
+    `/repos/${repositoryPath(repository)}`,
+  )
+  const comparison = await githubApi<{ ahead_by: number; behind_by: number }>(
+    config,
+    `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(metadata.default_branch)}...release`,
+  )
+  if (comparison.ahead_by !== 0 || comparison.behind_by !== 0) {
+    throw new ProviderError(
+      `Production deployment is blocked: release and ${metadata.default_branch} are not identical.`,
+      'PRODUCTION_BRANCHES_DIFFER',
+      'github',
+      409,
+    )
   }
 }
 

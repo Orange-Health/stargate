@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   deployedTagsFromBuilds,
   deploymentSpec,
+  productionDeploymentSpec,
   servicesForRepository,
 } from './jenkins.js'
 
@@ -126,5 +127,45 @@ describe('deployedTagsFromBuilds', () => {
         buildNumber: 299,
       }),
     ])
+  })
+})
+
+describe('productionDeploymentSpec', () => {
+  it('maps the production Jenkins parameters exactly', () => {
+    expect(
+      productionDeploymentSpec({
+        repository: 'Orange-Health/accounts',
+        service: 'accounts',
+        imageTag: 'v26.0714.1',
+        qaApprovalRequired: true,
+        qaName: 'QA Owner',
+        skipProdMigration: false,
+        prodMigrationJob: 'Prod-new-cluster-migration',
+      }),
+    ).toEqual({
+      jobName: 'Prod-new-cluster-deployment',
+      parameters: {
+        SERVICE: 'accounts',
+        IMAGE_TAG: 'v26.0714.1',
+        QA_APPROVAL_REQUIRED: true,
+        QA_NAME: 'QA Owner',
+        SKIP_PROD_MIGRATION: false,
+        PROD_MIGRATION_JOB: 'Prod-new-cluster-migration',
+      },
+    })
+  })
+
+  it('requires a QA name when approval is enabled', () => {
+    expect(() =>
+      productionDeploymentSpec({
+        repository: 'Orange-Health/accounts',
+        service: 'accounts',
+        imageTag: 'v26.0714.1',
+        qaApprovalRequired: true,
+        qaName: '',
+        skipProdMigration: false,
+        prodMigrationJob: 'Prod-new-cluster-migration',
+      }),
+    ).toThrow('QA name is required')
   })
 })

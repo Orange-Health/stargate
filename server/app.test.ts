@@ -44,6 +44,17 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_STAGING_RELEASE')
   })
 
+  it('validates production release requests', async () => {
+    const response = await request(createApp())
+      .post('/api/github/production-releases')
+      .send({
+        repository: '../outside',
+        date: '2026-07-14',
+      })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_PRODUCTION_RELEASE')
+  })
+
   it('validates repository-state and promotion mutation inputs', async () => {
     const app = createApp()
     const stateResponse = await request(app)
@@ -118,5 +129,44 @@ describe('local API', () => {
       .send({ repository: '../outside' })
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('INVALID_REPOSITORY')
+  })
+
+  it('validates focused service data refresh requests', async () => {
+    const response = await request(createApp())
+      .post('/api/releases/10351/service-refresh')
+      .send({
+        repository: 'Orange-Health/accounts',
+        issueKeys: ['not-a-ticket'],
+      })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_SERVICE_REFRESH')
+  })
+
+  it('validates production deployment inputs before triggering Jenkins', async () => {
+    const response = await request(createApp())
+      .post('/api/jenkins/production-deployments')
+      .send({
+        repository: 'Orange-Health/accounts',
+        service: 'accounts',
+        imageTag: 'invalid tag',
+        qaApprovalRequired: false,
+        skipProdMigration: false,
+        prodMigrationJob: 'Prod-new-cluster-migration',
+      })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe(
+      'INVALID_PRODUCTION_DEPLOYMENT',
+    )
+  })
+
+  it('returns supplemental dashboard loading progress', async () => {
+    const response = await request(createApp()).get(
+      '/api/releases/dashboard-progress/dashboard-test-123',
+    )
+    expect(response.status).toBe(200)
+    expect(response.body).toEqual({
+      phase: 'starting',
+      message: 'Preparing release data…',
+    })
   })
 })

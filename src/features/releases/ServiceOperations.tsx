@@ -5,11 +5,14 @@ import type {
   PromotionStep,
   RepositoryReleaseState,
   TrackedStagingRelease,
+  TrackedProductionRelease,
 } from '../../shared/types'
 import { DeployDialog } from './DeployDialog'
+import { ProductionDeployDialog } from './ProductionDeployDialog'
 
 type Props = {
   repository: string
+  productionEnabled?: boolean
 }
 
 const buildLabels: Record<BuildStatus, string> = {
@@ -48,13 +51,18 @@ function mergeBlockReason(
   return undefined
 }
 
-export function ServiceOperations({ repository }: Props) {
+export function ServiceOperations({
+  repository,
+  productionEnabled = false,
+}: Props) {
   const [state, setState] = useState<RepositoryReleaseState>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busyRoute, setBusyRoute] = useState('')
   const [deployRelease, setDeployRelease] =
     useState<TrackedStagingRelease>()
+  const [productionDeployRelease, setProductionDeployRelease] =
+    useState<TrackedProductionRelease>()
   const [browserNotifications, setBrowserNotifications] = useState(
     () =>
       typeof Notification !== 'undefined' &&
@@ -68,6 +76,7 @@ export function ServiceOperations({ repository }: Props) {
   const previousBuilds = useRef(new Map<string, BuildStatus>())
   const buildsInitialized = useRef(false)
   const browserNotificationsRef = useRef(browserNotifications)
+  const loadSequence = useRef(0)
 
   useEffect(() => {
     browserNotificationsRef.current = browserNotifications
@@ -119,20 +128,23 @@ export function ServiceOperations({ repository }: Props) {
 
   const load = useCallback(
     async (silent = false) => {
+      const sequence = ++loadSequence.current
       if (!silent) setLoading(true)
       setError('')
       try {
         const nextState = await api.repositoryState(repository)
+        if (sequence !== loadSequence.current) return
         announceCompletedBuilds(nextState)
         setState(nextState)
       } catch (reason) {
+        if (sequence !== loadSequence.current) return
         setError(
           reason instanceof Error
             ? reason.message
             : 'Could not load repository operations.',
         )
       } finally {
-        if (!silent) setLoading(false)
+        if (!silent && sequence === loadSequence.current) setLoading(false)
       }
     },
     [announceCompletedBuilds, repository],
@@ -147,19 +159,34 @@ export function ServiceOperations({ repository }: Props) {
     void load()
     const interval = window.setInterval(() => void load(true), 15_000)
     const refresh = (event: Event) => {
-      const detail = (event as CustomEvent<{ repository?: string }>).detail
+      const detail = (
+        event as CustomEvent<{
+          repository?: string
+          state?: RepositoryReleaseState
+        }>
+      ).detail
       if (!detail?.repository || detail.repository === repository) {
+        if (detail?.state) {
+          loadSequence.current += 1
+          announceCompletedBuilds(detail.state)
+          setState(detail.state)
+          setLoading(false)
+          setError('')
+          return
+        }
         void load(true)
       }
     }
     window.addEventListener('staging-release-created', refresh)
+    window.addEventListener('production-release-created', refresh)
     window.addEventListener('service-refresh-requested', refresh)
     return () => {
       window.clearInterval(interval)
       window.removeEventListener('staging-release-created', refresh)
+      window.removeEventListener('production-release-created', refresh)
       window.removeEventListener('service-refresh-requested', refresh)
     }
-  }, [load, repository])
+  }, [announceCompletedBuilds, load, repository])
 
   useEffect(() => {
     if (!notificationToast) return
@@ -374,6 +401,83 @@ export function ServiceOperations({ repository }: Props) {
         )}
       </section>
 
+      {productionEnabled && (
+        <section className="operation-section">
+          <div className="operation-heading">
+            <div>
+              <p className="eyebrow">GitHub Actions · Production</p>
+              <h3>Production releases</h3>
+            </div>
+            <span className="auto-refresh">Live · 15s</span>
+          </div>
+
+          {loading && !state ? (
+            <div className="operation-loading">
+              <span className="spinner" /> Loading production builds…
+            </div>
+          ) : state?.productionReleases.length ? (
+            <div className="release-build-list">
+              {state.productionReleases.map((release) => (
+                <article className="release-build-row" key={release.id}>
+                  <span
+                    className={`build-indicator ${release.buildStatus}`}
+                    aria-hidden="true"
+                  />
+                  <div className="release-build-main">
+                    <a href={release.url} target="_blank" rel="noreferrer">
+                      {release.tag}
+                    </a>
+                    <span>{timeAgo(release.createdAt)}</span>
+                  </div>
+                  <span className={`build-status ${release.buildStatus}`}>
+                    {buildLabels[release.buildStatus]}
+                  </span>
+                  <button
+                    className="production-deploy-button"
+                    type="button"
+                    disabled={
+                      release.buildStatus !== 'succeeded' ||
+                      state.jenkinsServices.length === 0
+                    }
+                    title={
+                      state.jenkinsServices.length === 0
+                          ? 'No Jenkins service mapping for this repository'
+                          : release.buildStatus !== 'succeeded'
+                            ? 'Deployment is enabled after a successful build'
+                            : 'Deploy this production release'
+                    }
+                    onClick={() => setProductionDeployRelease(release)}
+                  >
+                    Deploy production
+                  </button>
+                  <div className="workflow-links">
+                    {release.runs.length === 0 ? (
+                      <small>Waiting for workflow</small>
+                    ) : (
+                      release.runs.map((run) => (
+                        <a
+                          href={run.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          key={run.id}
+                          title={`${run.status}${run.conclusion ? ` · ${run.conclusion}` : ''}`}
+                        >
+                          {run.name} ↗
+                        </a>
+                      ))
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="operation-empty">
+              No production releases found for this service.
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="operation-section journey-section">
         <div className="operation-heading">
           <div>
@@ -491,6 +595,14 @@ export function ServiceOperations({ repository }: Props) {
           release={deployRelease}
           services={state.jenkinsServices}
           onClose={() => setDeployRelease(undefined)}
+        />
+      )}
+      {productionDeployRelease && state && (
+        <ProductionDeployDialog
+          repository={repository}
+          services={state.jenkinsServices}
+          sourceTag={productionDeployRelease.tag}
+          onClose={() => setProductionDeployRelease(undefined)}
         />
       )}
     </div>

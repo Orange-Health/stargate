@@ -4,6 +4,8 @@ import type {
   DeploymentEnvironment,
   JenkinsDeployedTag,
   JenkinsQueueStatus,
+  TriggerProductionDeploymentInput,
+  TriggeredProductionDeployment,
   TriggerDeploymentInput,
   TriggeredDeployment,
 } from '../../src/shared/types.js'
@@ -282,6 +284,56 @@ export function deploymentSpec(
   }
 }
 
+export function productionDeploymentSpec(
+  input: TriggerProductionDeploymentInput,
+): DeploymentSpec {
+  const validServices = servicesForRepository(input.repository)
+  if (!validServices.includes(input.service)) {
+    throw new ProviderError(
+      `Jenkins service "${input.service}" is not mapped to ${input.repository}.`,
+      'JENKINS_SERVICE_NOT_MAPPED',
+      'jenkins',
+      400,
+    )
+  }
+  if (input.qaApprovalRequired && !input.qaName?.trim()) {
+    throw new ProviderError(
+      'QA name is required when QA approval is enabled.',
+      'QA_NAME_REQUIRED',
+      'jenkins',
+      400,
+    )
+  }
+  return {
+    jobName: 'Prod-new-cluster-deployment',
+    parameters: {
+      SERVICE: input.service,
+      IMAGE_TAG: input.imageTag,
+      QA_APPROVAL_REQUIRED: input.qaApprovalRequired,
+      QA_NAME: input.qaName?.trim() ?? '',
+      SKIP_PROD_MIGRATION: input.skipProdMigration,
+      PROD_MIGRATION_JOB: input.prodMigrationJob,
+    },
+  }
+}
+
+function productionConfig(config: ConnectionConfig): ConnectionConfig {
+  if (!config.productionJenkins) {
+    throw new ProviderError(
+      'Production Jenkins credentials are not configured.',
+      'PRODUCTION_JENKINS_NOT_CONFIGURED',
+      'jenkins',
+      409,
+    )
+  }
+  return {
+    ...config,
+    jenkinsUrl: config.productionJenkins.jenkinsUrl,
+    jenkinsUsername: config.productionJenkins.jenkinsUsername,
+    jenkinsToken: config.productionJenkins.jenkinsToken,
+  }
+}
+
 export async function testJenkinsConnection(config: ConnectionConfig) {
   try {
     const info = (await jenkinsClient(config).info()) as {
@@ -348,6 +400,53 @@ export async function triggerDeployment(
   }
 }
 
+export async function triggerProductionDeployment(
+  config: ConnectionConfig,
+  input: TriggerProductionDeploymentInput,
+): Promise<TriggeredProductionDeployment> {
+  const prodConfig = productionConfig(config)
+  const spec = productionDeploymentSpec(input)
+  try {
+    const client = jenkinsClient(prodConfig)
+    const queueId = Number(
+      await client.job.build({
+        name: spec.jobName,
+        parameters: spec.parameters,
+      }),
+    )
+    if (!Number.isInteger(queueId) || queueId <= 0) {
+      throw new Error('Jenkins did not return a valid queue item.')
+    }
+    let buildUrl: string | undefined
+    try {
+      const queueItem = (await client.queue.item(queueId)) as {
+        executable?: { url?: string }
+      }
+      buildUrl = queueItem.executable?.url
+    } catch {
+      // It is normal for the queue item to take a moment to become available.
+    }
+    return {
+      queueId,
+      queueUrl: `${prodConfig.jenkinsUrl.replace(/\/+$/, '')}/queue/item/${queueId}/`,
+      buildUrl,
+      jobName: spec.jobName,
+      service: input.service,
+      imageTag: input.imageTag,
+    }
+  } catch (error) {
+    if (error instanceof ProviderError) throw error
+    throw new ProviderError(
+      error instanceof Error
+        ? `Production deployment trigger failed: ${error.message}`
+        : 'Production deployment trigger failed.',
+      'PRODUCTION_JENKINS_TRIGGER_FAILED',
+      'jenkins',
+      502,
+    )
+  }
+}
+
 export async function getDeploymentQueueStatus(
   config: ConnectionConfig,
   queueId: number,
@@ -389,4 +488,11 @@ export async function getDeploymentQueueStatus(
       true,
     )
   }
+}
+
+export function getProductionDeploymentQueueStatus(
+  config: ConnectionConfig,
+  queueId: number,
+) {
+  return getDeploymentQueueStatus(productionConfig(config), queueId)
 }

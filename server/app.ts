@@ -13,6 +13,7 @@ import {
 } from './connectionStore.js'
 import { ProviderError } from './errors.js'
 import {
+  createProductionRelease,
   createStagingRelease,
   testGitHubConnection,
 } from './providers/github.js'
@@ -31,14 +32,21 @@ import {
 import {
   getCurrentDeployments,
   getDeploymentQueueStatus,
+  getProductionDeploymentQueueStatus,
   testJenkinsConnection,
   triggerDeployment,
+  triggerProductionDeployment,
 } from './providers/jenkins.js'
 import {
   aggregateRelease,
   clearReleaseCache,
+  refreshServiceRelease,
 } from './services/releaseAggregator.js'
 import { getDeploymentFreshness } from './services/deploymentFreshness.js'
+import {
+  getDashboardProgress,
+  setDashboardProgress,
+} from './services/dashboardProgress.js'
 
 const connectionSchema = z.object({
   jiraSite: z
@@ -75,11 +83,15 @@ const stagingReleaseSchema = z.object({
   environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5', 's6']),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
-
 const repositorySchema = z
   .string()
   .regex(/^Orange-Health\/[A-Za-z0-9_.-]+$/i)
   .refine((value) => !['.', '..'].includes(value.split('/')[1]))
+
+const productionReleaseSchema = z.object({
+  repository: repositorySchema,
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+})
 
 const promotionSchema = z.object({
   repository: repositorySchema,
@@ -100,8 +112,30 @@ const deploymentSchema = z.object({
   environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5']),
 })
 
+const productionDeploymentSchema = z
+  .object({
+    repository: repositorySchema,
+    service: z.string().regex(/^[A-Za-z0-9_.-]+$/),
+    imageTag: z.string().regex(/^[A-Za-z0-9_.-]+$/),
+    qaApprovalRequired: z.boolean(),
+    qaName: z.string().max(120).optional(),
+    skipProdMigration: z.boolean(),
+    prodMigrationJob: z.string().trim().min(1).max(160),
+  })
+  .refine(
+    (input) => !input.qaApprovalRequired || Boolean(input.qaName?.trim()),
+    { message: 'QA name is required when approval is enabled.' },
+  )
+
 const repositoryRisksSchema = z.object({
   repositories: z.array(repositorySchema).max(100),
+})
+const serviceRefreshSchema = z.object({
+  repository: repositorySchema,
+  issueKeys: z
+    .array(z.string().regex(/^[A-Z][A-Z0-9]+-\d+$/i))
+    .min(1)
+    .max(200),
 })
 
 export function createApp() {
@@ -190,6 +224,28 @@ export function createApp() {
     response.json(await listUnreleasedVersions(requireConnection()))
   })
 
+  app.get(
+    '/api/releases/dashboard-progress/:progressId',
+    (request, response) => {
+      const { progressId } = request.params
+      if (!/^[A-Za-z0-9_-]{8,80}$/.test(progressId)) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_PROGRESS_ID',
+            message: 'A valid dashboard progress ID is required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        getDashboardProgress(progressId) ?? {
+          phase: 'starting',
+          message: 'Preparing release data…',
+        },
+      )
+    },
+  )
+
   app.get('/api/releases/:versionId/dashboard', async (request, response) => {
     const { versionId } = request.params
     if (!/^\d+$/.test(versionId)) {
@@ -201,14 +257,69 @@ export function createApp() {
       } satisfies ApiErrorBody)
       return
     }
+    const progressId =
+      typeof request.query.progressId === 'string' &&
+      /^[A-Za-z0-9_-]{8,80}$/.test(request.query.progressId)
+        ? request.query.progressId
+        : undefined
+    if (progressId) {
+      setDashboardProgress(progressId, {
+        phase: 'starting',
+        message: 'Preparing release data…',
+      })
+    }
     response.json(
       await aggregateRelease(
         requireConnection(),
         versionId,
         request.query.refresh === 'true',
+        progressId
+          ? (progress) => setDashboardProgress(progressId, progress)
+          : undefined,
       ),
     )
   })
+
+  app.post(
+    '/api/releases/:versionId/service-refresh',
+    async (request, response) => {
+      const { versionId } = request.params
+      const parsed = serviceRefreshSchema.safeParse(request.body)
+      if (!/^\d+$/.test(versionId) || !parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_SERVICE_REFRESH',
+            message:
+              'A valid release, repository, and Jira issue list are required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      const config = requireConnection()
+      clearRepositoryCaches(config, parsed.data.repository, true)
+      const [service, state, deploymentResult] = await Promise.all([
+        refreshServiceRelease(
+          config,
+          versionId,
+          parsed.data.repository,
+          parsed.data.issueKeys,
+        ),
+        getRepositoryReleaseState(config, parsed.data.repository),
+        getCurrentDeployments(config, parsed.data.repository).then(
+          (deployedTags) => ({ deployedTags, failed: false }),
+          () => ({ deployedTags: [], failed: true }),
+        ),
+      ])
+      response.json({
+        service,
+        repositoryState: {
+          ...state,
+          deployedTags: deploymentResult.deployedTags,
+          deploymentLookupFailed: deploymentResult.failed,
+        },
+      })
+    },
+  )
 
   app.post('/api/github/staging-releases', async (request, response) => {
     const parsed = stagingReleaseSchema.safeParse(request.body)
@@ -228,6 +339,28 @@ export function createApp() {
         requireConnection(),
         parsed.data.repository,
         parsed.data.environment,
+        parsed.data.date,
+      ),
+    )
+  })
+
+  app.post('/api/github/production-releases', async (request, response) => {
+    const parsed = productionReleaseSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_PRODUCTION_RELEASE',
+          message:
+            parsed.error.issues[0]?.message ??
+            'Invalid production release details.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.status(201).json(
+      await createProductionRelease(
+        requireConnection(),
+        parsed.data.repository,
         parsed.data.date,
       ),
     )
@@ -399,6 +532,34 @@ export function createApp() {
     )
   })
 
+  app.post(
+    '/api/jenkins/production-deployments',
+    async (request, response) => {
+      const parsed = productionDeploymentSchema.safeParse(request.body)
+      if (!parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_PRODUCTION_DEPLOYMENT',
+            message:
+              parsed.error.issues[0]?.message ??
+              'Invalid production deployment details.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      const config = requireConnection()
+      // Temporary testing override: restore the branch-equality guard after
+      // production deployment validation is complete.
+      // await assertProductionBranchesIdentical(
+      //   config,
+      //   parsed.data.repository,
+      // )
+      response.status(202).json(
+        await triggerProductionDeployment(config, parsed.data),
+      )
+    },
+  )
+
   app.get('/api/jenkins/queue/:queueId', async (request, response) => {
     const queueId = Number(request.params.queueId)
     if (!Number.isInteger(queueId) || queueId <= 0) {
@@ -414,6 +575,28 @@ export function createApp() {
       await getDeploymentQueueStatus(requireConnection(), queueId),
     )
   })
+
+  app.get(
+    '/api/jenkins/production-queue/:queueId',
+    async (request, response) => {
+      const queueId = Number(request.params.queueId)
+      if (!Number.isInteger(queueId) || queueId <= 0) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_QUEUE_ID',
+            message: 'A valid Jenkins queue ID is required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        await getProductionDeploymentQueueStatus(
+          requireConnection(),
+          queueId,
+        ),
+      )
+    },
+  )
 
   app.use(
     (

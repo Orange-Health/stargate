@@ -127,11 +127,23 @@ export type ReleaseDashboard = {
   cached: boolean
 }
 
+export type DashboardProgress = {
+  phase: 'starting' | 'jira' | 'github-search' | 'github-details' | 'mapping'
+  message: string
+  current?: number
+  total?: number
+}
+
 export type StagingEnvironment = 'qa' | 's1' | 's2' | 's3' | 's4' | 's5' | 's6'
 
 export type CreateStagingReleaseInput = {
   repository: string
   environment: StagingEnvironment
+  date: string
+}
+
+export type CreateProductionReleaseInput = {
+  repository: string
   date: string
 }
 
@@ -141,6 +153,15 @@ export type CreatedStagingRelease = {
   environment: StagingEnvironment
   tag: string
   sourceBranch: 'dev'
+  url: string
+  createdAt: string
+}
+
+export type CreatedProductionRelease = {
+  id: number
+  repository: string
+  tag: string
+  sourceBranch: string
   url: string
   createdAt: string
 }
@@ -172,6 +193,15 @@ export type TrackedStagingRelease = {
   runs: WorkflowRun[]
 }
 
+export type TrackedProductionRelease = {
+  id: number
+  tag: string
+  url: string
+  createdAt: string
+  buildStatus: BuildStatus
+  runs: WorkflowRun[]
+}
+
 export type PromotionRoute = 'dev-to-release' | 'release-to-default'
 
 export type PromotionPullRequest = {
@@ -193,6 +223,7 @@ export type PromotionStep = {
   fromBranch: string
   toBranch: string
   commitsAhead: number
+  commitsBehind: number
   state: 'up_to_date' | 'needs_pr' | 'pr_open'
   pullRequest?: PromotionPullRequest
   previousTemplate?: {
@@ -214,12 +245,19 @@ export type RepositoryReleaseState = {
   repository: string
   defaultBranch: string
   stagingReleases: TrackedStagingRelease[]
+  productionReleases: TrackedProductionRelease[]
   deployedTags: JenkinsDeployedTag[]
   deploymentLookupFailed: boolean
+  productionReady: boolean
   promotionSteps: PromotionStep[]
   pendingBackMerges: PendingBackMerge[]
   jenkinsServices: string[]
   fetchedAt: string
+}
+
+export type ServiceRefreshResult = {
+  service: ServiceRelease
+  repositoryState: RepositoryReleaseState
 }
 
 export type RepositoryRisk = {
@@ -291,6 +329,25 @@ export type JenkinsQueueStatus = {
   buildUrl?: string
   buildNumber?: number
   message?: string
+}
+
+export type TriggerProductionDeploymentInput = {
+  repository: string
+  service: string
+  imageTag: string
+  qaApprovalRequired: boolean
+  qaName?: string
+  skipProdMigration: boolean
+  prodMigrationJob: string
+}
+
+export type TriggeredProductionDeployment = {
+  queueId: number
+  queueUrl: string
+  buildUrl?: string
+  jobName: string
+  service: string
+  imageTag: string
 }
 
 export type ApiErrorBody = {

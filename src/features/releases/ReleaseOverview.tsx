@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../shared/api'
 import type {
   ConnectionStatus,
+  DashboardProgress,
   DeploymentFreshness,
   EligibilityReason,
   JiraVersion,
@@ -10,6 +11,7 @@ import type {
   ServiceRelease,
 } from '../../shared/types'
 import { StagingReleaseDialog } from './StagingReleaseDialog'
+import { ProductionReleaseDialog } from './ProductionReleaseDialog'
 import { ServiceOperations } from './ServiceOperations'
 import { ThemeToggle } from '../theme/ThemeToggle'
 
@@ -19,8 +21,11 @@ type Props = {
   selectedVersionId: string
   dashboard?: ReleaseDashboard
   loading: boolean
+  dashboardProgress?: DashboardProgress
   error?: string
   onSelectVersion: (versionId: string) => void
+  selectedRepository?: string
+  onSelectRepository?: (repository: string) => void
   onRefresh: () => void | Promise<void>
   onDisconnect: () => void
 }
@@ -55,6 +60,66 @@ function relativeTime(value: string) {
   if (seconds < 60) return `${seconds}s ago`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
   return `${Math.floor(seconds / 3600)}h ago`
+}
+
+function ReleasePicker({
+  releases,
+  selectedVersionId,
+  onSelect,
+}: {
+  releases: JiraVersion[]
+  selectedVersionId: string
+  onSelect: (versionId: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const selected = releases.find((release) => release.id === selectedVersionId)
+
+  useEffect(() => {
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!root.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick)
+  }, [])
+
+  return (
+    <div className="release-picker" ref={root}>
+      <button
+        className="release-picker-trigger"
+        type="button"
+        aria-label="Active Jira release"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>{selected?.name ?? 'Select a release'}</span>
+        <span className="release-picker-chevron" aria-hidden="true">
+          {open ? '⌃' : '⌄'}
+        </span>
+      </button>
+      {open && (
+        <div className="release-picker-menu" role="listbox">
+          {releases.map((release) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={release.id === selectedVersionId}
+              className={release.id === selectedVersionId ? 'selected' : ''}
+              key={release.id}
+              onClick={() => {
+                setOpen(false)
+                onSelect(release.id)
+              }}
+            >
+              <span>{release.name}</span>
+              <small>{formatDate(release.releaseDate)}</small>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 function ItemStatus({ item }: { item: ReleaseItem }) {
@@ -121,14 +186,21 @@ function ServiceCard({
 }
 
 function ServiceDetail({
-  service,
+  service: initialService,
+  selectedVersionId,
   onCreateRelease,
+  onCreateProductionRelease,
   onDataChanged,
+  productionEnabled,
 }: {
   service: ServiceRelease
+  selectedVersionId: string
   onCreateRelease: () => void
+  onCreateProductionRelease: () => void
   onDataChanged: () => void | Promise<void>
+  productionEnabled: boolean
 }) {
+  const [service, setService] = useState(initialService)
   const name = service.repository.split('/').at(-1)
   const [merging, setMerging] = useState<number>()
   const [refreshing, setRefreshing] = useState(false)
@@ -161,13 +233,20 @@ function ServiceDetail({
     setRefreshing(true)
     setMergeError('')
     try {
-      await api.refreshRepository(service.repository)
+      const result = await api.refreshService(
+        selectedVersionId,
+        service.repository,
+        service.items.map((item) => item.issue.key),
+      )
+      setService(result.service)
       window.dispatchEvent(
         new CustomEvent('service-refresh-requested', {
-          detail: { repository: service.repository },
+          detail: {
+            repository: service.repository,
+            state: result.repositoryState,
+          },
         }),
       )
-      await onDataChanged()
     } catch (reason) {
       setMergeError(
         reason instanceof Error
@@ -203,6 +282,15 @@ function ServiceDetail({
           >
             <span aria-hidden="true">＋</span> Create staging release
           </button>
+          {productionEnabled && (
+            <button
+              className="create-release-button"
+              type="button"
+              onClick={onCreateProductionRelease}
+            >
+              <span aria-hidden="true">＋</span> Create production release
+            </button>
+          )}
           <div className="summary-badge">
             {service.eligibleCount + service.mergedCount}/{service.items.length}
             <small>clear</small>
@@ -323,6 +411,7 @@ function ServiceDetail({
       <ServiceOperations
         key={service.repository}
         repository={service.repository}
+        productionEnabled={productionEnabled}
       />
     </section>
   )
@@ -334,13 +423,17 @@ export function ReleaseOverview({
   selectedVersionId,
   dashboard,
   loading,
+  dashboardProgress,
   error,
   onSelectVersion,
+  selectedRepository = '',
+  onSelectRepository = () => {},
   onRefresh,
   onDisconnect,
 }: Props) {
-  const [selectedRepository, setSelectedRepository] = useState('')
   const [releaseRepository, setReleaseRepository] = useState('')
+  const [productionReleaseRepository, setProductionReleaseRepository] =
+    useState('')
   const [serviceFilter, setServiceFilter] = useState<
     'all' | 'pending' | 'issues' | 'outdated'
   >('all')
@@ -556,22 +649,16 @@ export function ReleaseOverview({
         <section className="release-toolbar">
           <div>
             <p className="eyebrow">Active release</p>
-            <select
-              aria-label="Active Jira release"
-              value={selectedVersionId}
-              onChange={(event) => {
-                setSelectedRepository('')
+            <ReleasePicker
+              releases={releases}
+              selectedVersionId={selectedVersionId}
+              onSelect={(versionId) => {
+                onSelectRepository('')
                 setServiceFilter('all')
                 setServiceSearch('')
-                onSelectVersion(event.target.value)
+                onSelectVersion(versionId)
               }}
-            >
-              {releases.map((release) => (
-                <option value={release.id} key={release.id}>
-                  {release.name}
-                </option>
-              ))}
-            </select>
+            />
           </div>
           <div className="release-meta">
             <span>
@@ -602,17 +689,41 @@ export function ReleaseOverview({
         )}
 
         {loading && !dashboard && (
-          <div className="loading-state">
+          <div className="loading-state" role="status" aria-live="polite">
             <span className="spinner" />
             <h2>Mapping release tickets to pull requests…</h2>
-            <p>This can take a moment for larger releases.</p>
+            <p className="loading-progress-message">
+              {dashboardProgress?.message ??
+                'This can take a moment for larger releases.'}
+            </p>
+            {dashboardProgress?.total &&
+              dashboardProgress.current !== undefined && (
+                <div
+                  className="loading-progress-track"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={dashboardProgress.total}
+                  aria-valuenow={dashboardProgress.current}
+                >
+                  <span
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        (dashboardProgress.current /
+                          dashboardProgress.total) *
+                          100,
+                      )}%`,
+                    }}
+                  />
+                </div>
+              )}
           </div>
         )}
 
         {loading && dashboard && (
           <div className="sync-state" role="status">
             <span className="spinner" />
-            Refreshing release data…
+            {dashboardProgress?.message ?? 'Refreshing release data…'}
           </div>
         )}
 
@@ -686,7 +797,7 @@ export function ReleaseOverview({
                     value={serviceSearch}
                     onChange={(event) => {
                       setServiceSearch(event.target.value)
-                      setSelectedRepository('')
+                      onSelectRepository('')
                     }}
                     placeholder="Search services"
                     aria-label="Search services"
@@ -698,7 +809,7 @@ export function ReleaseOverview({
                     type="button"
                     onClick={() => {
                       setServiceFilter('all')
-                      setSelectedRepository('')
+                      onSelectRepository('')
                     }}
                   >
                     All <span>{dashboard.services.length}</span>
@@ -708,7 +819,7 @@ export function ReleaseOverview({
                     type="button"
                     onClick={() => {
                       setServiceFilter('pending')
-                      setSelectedRepository('')
+                      onSelectRepository('')
                     }}
                   >
                     Pending merge <span>{pendingServiceCount}</span>
@@ -718,7 +829,7 @@ export function ReleaseOverview({
                     type="button"
                     onClick={() => {
                       setServiceFilter('issues')
-                      setSelectedRepository('')
+                      onSelectRepository('')
                     }}
                   >
                     Issues{' '}
@@ -729,7 +840,7 @@ export function ReleaseOverview({
                     type="button"
                     onClick={() => {
                       setServiceFilter('outdated')
-                      setSelectedRepository('')
+                      onSelectRepository('')
                     }}
                     title="Latest successful QA build is not currently deployed in QA"
                   >
@@ -748,7 +859,7 @@ export function ReleaseOverview({
                           selectedService?.repository === service.repository
                         }
                         onClick={() =>
-                          setSelectedRepository(service.repository)
+                          onSelectRepository(service.repository)
                         }
                         key={service.repository}
                       />
@@ -762,11 +873,19 @@ export function ReleaseOverview({
               </section>
               {selectedServiceWithRisk ? (
                 <ServiceDetail
+                  key={`${selectedServiceWithRisk.repository}-${dashboard.fetchedAt}`}
                   service={selectedServiceWithRisk}
+                  selectedVersionId={selectedVersionId}
                   onCreateRelease={() =>
                     setReleaseRepository(selectedServiceWithRisk.repository)
                   }
+                  onCreateProductionRelease={() =>
+                    setProductionReleaseRepository(
+                      selectedServiceWithRisk.repository,
+                    )
+                  }
                   onDataChanged={onRefresh}
+                  productionEnabled={Boolean(connection.productionEnabled)}
                 />
               ) : (
                 <section className="detail-panel empty-state">
@@ -819,6 +938,12 @@ export function ReleaseOverview({
         <StagingReleaseDialog
           repository={releaseRepository}
           onClose={() => setReleaseRepository('')}
+        />
+      )}
+      {productionReleaseRepository && (
+        <ProductionReleaseDialog
+          repository={productionReleaseRepository}
+          onClose={() => setProductionReleaseRepository('')}
         />
       )}
     </div>

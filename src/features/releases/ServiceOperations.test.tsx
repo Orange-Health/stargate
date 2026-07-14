@@ -37,6 +37,16 @@ const repositoryState: RepositoryReleaseState = {
       runs: [],
     },
   ],
+  productionReleases: [
+    {
+      id: 4,
+      tag: 'v-26.0713.1',
+      url: 'https://github.test/release/4',
+      createdAt: '2026-07-13T13:00:00Z',
+      buildStatus: 'succeeded',
+      runs: [],
+    },
+  ],
   deployedTags: [
     {
       service: 'accounts',
@@ -48,12 +58,14 @@ const repositoryState: RepositoryReleaseState = {
     },
   ],
   deploymentLookupFailed: false,
+  productionReady: true,
   promotionSteps: [
     {
       route: 'dev-to-release',
       fromBranch: 'dev',
       toBranch: 'release',
       commitsAhead: 4,
+      commitsBehind: 0,
       state: 'needs_pr',
       previousTemplate: {
         title: 'Promote dev to release',
@@ -66,6 +78,7 @@ const repositoryState: RepositoryReleaseState = {
       fromBranch: 'release',
       toBranch: 'master',
       commitsAhead: 2,
+      commitsBehind: 0,
       state: 'pr_open',
       pullRequest: {
         number: 42,
@@ -160,6 +173,42 @@ describe('ServiceOperations', () => {
 
     expect(
       await screen.findByText('v-qa-v26.0713.2 succeeded'),
+    ).toBeVisible()
+  })
+
+  it('temporarily allows production deployment while branches differ', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue({
+      ...repositoryState,
+      productionReady: false,
+    })
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        productionEnabled
+      />,
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Deploy production' }),
+    ).toBeEnabled()
+  })
+
+  it('opens production deployment when the branches are identical', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        productionEnabled
+      />,
+    )
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Deploy production' }),
+    )
+
+    expect(
+      screen.getByRole('dialog', { name: 'Deploy to production' }),
     ).toBeVisible()
   })
 })

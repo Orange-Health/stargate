@@ -1,5 +1,6 @@
 import type {
   ConnectionConfig,
+  DashboardProgress,
   EligibilityReason,
   JiraIssue,
   PullRequest,
@@ -93,21 +94,41 @@ export async function aggregateRelease(
   config: ConnectionConfig,
   versionId: string,
   forceRefresh = false,
+  reportProgress?: (progress: DashboardProgress) => void,
 ): Promise<ReleaseDashboard> {
   const cacheKey = `${config.jiraSite}:${config.jiraProject ?? 'OH'}:${config.githubOrg}:${versionId}`
   const cached = cache.get(cacheKey)
   if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+    reportProgress?.({
+      phase: 'mapping',
+      message: 'Using recently cached release data…',
+    })
     return { ...cached.dashboard, cached: true }
   }
 
+  reportProgress?.({
+    phase: 'jira',
+    message: `Loading Jira release ${versionId} and its tickets…`,
+  })
   const [version, issues] = await Promise.all([
     getVersion(config, versionId),
     listVersionIssues(config, versionId),
   ])
+  reportProgress?.({
+    phase: 'jira',
+    message: `Found ${issues.length} Jira tickets in ${version.name}.`,
+    current: issues.length,
+    total: issues.length,
+  })
   const discovery = await discoverPullRequests(
     config,
     issues.map((issue) => issue.key),
+    reportProgress,
   )
+  reportProgress?.({
+    phase: 'mapping',
+    message: 'Grouping matched pull requests by service…',
+  })
   const serviceItems = new Map<string, ReleaseItem[]>()
   const unmatched: ReleaseItem[] = []
 
@@ -127,6 +148,12 @@ export async function aggregateRelease(
   const services = [...serviceItems.entries()]
     .map(([repository, items]) => summarizeService(repository, items))
     .sort((a, b) => a.repository.localeCompare(b.repository))
+  reportProgress?.({
+    phase: 'mapping',
+    message: `Mapped ${issues.length - unmatched.length} tickets across ${services.length} services.`,
+    current: services.length,
+    total: services.length,
+  })
 
   const dashboard: ReleaseDashboard = {
     version: { ...version, issueCount: issues.length },
@@ -148,4 +175,32 @@ export async function aggregateRelease(
     dashboard,
   })
   return dashboard
+}
+
+export async function refreshServiceRelease(
+  config: ConnectionConfig,
+  versionId: string,
+  repository: string,
+  issueKeys: string[],
+): Promise<ServiceRelease> {
+  const requestedKeys = new Set(issueKeys.map((key) => key.toUpperCase()))
+  const issues = (await listVersionIssues(config, versionId)).filter((issue) =>
+    requestedKeys.has(issue.key.toUpperCase()),
+  )
+  const discovery = await discoverPullRequests(
+    config,
+    issues.map((issue) => issue.key),
+  )
+  const items: ReleaseItem[] = []
+  for (const issue of issues) {
+    const pulls = (discovery.byIssue.get(issue.key) ?? []).filter(
+      (pull) => pull.repository.toLowerCase() === repository.toLowerCase(),
+    )
+    if (pulls.length === 0) {
+      items.push(evaluateEligibility(issue))
+      continue
+    }
+    for (const pull of pulls) items.push(evaluateEligibility(issue, pull))
+  }
+  return summarizeService(repository, items)
 }

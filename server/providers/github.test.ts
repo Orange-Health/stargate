@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ConnectionConfig } from '../../src/shared/types.js'
 import {
   createStagingRelease,
+  createProductionRelease,
+  nextProductionTag,
   nextStagingTag,
   stagingTagPrefix,
+  productionTagPrefix,
   titleContainsIssueKey,
 } from './github.js'
 
@@ -102,5 +105,80 @@ describe('staging release tags', () => {
       generate_release_notes: true,
     })
     expect(releaseBody).not.toHaveProperty('body')
+  })
+})
+
+describe('production release tags', () => {
+  it('uses special prefixes only for configured frontend repositories', () => {
+    expect(
+      productionTagPrefix('Orange-Health/sapphire-web', '2026-07-14'),
+    ).toBe(
+      'v-prod-26.0714.',
+    )
+    expect(productionTagPrefix('Orange-Health/sapphire', '2026-07-14')).toBe(
+      'v-26.0714.',
+    )
+    expect(productionTagPrefix('Orange-Health/accounts', '2026-07-14')).toBe(
+      'v-26.0714.',
+    )
+  })
+
+  it('increments existing production tag versions', () => {
+    expect(
+      nextProductionTag('Orange-Health/bifrost', '2026-07-14', [
+        'v-prod-26.0714.1',
+        'v-prod-26.0714.3',
+        'v-26.0714.9',
+      ]),
+    ).toBe('v-prod-26.0714.4')
+  })
+
+  it('creates a production release from release using generated notes', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ name: 'release' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ ref: 'refs/tags/v-26.0714.1' }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 100,
+            html_url: 'https://github.test/releases/100',
+            created_at: '2026-07-14T12:00:00Z',
+          }),
+          { status: 201 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await createProductionRelease(
+      config,
+      'orange/service-api',
+      '2026-07-14',
+    )
+
+    expect(result.tag).toBe('v-26.0714.2')
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({
+      tag_name: 'v-26.0714.2',
+      target_commitish: 'release',
+      prerelease: false,
+      generate_release_notes: true,
+    })
   })
 })
