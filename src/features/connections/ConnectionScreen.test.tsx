@@ -17,10 +17,13 @@ describe('ConnectionScreen', () => {
 
     expect(screen.queryByLabelText('Organization')).not.toBeInTheDocument()
     await user.type(screen.getByLabelText('Email'), 'rm@orange.test')
-    await user.type(screen.getAllByLabelText('API token')[0], 'jira-secret')
-    await user.type(screen.getByLabelText('Username'), 'release-manager')
+    await user.type(screen.getByLabelText('Jira API token'), 'jira-secret')
     await user.type(
-      screen.getAllByLabelText('API token')[1],
+      screen.getByLabelText('Staging username'),
+      'release-manager',
+    )
+    await user.type(
+      screen.getByLabelText('Staging API token'),
       'jenkins-secret',
     )
     await user.type(
@@ -40,6 +43,7 @@ describe('ConnectionScreen', () => {
       jenkinsUrl: 'https://jenkins.stage.orangehealth.dev',
       jenkinsUsername: 'release-manager',
       jenkinsToken: 'jenkins-secret',
+      productionJenkins: undefined,
       jiraProject: 'OH',
     })
   })
@@ -50,10 +54,13 @@ describe('ConnectionScreen', () => {
     render(<ConnectionScreen onConnect={onConnect} />)
 
     await user.type(screen.getByLabelText('Email'), 'rm@orange.test')
-    await user.type(screen.getAllByLabelText('API token')[0], 'jira-secret')
-    await user.type(screen.getByLabelText('Username'), 'release-manager')
+    await user.type(screen.getByLabelText('Jira API token'), 'jira-secret')
     await user.type(
-      screen.getAllByLabelText('API token')[1],
+      screen.getByLabelText('Staging username'),
+      'release-manager',
+    )
+    await user.type(
+      screen.getByLabelText('Staging API token'),
       'jenkins-secret',
     )
     await user.type(
@@ -66,6 +73,42 @@ describe('ConnectionScreen', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'GitHub denied access.',
+    )
+  })
+
+  it('includes optional production Jenkins credentials when supplied', async () => {
+    const user = userEvent.setup()
+    const onConnect = vi.fn().mockResolvedValue({ connected: true })
+    render(<ConnectionScreen onConnect={onConnect} />)
+
+    await user.type(screen.getByLabelText('Email'), 'stage@test.com')
+    await user.type(screen.getByLabelText('Jira API token'), 'jira-token')
+    await user.type(screen.getByLabelText('Staging username'), 'stage-user')
+    await user.type(screen.getByLabelText('Staging API token'), 'stage-token')
+    await user.type(
+      screen.getByLabelText('Production username'),
+      'prod-user',
+    )
+    await user.type(
+      screen.getByLabelText('Production API token'),
+      'prod-token',
+    )
+    await user.type(
+      screen.getByLabelText('Personal access token'),
+      'github-token',
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Connect and continue' }),
+    )
+
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        productionJenkins: {
+          jenkinsUrl: 'https://pitstop.orangehealth.dev',
+          jenkinsUsername: 'prod-user',
+          jenkinsToken: 'prod-token',
+        },
+      }),
     )
   })
 })

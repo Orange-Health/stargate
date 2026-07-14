@@ -88,6 +88,14 @@ function App() {
     }
   }
 
+  function selectVersion(versionId: string) {
+    requestSequence.current += 1
+    setDashboard(undefined)
+    setError('')
+    setLoading(true)
+    setSelectedVersionId(versionId)
+  }
+
   async function disconnect() {
     requestSequence.current += 1
     await api.disconnect().catch(() => undefined)
@@ -119,7 +127,7 @@ function App() {
       dashboard={dashboard}
       loading={loading}
       error={error}
-      onSelectVersion={setSelectedVersionId}
+      onSelectVersion={selectVersion}
       onRefresh={() => void loadDashboard(selectedVersionId, true)}
       onDisconnect={() => void disconnect()}
     />

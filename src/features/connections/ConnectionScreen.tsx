@@ -17,6 +17,11 @@ const initialConfig: ConnectionConfig = {
   jenkinsUrl: 'https://jenkins.stage.orangehealth.dev',
   jenkinsUsername: '',
   jenkinsToken: '',
+  productionJenkins: {
+    jenkinsUrl: 'https://pitstop.orangehealth.dev',
+    jenkinsUsername: '',
+    jenkinsToken: '',
+  },
   jiraProject: 'OH',
 }
 
@@ -29,12 +34,38 @@ export function ConnectionScreen({ onConnect }: Props) {
     setConfig((current) => ({ ...current, [field]: value }))
   }
 
+  function updateProductionJenkins(
+    field: 'jenkinsUrl' | 'jenkinsUsername' | 'jenkinsToken',
+    value: string,
+  ) {
+    setConfig((current) => ({
+      ...current,
+      productionJenkins: {
+        jenkinsUrl:
+          current.productionJenkins?.jenkinsUrl ??
+          'https://pitstop.orangehealth.dev',
+        jenkinsUsername: current.productionJenkins?.jenkinsUsername ?? '',
+        jenkinsToken: current.productionJenkins?.jenkinsToken ?? '',
+        [field]: value,
+      },
+    }))
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault()
     setError('')
     setSubmitting(true)
     try {
-      await onConnect(config)
+      const hasProductionCredentials = Boolean(
+        config.productionJenkins?.jenkinsUsername ||
+          config.productionJenkins?.jenkinsToken,
+      )
+      await onConnect({
+        ...config,
+        productionJenkins: hasProductionCredentials
+          ? config.productionJenkins
+          : undefined,
+      })
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : 'Could not connect services.',
@@ -51,8 +82,8 @@ export function ConnectionScreen({ onConnect }: Props) {
         <p className="eyebrow">Release operations</p>
         <h1>One clear view of every release.</h1>
         <p className="intro-copy">
-          Bring Jira release scope and live GitHub pull request readiness into a
-          single, focused workspace.
+          Bring Jira release scope, GitHub readiness, and Jenkins deployment
+          into a single, focused workspace.
         </p>
         <div className="trust-note">
           <span className="trust-icon" aria-hidden="true">
@@ -68,7 +99,7 @@ export function ConnectionScreen({ onConnect }: Props) {
           <p className="step-label">SETUP · 01</p>
           <h2 id="connect-heading">Connect your workspace</h2>
           <p className="muted">
-            We’ll verify all three services before loading release data.
+            We’ll verify each configured service before loading release data.
           </p>
         </div>
 
@@ -100,54 +131,11 @@ export function ConnectionScreen({ onConnect }: Props) {
                 />
               </label>
               <label>
-                API token
+                Jira API token
                 <input
                   type="password"
                   value={config.jiraToken}
                   onChange={(event) => update('jiraToken', event.target.value)}
-                  placeholder="••••••••••••"
-                  autoComplete="off"
-                  required
-                />
-              </label>
-            </div>
-          </fieldset>
-
-          <fieldset>
-            <legend>
-              <span className="provider-icon jenkins">J</span>
-              Jenkins
-            </legend>
-            <label>
-              Jenkins URL
-              <input
-                type="url"
-                value={config.jenkinsUrl}
-                onChange={(event) => update('jenkinsUrl', event.target.value)}
-                required
-              />
-            </label>
-            <div className="field-row">
-              <label>
-                Username
-                <input
-                  value={config.jenkinsUsername}
-                  onChange={(event) =>
-                    update('jenkinsUsername', event.target.value)
-                  }
-                  placeholder="Jenkins username"
-                  autoComplete="username"
-                  required
-                />
-              </label>
-              <label>
-                API token
-                <input
-                  type="password"
-                  value={config.jenkinsToken}
-                  onChange={(event) =>
-                    update('jenkinsToken', event.target.value)
-                  }
                   placeholder="••••••••••••"
                   autoComplete="off"
                   required
@@ -172,6 +160,101 @@ export function ConnectionScreen({ onConnect }: Props) {
                 required
               />
             </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>
+              <span className="provider-icon jenkins">J</span>
+              Jenkins staging
+            </legend>
+            <label>
+              Jenkins URL
+              <input
+                type="url"
+                value={config.jenkinsUrl}
+                onChange={(event) => update('jenkinsUrl', event.target.value)}
+                required
+              />
+            </label>
+            <div className="field-row">
+              <label>
+                Staging username
+                <input
+                  value={config.jenkinsUsername}
+                  onChange={(event) =>
+                    update('jenkinsUsername', event.target.value)
+                  }
+                  placeholder="Jenkins username"
+                  autoComplete="username"
+                  required
+                />
+              </label>
+              <label>
+                Staging API token
+                <input
+                  type="password"
+                  value={config.jenkinsToken}
+                  onChange={(event) =>
+                    update('jenkinsToken', event.target.value)
+                  }
+                  placeholder="••••••••••••"
+                  autoComplete="off"
+                  required
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>
+              <span className="provider-icon jenkins production">J</span>
+              Jenkins production
+              <small className="optional-label">Optional</small>
+            </legend>
+            <label>
+              Jenkins URL
+              <input
+                type="url"
+                value={config.productionJenkins?.jenkinsUrl ?? ''}
+                onChange={(event) =>
+                  updateProductionJenkins('jenkinsUrl', event.target.value)
+                }
+              />
+            </label>
+            <div className="field-row">
+              <label>
+                Production username
+                <input
+                  value={config.productionJenkins?.jenkinsUsername ?? ''}
+                  onChange={(event) =>
+                    updateProductionJenkins(
+                      'jenkinsUsername',
+                      event.target.value,
+                    )
+                  }
+                  placeholder="Jenkins username"
+                  autoComplete="off"
+                  required={Boolean(config.productionJenkins?.jenkinsToken)}
+                />
+              </label>
+              <label>
+                Production API token
+                <input
+                  type="password"
+                  value={config.productionJenkins?.jenkinsToken ?? ''}
+                  onChange={(event) =>
+                    updateProductionJenkins('jenkinsToken', event.target.value)
+                  }
+                  placeholder="••••••••••••"
+                  autoComplete="off"
+                  required={Boolean(config.productionJenkins?.jenkinsUsername)}
+                />
+              </label>
+            </div>
+            <p className="field-hint">
+              Enables production release options through
+              Prod-new-cluster-deployment.
+            </p>
           </fieldset>
 
           {error && (

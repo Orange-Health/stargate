@@ -7,6 +7,11 @@ export type ConnectionConfig = {
   jenkinsUrl: string
   jenkinsUsername: string
   jenkinsToken: string
+  productionJenkins?: {
+    jenkinsUrl: string
+    jenkinsUsername: string
+    jenkinsToken: string
+  }
   jiraProject?: string
 }
 
@@ -17,6 +22,7 @@ export type ConnectionStatus = {
   jenkinsUser?: string
   githubOrg?: string
   projectKey?: string
+  productionEnabled?: boolean
 }
 
 export type JiraVersion = {

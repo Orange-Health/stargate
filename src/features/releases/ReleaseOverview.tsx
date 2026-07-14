@@ -201,7 +201,10 @@ function ServiceDetail({
           </article>
         ))}
       </div>
-      <ServiceOperations repository={service.repository} />
+      <ServiceOperations
+        key={service.repository}
+        repository={service.repository}
+      />
     </section>
   )
 }
@@ -310,6 +313,13 @@ export function ReleaseOverview({
             <span className="spinner" />
             <h2>Mapping release tickets to pull requests…</h2>
             <p>This can take a moment for larger releases.</p>
+          </div>
+        )}
+
+        {loading && dashboard && (
+          <div className="sync-state" role="status">
+            <span className="spinner" />
+            Refreshing release data…
           </div>
         )}
 

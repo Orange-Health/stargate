@@ -8,9 +8,9 @@
 
 .brand-mark {
   align-items: center;
-  background: var(--ink);
+  background: var(--surface-strong);
   border-radius: 12px;
-  color: white;
+  color: var(--on-strong);
   display: inline-flex;
   font-family: var(--mono);
   font-size: 16px;
@@ -35,7 +35,7 @@
 
 .connection-intro {
   background:
-    radial-gradient(circle at 15% 8%, rgb(217 237 229 / 65%), transparent 31%),
+    radial-gradient(circle at 15% 8%, rgb(37 99 235 / 25%), transparent 34%),
     var(--paper-warm);
   border-right: 1px solid var(--line);
   display: flex;
@@ -161,6 +161,25 @@ legend {
   background: #c9493c;
 }
 
+.provider-icon.jenkins.production {
+  background: #7c3aed;
+}
+
+.optional-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: auto;
+  text-transform: uppercase;
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin: -4px 0 0;
+}
+
 .field-row {
   display: grid;
   gap: 16px;
@@ -193,7 +212,7 @@ select {
 input:focus,
 select:focus {
   border-color: var(--green);
-  box-shadow: 0 0 0 3px rgb(44 105 79 / 12%);
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 18%);
 }
 
 button {
@@ -214,9 +233,9 @@ button {
 }
 
 .primary-button {
-  background: var(--ink);
+  background: var(--green);
   border: 0;
-  color: white;
+  color: #07111f;
   min-height: 48px;
   padding: 0 20px;
   width: 100%;
@@ -259,7 +278,7 @@ button:disabled {
 
 .topbar {
   align-items: center;
-  background: rgb(249 249 246 / 88%);
+  background: rgb(10 15 24 / 88%);
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--line);
   display: flex;
@@ -312,7 +331,7 @@ button:disabled {
 .connection-dot {
   background: var(--green-light);
   border-radius: 50%;
-  box-shadow: 0 0 0 3px rgb(55 139 99 / 12%);
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 18%);
   height: 7px;
   width: 7px;
 }
@@ -397,9 +416,9 @@ button:disabled {
 
 .overview-strip {
   align-items: stretch;
-  background: var(--ink);
+  background: var(--surface-strong);
   border-radius: 14px;
-  color: white;
+  color: var(--on-strong);
   display: flex;
   margin-bottom: 26px;
   min-height: 104px;
@@ -440,7 +459,7 @@ button:disabled {
 }
 
 .stat {
-  border-left: 1px solid #343b36;
+  border-left: 1px solid #2b3a54;
   display: flex;
   flex: 0 0 150px;
   flex-direction: column;
@@ -462,7 +481,7 @@ button:disabled {
 }
 
 .cache-pill {
-  background: #31443a;
+  background: #1d355b;
   border-radius: 999px;
   color: var(--green-pale);
   font-size: 10px;
@@ -648,10 +667,10 @@ button:disabled {
 
 .create-release-button {
   align-items: center;
-  background: var(--ink);
+  background: var(--green);
   border: 0;
   border-radius: 8px;
-  color: white;
+  color: #07111f;
   cursor: pointer;
   display: inline-flex;
   font-size: 10px;
@@ -667,7 +686,7 @@ button:disabled {
 
 .dialog-backdrop {
   align-items: center;
-  background: rgb(16 25 19 / 58%);
+  background: rgb(1 5 3 / 76%);
   display: flex;
   inset: 0;
   justify-content: center;
@@ -680,7 +699,7 @@ button:disabled {
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: 0 24px 80px rgb(13 24 17 / 28%);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 52%);
   max-width: 520px;
   padding: 30px;
   position: relative;
@@ -945,7 +964,7 @@ button:disabled {
 }
 
 .service-operations {
-  background: #f5f5f1;
+  background: #080d15;
   border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
@@ -1092,8 +1111,8 @@ button:disabled {
 }
 
 .build-status.running {
-  background: #e8f0fa;
-  color: #3266a4;
+  background: #172a3d;
+  color: #80b8f2;
 }
 
 .build-status.succeeded {
@@ -1358,6 +1377,24 @@ button:disabled {
   text-align: center;
 }
 
+.sync-state {
+  align-items: center;
+  background: var(--green-faint);
+  border: 1px solid var(--green);
+  border-radius: 9px;
+  color: var(--green-pale);
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 10px 13px;
+}
+
+.sync-state .spinner {
+  height: 15px;
+  width: 15px;
+}
+
 .loading-state h2,
 .empty-state h2 {
   font-family: var(--serif);
@@ -1388,6 +1425,106 @@ button:disabled {
   }
 }
 
+/* Readable dashboard type scale */
+.eyebrow,
+.step-label {
+  font-size: 12px;
+}
+
+label {
+  font-size: 14px;
+}
+
+.provider-icon,
+.brand small,
+.release-meta > span,
+.stat span,
+.cache-pill,
+.section-heading > span {
+  font-size: 12px;
+}
+
+.topbar-actions,
+.text-button,
+.release-meta strong,
+.readiness-score p {
+  font-size: 13px;
+}
+
+.service-card-header strong {
+  font-size: 15px;
+}
+
+.service-card-header small,
+.service-metrics,
+.service-metrics strong {
+  font-size: 12px;
+}
+
+.summary-badge small,
+.create-release-button,
+.tag-preview span,
+.tag-preview small,
+.release-created code {
+  font-size: 11px;
+}
+
+.pr-title-row > a,
+.unmatched-grid strong {
+  font-size: 12px;
+}
+
+.pr-main h3 {
+  font-size: 15px;
+}
+
+.branch-line,
+.branch-line code,
+.unmatched-grid small {
+  font-size: 12px;
+}
+
+.status-pill,
+.reason {
+  font-size: 11px;
+}
+
+.unmatched-grid span {
+  font-size: 14px;
+}
+
+.auto-refresh,
+.default-branch,
+.release-build-main span,
+.workflow-links a,
+.workflow-links small,
+.deployment-summary span,
+.deployment-summary small,
+.back-merge-warning {
+  font-size: 11px;
+}
+
+.operation-loading,
+.operation-empty,
+.release-build-main a,
+.deployment-summary code,
+.jenkins-queue-wait {
+  font-size: 13px;
+}
+
+.build-status,
+.deploy-button,
+.branch-node,
+.branch-arrow small,
+.journey-state small,
+.journey-action {
+  font-size: 11px;
+}
+
+.journey-state strong {
+  font-size: 13px;
+}
+
 @media (max-width: 980px) {
   .connection-layout {
     grid-template-columns: 1fr;
@@ -1412,7 +1549,7 @@ button:disabled {
   }
 
   .stat {
-    border-top: 1px solid #343b36;
+    border-top: 1px solid #2b3a54;
     flex: 1;
   }
 

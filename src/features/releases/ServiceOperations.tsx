@@ -76,6 +76,9 @@ export function ServiceOperations({ repository }: Props) {
   )
 
   useEffect(() => {
+    setState(undefined)
+    setLoading(true)
+    setError('')
     void load()
     const interval = window.setInterval(() => void load(true), 15_000)
     const refresh = (event: Event) => {

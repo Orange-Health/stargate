@@ -79,4 +79,12 @@ describe('local API', () => {
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('INVALID_DEPLOYMENT')
   })
+
+  it('validates Jenkins queue item identifiers', async () => {
+    const response = await request(createApp()).get(
+      '/api/jenkins/queue/not-a-number',
+    )
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_QUEUE_ITEM')
+  })
 })

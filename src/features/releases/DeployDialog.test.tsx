@@ -23,6 +23,8 @@ describe('DeployDialog', () => {
     const trigger = vi.spyOn(api, 'triggerDeployment').mockResolvedValue({
       queueId: 81,
       queueUrl: 'https://jenkins.test/queue/item/81/',
+      buildUrl:
+        'https://jenkins.test/job/DEV/job/DEV%20Deployer/2152/',
       jobName: 'DEV/DEV Deployer',
       service: 'clr-web',
       tag: release.tag,
@@ -52,9 +54,11 @@ describe('DeployDialog', () => {
       environment: 's2',
     })
     expect(await screen.findByText('Jenkins build queued')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /Open Jenkins queue/ })).toHaveAttribute(
+    expect(
+      screen.getByRole('link', { name: /Open Jenkins build/ }),
+    ).toHaveAttribute(
       'href',
-      'https://jenkins.test/queue/item/81/',
+      'https://jenkins.test/job/DEV/job/DEV%20Deployer/2152/',
     )
   })
 })

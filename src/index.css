@@ -4,25 +4,28 @@
   --sans: 'DM Sans', system-ui, sans-serif;
   --serif: 'Newsreader', Georgia, serif;
   --mono: 'DM Mono', ui-monospace, monospace;
-  --paper: #f9f9f6;
-  --paper-warm: #f2f1eb;
-  --ink: #17201a;
-  --ink-soft: #344139;
-  --muted: #788078;
-  --line: #dedfd9;
-  --line-strong: #c9cbc4;
-  --green: #28694e;
-  --green-light: #54a178;
-  --green-pale: #b9e7cd;
-  --green-faint: #e7f2eb;
-  --red: #a33d36;
-  --red-faint: #f8eae7;
-  --red-line: #ebcac5;
-  --amber: #8a621f;
-  --amber-faint: #f8f0dd;
-  --amber-line: #ebd8ae;
-  --purple: #665095;
-  --purple-faint: #eeeaf7;
+  --paper: #0a0f18;
+  --paper-warm: #111827;
+  --surface-strong: #17233a;
+  --on-strong: #f1f6ff;
+  --ink: #eaf1fb;
+  --ink-soft: #c4d0e1;
+  --muted: #8d9bb0;
+  --line: #253147;
+  --line-strong: #384861;
+  --green: #60a5fa;
+  --green-light: #3b82f6;
+  --green-pale: #bfdbfe;
+  --green-faint: #172b4d;
+  --red: #ff9087;
+  --red-faint: #341d1d;
+  --red-line: #65332f;
+  --amber: #e9bc65;
+  --amber-faint: #332916;
+  --amber-line: #655026;
+  --purple: #b9a4ef;
+  --purple-faint: #29233a;
+  color-scheme: dark;
   color: var(--ink);
   background: var(--paper);
   font-family: var(--sans);
@@ -36,6 +39,8 @@
 }
 
 body {
+  background: var(--paper);
+  font-size: 16px;
   margin: 0;
   min-width: 320px;
   min-height: 100vh;

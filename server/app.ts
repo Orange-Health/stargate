@@ -51,6 +51,17 @@ const connectionSchema = z.object({
     }),
   jenkinsUsername: z.string().min(1),
   jenkinsToken: z.string().min(1),
+  productionJenkins: z
+    .object({
+      jenkinsUrl: z
+        .url()
+        .refine((value) => new URL(value).protocol === 'https:', {
+          message: 'Production Jenkins URL must use HTTPS.',
+        }),
+      jenkinsUsername: z.string().min(1),
+      jenkinsToken: z.string().min(1),
+    })
+    .optional(),
   jiraProject: z.string().regex(/^[A-Z][A-Z0-9_]+$/).default('OH'),
 })
 
@@ -100,6 +111,7 @@ export function createApp() {
           connected: true,
           githubOrg: connection.githubOrg,
           projectKey: connection.jiraProject ?? 'OH',
+          productionEnabled: Boolean(connection.productionJenkins),
         }
       : { connected: false }
     response.json(status)
@@ -121,11 +133,30 @@ export function createApp() {
       ...parsed.data,
       jiraSite: parsed.data.jiraSite.replace(/\/+$/, ''),
       githubOrg: 'Orange-Health',
+      productionJenkins: parsed.data.productionJenkins
+        ? {
+            ...parsed.data.productionJenkins,
+            jenkinsUrl: parsed.data.productionJenkins.jenkinsUrl.replace(
+              /\/+$/,
+              '',
+            ),
+          }
+        : undefined,
     }
     const [jira, github, jenkins] = await Promise.all([
       testJiraConnection(config),
       testGitHubConnection(config),
       testJenkinsConnection(config),
+      ...(config.productionJenkins
+        ? [
+            testJenkinsConnection({
+              ...config,
+              jenkinsUrl: config.productionJenkins.jenkinsUrl,
+              jenkinsUsername: config.productionJenkins.jenkinsUsername,
+              jenkinsToken: config.productionJenkins.jenkinsToken,
+            }),
+          ]
+        : []),
     ])
     clearReleaseCache()
     setConnection(config)
@@ -136,6 +167,7 @@ export function createApp() {
       jenkinsUser: jenkins.name,
       githubOrg: github.org,
       projectKey: config.jiraProject,
+      productionEnabled: Boolean(config.productionJenkins),
     } satisfies ConnectionStatus)
   })
 
