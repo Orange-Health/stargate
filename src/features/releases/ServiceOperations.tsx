@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../shared/api'
 import type {
   BuildStatus,
@@ -55,13 +55,76 @@ export function ServiceOperations({ repository }: Props) {
   const [busyRoute, setBusyRoute] = useState('')
   const [deployRelease, setDeployRelease] =
     useState<TrackedStagingRelease>()
+  const [browserNotifications, setBrowserNotifications] = useState(
+    () =>
+      typeof Notification !== 'undefined' &&
+      Notification.permission === 'granted' &&
+      window.localStorage.getItem('release-build-notifications') === 'true',
+  )
+  const [notificationToast, setNotificationToast] = useState<{
+    message: string
+    status?: BuildStatus
+  }>()
+  const previousBuilds = useRef(new Map<string, BuildStatus>())
+  const buildsInitialized = useRef(false)
+  const browserNotificationsRef = useRef(browserNotifications)
+
+  useEffect(() => {
+    browserNotificationsRef.current = browserNotifications
+  }, [browserNotifications])
+
+  const announceCompletedBuilds = useCallback(
+    (nextState: RepositoryReleaseState) => {
+      const nextBuilds = new Map(
+        nextState.stagingReleases.map((release) => [
+          release.tag,
+          release.buildStatus,
+        ]),
+      )
+      if (!buildsInitialized.current) {
+        previousBuilds.current = nextBuilds
+        buildsInitialized.current = true
+        return
+      }
+      const completed = nextState.stagingReleases.filter((release) => {
+        const previous = previousBuilds.current.get(release.tag)
+        return (
+          ['succeeded', 'failed', 'canceled'].includes(release.buildStatus) &&
+          previous !== release.buildStatus
+        )
+      })
+      previousBuilds.current = nextBuilds
+      if (completed.length === 0) return
+
+      const latest = completed[0]
+      const statusLabel = buildLabels[latest.buildStatus]
+      const message =
+        completed.length === 1
+          ? `${latest.tag} ${statusLabel.toLowerCase()}`
+          : `${completed.length} release builds completed`
+      setNotificationToast({ message, status: latest.buildStatus })
+      if (
+        browserNotificationsRef.current &&
+        typeof Notification !== 'undefined' &&
+        Notification.permission === 'granted'
+      ) {
+        new Notification(`Release build ${statusLabel}`, {
+          body: `${repository.split('/').at(-1)} · ${message}`,
+          tag: `release-build-${repository}-${latest.tag}`,
+        })
+      }
+    },
+    [repository],
+  )
 
   const load = useCallback(
     async (silent = false) => {
       if (!silent) setLoading(true)
       setError('')
       try {
-        setState(await api.repositoryState(repository))
+        const nextState = await api.repositoryState(repository)
+        announceCompletedBuilds(nextState)
+        setState(nextState)
       } catch (reason) {
         setError(
           reason instanceof Error
@@ -72,13 +135,15 @@ export function ServiceOperations({ repository }: Props) {
         if (!silent) setLoading(false)
       }
     },
-    [repository],
+    [announceCompletedBuilds, repository],
   )
 
   useEffect(() => {
     setState(undefined)
     setLoading(true)
     setError('')
+    previousBuilds.current = new Map()
+    buildsInitialized.current = false
     void load()
     const interval = window.setInterval(() => void load(true), 15_000)
     const refresh = (event: Event) => {
@@ -95,6 +160,39 @@ export function ServiceOperations({ repository }: Props) {
       window.removeEventListener('service-refresh-requested', refresh)
     }
   }, [load, repository])
+
+  useEffect(() => {
+    if (!notificationToast) return
+    const timeout = window.setTimeout(
+      () => setNotificationToast(undefined),
+      6_000,
+    )
+    return () => window.clearTimeout(timeout)
+  }, [notificationToast])
+
+  async function toggleBrowserNotifications() {
+    if (browserNotifications) {
+      window.localStorage.setItem('release-build-notifications', 'false')
+      setBrowserNotifications(false)
+      return
+    }
+    if (typeof Notification === 'undefined') {
+      setNotificationToast({
+        message: 'Browser notifications are not supported.',
+      })
+      return
+    }
+    const permission = await Notification.requestPermission()
+    if (permission === 'granted') {
+      window.localStorage.setItem('release-build-notifications', 'true')
+      setBrowserNotifications(true)
+      setNotificationToast({ message: 'Build alerts enabled.' })
+    } else {
+      setNotificationToast({
+        message: 'Browser notifications are blocked.',
+      })
+    }
+  }
 
   async function createPull(step: PromotionStep) {
     setBusyRoute(step.route)
@@ -141,6 +239,25 @@ export function ServiceOperations({ repository }: Props) {
           {error}
         </div>
       )}
+      {notificationToast && (
+        <div
+          className={`build-notification-toast ${notificationToast.status ?? 'info'}`}
+          role="status"
+        >
+          <span aria-hidden="true">●</span>
+          <div>
+            <strong>Release build update</strong>
+            <p>{notificationToast.message}</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={() => setNotificationToast(undefined)}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <section className="operation-section">
         <div className="operation-heading">
@@ -148,7 +265,17 @@ export function ServiceOperations({ repository }: Props) {
             <p className="eyebrow">GitHub Actions</p>
             <h3>Staging releases</h3>
           </div>
-          <span className="auto-refresh">Live · 15s</span>
+          <div className="operation-heading-actions">
+            <button
+              className={`notification-toggle ${browserNotifications ? 'active' : ''}`}
+              type="button"
+              aria-pressed={browserNotifications}
+              onClick={() => void toggleBrowserNotifications()}
+            >
+              {browserNotifications ? '● Alerts on' : 'Enable alerts'}
+            </button>
+            <span className="auto-refresh">Live · 15s</span>
+          </div>
         </div>
         {state?.deploymentLookupFailed && (
           <p className="deployment-lookup-note">

@@ -1222,6 +1222,87 @@ button:disabled {
   margin-bottom: 3px;
 }
 
+.operation-heading-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.notification-toggle {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 10px;
+  min-height: 29px;
+  padding: 0 10px;
+}
+
+.notification-toggle:hover,
+.notification-toggle.active {
+  background: var(--green-faint);
+  border-color: var(--green);
+  color: var(--green-pale);
+}
+
+.build-notification-toast {
+  align-items: flex-start;
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--green);
+  border-radius: 10px;
+  bottom: 22px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 28%);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 13px 14px;
+  position: fixed;
+  right: 22px;
+  z-index: 100;
+}
+
+.build-notification-toast > span {
+  color: var(--green);
+  font-size: 9px;
+  margin-top: 4px;
+}
+
+.build-notification-toast.failed {
+  border-left-color: var(--red);
+}
+
+.build-notification-toast.failed > span {
+  color: var(--red);
+}
+
+.build-notification-toast.canceled {
+  border-left-color: var(--muted);
+}
+
+.build-notification-toast strong {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.build-notification-toast p {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 3px 0 0;
+}
+
+.build-notification-toast button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+}
+
 .auto-refresh,
 .default-branch {
   color: var(--muted);

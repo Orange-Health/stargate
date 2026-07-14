@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
@@ -135,5 +135,31 @@ describe('ServiceOperations', () => {
       repository: 'Orange-Health/service-api',
       pullNumber: 42,
     })
+  })
+
+  it('shows an in-app notification when a build completes', async () => {
+    const completedState: RepositoryReleaseState = {
+      ...repositoryState,
+      stagingReleases: repositoryState.stagingReleases.map((release, index) =>
+        index === 0 ? { ...release, buildStatus: 'succeeded' } : release,
+      ),
+    }
+    vi.spyOn(api, 'repositoryState')
+      .mockResolvedValueOnce(repositoryState)
+      .mockResolvedValue(completedState)
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+    await screen.findByText('v-qa-v26.0713.2')
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('service-refresh-requested', {
+          detail: { repository: 'Orange-Health/service-api' },
+        }),
+      )
+    })
+
+    expect(
+      await screen.findByText('v-qa-v26.0713.2 succeeded'),
+    ).toBeVisible()
   })
 })
