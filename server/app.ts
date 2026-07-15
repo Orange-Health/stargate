@@ -19,9 +19,11 @@ import {
 } from './providers/github.js'
 import {
   clearRepositoryCaches,
+  createBackMergePullRequest,
   createPromotionPullRequest,
   getRepositoryReleaseState,
   getRepositoryRisks,
+  mergeBackMergePullRequest,
   mergeFeaturePullRequest,
   mergePromotionPullRequest,
 } from './providers/githubOperations.js'
@@ -55,15 +57,15 @@ const connectionSchema = z.object({
       message: 'Jira URL must use HTTPS.',
     }),
   jiraEmail: z.email(),
-  jiraToken: z.string().min(1),
-  githubToken: z.string().min(1),
+  jiraToken: z.string().trim().min(1),
+  githubToken: z.string().trim().min(1),
   jenkinsUrl: z
     .url()
     .refine((value) => new URL(value).protocol === 'https:', {
       message: 'Jenkins URL must use HTTPS.',
     }),
-  jenkinsUsername: z.string().min(1),
-  jenkinsToken: z.string().min(1),
+  jenkinsUsername: z.string().trim().min(1),
+  jenkinsToken: z.string().trim().min(1),
   productionJenkins: z
     .object({
       jenkinsUrl: z
@@ -71,8 +73,8 @@ const connectionSchema = z.object({
         .refine((value) => new URL(value).protocol === 'https:', {
           message: 'Production Jenkins URL must use HTTPS.',
         }),
-      jenkinsUsername: z.string().min(1),
-      jenkinsToken: z.string().min(1),
+      jenkinsUsername: z.string().trim().min(1),
+      jenkinsToken: z.string().trim().min(1),
     })
     .optional(),
   jiraProject: z.string().regex(/^[A-Z][A-Z0-9_]+$/).default('OH'),
@@ -96,6 +98,11 @@ const productionReleaseSchema = z.object({
 const promotionSchema = z.object({
   repository: repositorySchema,
   route: z.enum(['dev-to-release', 'release-to-default']),
+})
+
+const backMergeSchema = z.object({
+  repository: repositorySchema,
+  route: z.enum(['default-to-release', 'release-to-dev']),
 })
 
 const mergePromotionSchema = z.object({
@@ -189,15 +196,18 @@ export function createApp() {
     const [jira, github, jenkins] = await Promise.all([
       testJiraConnection(config),
       testGitHubConnection(config),
-      testJenkinsConnection(config),
+      testJenkinsConnection(config, 'staging'),
       ...(config.productionJenkins
         ? [
-            testJenkinsConnection({
-              ...config,
-              jenkinsUrl: config.productionJenkins.jenkinsUrl,
-              jenkinsUsername: config.productionJenkins.jenkinsUsername,
-              jenkinsToken: config.productionJenkins.jenkinsToken,
-            }),
+            testJenkinsConnection(
+              {
+                ...config,
+                jenkinsUrl: config.productionJenkins.jenkinsUrl,
+                jenkinsUsername: config.productionJenkins.jenkinsUsername,
+                jenkinsToken: config.productionJenkins.jenkinsToken,
+              },
+              'production',
+            ),
           ]
         : []),
     ])
@@ -469,6 +479,26 @@ export function createApp() {
     )
   })
 
+  app.post('/api/github/back-merge-pull-requests', async (request, response) => {
+    const parsed = backMergeSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_BACK_MERGE',
+          message: 'Repository and back-merge route are required.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.status(201).json(
+      await createBackMergePullRequest(
+        requireConnection(),
+        parsed.data.repository,
+        parsed.data.route,
+      ),
+    )
+  })
+
   app.post(
     '/api/github/promotion-pull-requests/merge',
     async (request, response) => {
@@ -484,6 +514,29 @@ export function createApp() {
       }
       response.json(
         await mergePromotionPullRequest(
+          requireConnection(),
+          parsed.data.repository,
+          parsed.data.pullNumber,
+        ),
+      )
+    },
+  )
+
+  app.post(
+    '/api/github/back-merge-pull-requests/merge',
+    async (request, response) => {
+      const parsed = mergePromotionSchema.safeParse(request.body)
+      if (!parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_BACK_MERGE',
+            message: 'Repository and a valid pull request number are required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        await mergeBackMergePullRequest(
           requireConnection(),
           parsed.data.repository,
           parsed.data.pullNumber,

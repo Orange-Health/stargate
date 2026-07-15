@@ -241,6 +241,18 @@ export type PendingBackMerge = {
   toBranch: string
 }
 
+export type BackMergeRoute = 'default-to-release' | 'release-to-dev'
+
+export type BackMergeStep = {
+  route: BackMergeRoute
+  fromBranch: string
+  toBranch: string
+  commitsAhead: number
+  commitsBehind: number
+  state: 'up_to_date' | 'needs_pr' | 'pr_open'
+  pullRequest?: PromotionPullRequest
+}
+
 export type RepositoryReleaseState = {
   repository: string
   defaultBranch: string
@@ -250,6 +262,7 @@ export type RepositoryReleaseState = {
   deploymentLookupFailed: boolean
   productionReady: boolean
   promotionSteps: PromotionStep[]
+  backMergeSteps: BackMergeStep[]
   pendingBackMerges: PendingBackMerge[]
   jenkinsServices: string[]
   fetchedAt: string
@@ -263,6 +276,7 @@ export type ServiceRefreshResult = {
 export type RepositoryRisk = {
   repository: string
   backMergePending: boolean
+  backMergeOutdated: boolean
   checkFailed: boolean
 }
 
@@ -277,6 +291,11 @@ export type DeploymentFreshness = {
 export type CreatePromotionPullRequestInput = {
   repository: string
   route: PromotionRoute
+}
+
+export type CreateBackMergePullRequestInput = {
+  repository: string
+  route: BackMergeRoute
 }
 
 export type MergePromotionPullRequestInput = {

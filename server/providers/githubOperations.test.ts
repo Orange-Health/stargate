@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { WorkflowRun } from '../../src/shared/types.js'
 import {
   aggregateBuildStatus,
+  backMergeBranches,
   hasActualMergeConflict,
   promotionBranches,
 } from './githubOperations.js'
@@ -76,6 +77,22 @@ describe('promotionBranches', () => {
     expect(promotionBranches('release-to-default', 'master')).toEqual({
       fromBranch: 'release',
       toBranch: 'master',
+    })
+  })
+})
+
+describe('backMergeBranches', () => {
+  it('uses the repository default branch when syncing release', () => {
+    expect(backMergeBranches('default-to-release', 'master')).toEqual({
+      fromBranch: 'master',
+      toBranch: 'release',
+    })
+  })
+
+  it('syncs release changes back to dev', () => {
+    expect(backMergeBranches('release-to-dev', 'main')).toEqual({
+      fromBranch: 'release',
+      toBranch: 'dev',
     })
   })
 })

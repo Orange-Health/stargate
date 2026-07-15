@@ -23,11 +23,13 @@ function App() {
     () => initialSelection.get('service') ?? '',
   )
   const [dashboard, setDashboard] = useState<ReleaseDashboard>()
-  const [loading, setLoading] = useState(false)
+  const [releasesLoading, setReleasesLoading] = useState(false)
+  const [dashboardLoading, setDashboardLoading] = useState(false)
   const [error, setError] = useState('')
   const [dashboardProgress, setDashboardProgress] =
     useState<DashboardProgress>()
   const requestSequence = useRef(0)
+  const loading = releasesLoading || dashboardLoading
 
   useEffect(() => {
     api
@@ -40,7 +42,7 @@ function App() {
   useEffect(() => {
     if (!connection?.connected) return
     let active = true
-    setLoading(true)
+    setReleasesLoading(true)
     setError('')
     api
       .releases()
@@ -63,7 +65,7 @@ function App() {
         }
       })
       .finally(() => {
-        if (active) setLoading(false)
+        if (active) setReleasesLoading(false)
       })
     return () => {
       active = false
@@ -118,7 +120,7 @@ function App() {
         progressTimer = window.setTimeout(pollProgress, 350)
       }
     }
-    setLoading(true)
+    setDashboardLoading(true)
     setError('')
     setDashboardProgress({
       phase: 'starting',
@@ -140,7 +142,7 @@ function App() {
       polling = false
       if (progressTimer) window.clearTimeout(progressTimer)
       if (sequence === requestSequence.current) {
-        setLoading(false)
+        setDashboardLoading(false)
         setDashboardProgress(undefined)
       }
     }
@@ -150,7 +152,7 @@ function App() {
     requestSequence.current += 1
     setDashboard(undefined)
     setError('')
-    setLoading(true)
+    setDashboardLoading(true)
     setDashboardProgress(undefined)
     setSelectedRepository('')
     setSelectedVersionId(versionId)
@@ -159,6 +161,8 @@ function App() {
   async function disconnect() {
     requestSequence.current += 1
     await api.disconnect().catch(() => undefined)
+    setReleasesLoading(false)
+    setDashboardLoading(false)
     setConnection(undefined)
     setReleases([])
     setSelectedVersionId('')

@@ -71,6 +71,13 @@ export function evaluateEligibility(
   }
 }
 
+export function isClearedMerge(pullRequest?: PullRequest) {
+  return (
+    Boolean(pullRequest?.merged) &&
+    (pullRequest?.baseBranch === 'dev' || pullRequest?.baseBranch === 'main')
+  )
+}
+
 function summarizeService(
   repository: string,
   items: ReleaseItem[],
@@ -82,10 +89,7 @@ function summarizeService(
     blockedCount: items.filter(
       (item) => !item.eligible && !item.pullRequest?.merged,
     ).length,
-    mergedCount: items.filter(
-      (item) =>
-        item.pullRequest?.merged && item.pullRequest.baseBranch === 'dev',
-    ).length,
+    mergedCount: items.filter((item) => isClearedMerge(item.pullRequest)).length,
     backMergePending: false,
   }
 }

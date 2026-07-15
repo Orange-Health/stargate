@@ -78,6 +78,7 @@ describe('ReleaseOverview', () => {
       repositories.map((repository) => ({
         repository,
         backMergePending: false,
+        backMergeOutdated: false,
         checkFailed: false,
       })),
     )
@@ -248,6 +249,7 @@ describe('ReleaseOverview', () => {
         deploymentLookupFailed: false,
         productionReady: false,
         promotionSteps: [],
+        backMergeSteps: [],
         pendingBackMerges: [],
         jenkinsServices: [],
         fetchedAt: new Date().toISOString(),
@@ -366,12 +368,24 @@ describe('ReleaseOverview', () => {
       {
         repository: 'orange/service-api',
         backMergePending: true,
+        backMergeOutdated: true,
         checkFailed: false,
       },
     ])
     const issueDashboard: ReleaseDashboard = {
       ...dashboard,
-      services: [{ ...dashboard.services[0], backMergePending: true }],
+      services: [
+        {
+          ...dashboard.services[0],
+          backMergePending: true,
+          items: dashboard.services[0].items.map((item) => ({
+            ...item,
+            pullRequest: item.pullRequest
+              ? { ...item.pullRequest, baseBranch: 'dev' }
+              : undefined,
+          })),
+        },
+      ],
     }
     render(
       <ReleaseOverview
@@ -389,8 +403,63 @@ describe('ReleaseOverview', () => {
     expect(
       screen.getByRole('button', { name: 'Pending merge 1' }),
     ).toBeInTheDocument()
+    const backMergeFilter = await screen.findByRole('button', {
+      name: 'Back-merges 1',
+    })
+    expect(backMergeFilter).toHaveAttribute(
+      'data-tooltip',
+      'Shows services where main/default is ahead of release or release is ahead of dev, including services without an open back-merge PR.',
+    )
+    await user.click(backMergeFilter)
+    expect(screen.getAllByText('service-api')).toHaveLength(2)
     await user.click(await screen.findByRole('button', { name: 'Issues 1' }))
     expect(screen.getAllByText('service-api')).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Issues 1' })).toHaveAttribute(
+      'data-tooltip',
+      'Shows services with an open PR into dev that is not reviewer-approved or has Git merge conflicts.',
+    )
+  })
+
+  it('includes divergent branches without an open back-merge PR', async () => {
+    const user = userEvent.setup()
+    vi.mocked(api.repositoryRisks).mockResolvedValueOnce([
+      {
+        repository: 'orange/service-api',
+        backMergePending: false,
+        backMergeOutdated: true,
+        checkFailed: false,
+      },
+      {
+        repository: 'orange/current-api',
+        backMergePending: false,
+        backMergeOutdated: false,
+        checkFailed: false,
+      },
+    ])
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={{
+          ...dashboard,
+          services: [
+            dashboard.services[0],
+            { ...dashboard.services[0], repository: 'orange/current-api' },
+          ],
+        }}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Back-merges 1' }),
+    )
+    expect(screen.queryByText('orange/current-api')).not.toBeInTheDocument()
+    expect(screen.getAllByText('orange/service-api').length).toBeGreaterThan(0)
   })
 
   it('shows participants and merges a ready feature PR', async () => {

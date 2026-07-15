@@ -2,6 +2,7 @@ import type {
   ApiErrorBody,
   ConnectionConfig,
   ConnectionStatus,
+  CreateBackMergePullRequestInput,
   CreatedProductionRelease,
   CreatePromotionPullRequestInput,
   CreatedStagingRelease,
@@ -142,9 +143,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
+  createBackMergePullRequest: (input: CreateBackMergePullRequestInput) =>
+    request<PromotionPullRequest>('/api/github/back-merge-pull-requests', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   mergePromotionPullRequest: (input: MergePromotionPullRequestInput) =>
     request<MergePromotionPullRequestResult>(
       '/api/github/promotion-pull-requests/merge',
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+      },
+    ),
+  mergeBackMergePullRequest: (input: MergePromotionPullRequestInput) =>
+    request<MergePromotionPullRequestResult>(
+      '/api/github/back-merge-pull-requests/merge',
       {
         method: 'POST',
         body: JSON.stringify(input),

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../shared/api'
 import type {
+  BackMergeStep,
   BuildStatus,
   PromotionStep,
   RepositoryReleaseState,
@@ -48,6 +49,18 @@ function mergeBlockReason(
   }
   if (pull.checks === 'pending') return 'Checks are pending'
   if (pull.checks === 'failure') return 'Checks are failing'
+  return undefined
+}
+
+function backMergeBlockReason(step: BackMergeStep) {
+  const pull = step.pullRequest
+  if (!pull) return undefined
+  if (pull.draft) return 'PR is still a draft'
+  if (pull.mergeable === null) return 'GitHub is checking mergeability'
+  if (pull.mergeable === false || pull.mergeableState === 'dirty') {
+    return 'PR has merge conflicts'
+  }
+  if (pull.checks === 'pending') return 'Checks are pending'
   return undefined
 }
 
@@ -253,6 +266,51 @@ export function ServiceOperations({
     } catch (reason) {
       setError(
         reason instanceof Error ? reason.message : 'Could not merge the PR.',
+      )
+    } finally {
+      setBusyRoute('')
+    }
+  }
+
+  async function mergeBackMerge(step: BackMergeStep) {
+    if (!step.pullRequest) return
+    const confirmed = window.confirm(
+      `Back-merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?`,
+    )
+    if (!confirmed) return
+    setBusyRoute(step.route)
+    setError('')
+    try {
+      await api.mergeBackMergePullRequest({
+        repository,
+        pullNumber: step.pullRequest.number,
+      })
+      await load(true)
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not merge the back-merge PR.',
+      )
+    } finally {
+      setBusyRoute('')
+    }
+  }
+
+  async function createBackMerge(step: BackMergeStep) {
+    setBusyRoute(step.route)
+    setError('')
+    try {
+      await api.createBackMergePullRequest({
+        repository,
+        route: step.route,
+      })
+      await load(true)
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not create the back-merge PR.',
       )
     } finally {
       setBusyRoute('')
@@ -478,6 +536,111 @@ export function ServiceOperations({
         </section>
       )}
 
+      <section className="operation-section branch-sync-section">
+        <div className="operation-heading">
+          <div>
+            <p className="eyebrow">Back-merge health</p>
+            <h3>Branch synchronization</h3>
+          </div>
+          <span className="default-branch">
+            Default · <code>{state?.defaultBranch ?? '—'}</code>
+          </span>
+        </div>
+        {loading && !state ? (
+          <div className="operation-loading">
+            <span className="spinner" /> Checking dev, release, and default
+            branches…
+          </div>
+        ) : (
+          <div className="branch-sync-list">
+            {state?.backMergeSteps.map((step) => {
+            const blockReason = backMergeBlockReason(step)
+            return (
+              <article
+                className={`branch-sync-row ${step.state === 'up_to_date' ? 'current' : 'outdated'}`}
+                key={step.route}
+              >
+                <div className="branch-sync-route">
+                  <code>{step.fromBranch}</code>
+                  <span>→</span>
+                  <code>{step.toBranch}</code>
+                </div>
+                {step.state === 'up_to_date' && (
+                  <div className="branch-sync-status current">
+                    <strong>✓ Up to date</strong>
+                    <small>
+                      {step.toBranch} contains all commits from {step.fromBranch}
+                    </small>
+                  </div>
+                )}
+                {step.state === 'needs_pr' && (
+                  <>
+                    <div className="branch-sync-status outdated">
+                      <strong>
+                        {step.toBranch} is {step.commitsAhead}{' '}
+                        {step.commitsAhead === 1 ? 'commit' : 'commits'} behind
+                      </strong>
+                      <small>
+                        No open back-merge PR from {step.fromBranch} to{' '}
+                        {step.toBranch}
+                      </small>
+                    </div>
+                    <button
+                      className="journey-action"
+                      type="button"
+                      disabled={busyRoute === step.route}
+                      onClick={() => void createBackMerge(step)}
+                    >
+                      {busyRoute === step.route
+                        ? 'Creating…'
+                        : 'Create back-merge PR'}
+                    </button>
+                  </>
+                )}
+                {step.state === 'pr_open' && step.pullRequest && (
+                  <>
+                    <div className="branch-sync-status outdated">
+                      <strong>
+                        <a
+                          href={step.pullRequest.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          PR #{step.pullRequest.number} ·{' '}
+                          {step.pullRequest.title} ↗
+                        </a>
+                      </strong>
+                      <small>
+                        {step.commitsAhead}{' '}
+                        {step.commitsAhead === 1 ? 'commit' : 'commits'} waiting
+                        · checks {step.pullRequest.checks} ·{' '}
+                        {step.pullRequest.reviewDecision.replaceAll('_', ' ')}
+                      </small>
+                      {blockReason && (
+                        <small className="merge-block">{blockReason}</small>
+                      )}
+                    </div>
+                    <button
+                      className="journey-action merge"
+                      type="button"
+                      disabled={
+                        Boolean(blockReason) || busyRoute === step.route
+                      }
+                      onClick={() => void mergeBackMerge(step)}
+                    >
+                      {busyRoute === step.route
+                        ? 'Merging…'
+                        : `Merge to ${step.toBranch}`}
+                    </button>
+                  </>
+                )}
+              </article>
+            )
+            })}
+          </div>
+        )}
+      </section>
+
       <section className="operation-section journey-section">
         <div className="operation-heading">
           <div>
@@ -491,20 +654,14 @@ export function ServiceOperations({
           )}
         </div>
 
-        {state?.pendingBackMerges.length ? (
-          <div className="back-merge-warning">
-            <strong>Pending back-merge detected</strong>
-            <span>Resolve before promoting or merging:</span>
-            {state.pendingBackMerges.map((pull) => (
-              <a href={pull.url} target="_blank" rel="noreferrer" key={pull.number}>
-                #{pull.number} {pull.fromBranch} → {pull.toBranch}
-              </a>
-            ))}
+        {loading && !state ? (
+          <div className="operation-loading">
+            <span className="spinner" /> Loading Dev → Release → Default
+            journey…
           </div>
-        ) : null}
-
-        <div className="journey-track">
-          {state?.promotionSteps.map((step, index) => {
+        ) : (
+          <div className="journey-track">
+            {state?.promotionSteps.map((step, index) => {
             const blockReason = mergeBlockReason(
               step,
               state.pendingBackMerges.length > 0,
@@ -539,14 +696,24 @@ export function ServiceOperations({
                           : 'No previous promotion PR found; a standard title and description will be used.'}
                       </small>
                     </div>
-                    <button
-                      className="journey-action"
-                      type="button"
-                      disabled={busyRoute === step.route}
-                      onClick={() => void createPull(step)}
-                    >
-                      {busyRoute === step.route ? 'Creating…' : 'Create PR'}
-                    </button>
+                    <span className="journey-actions">
+                      <button
+                        className="journey-action"
+                        type="button"
+                        disabled={busyRoute === step.route}
+                        onClick={() => void createPull(step)}
+                      >
+                        {busyRoute === step.route ? 'Creating…' : 'Create PR'}
+                      </button>
+                      <a
+                        className="journey-diff-link"
+                        href={`https://github.com/${repository}/compare/${encodeURIComponent(step.toBranch)}...${encodeURIComponent(step.fromBranch)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View diff ↗
+                      </a>
+                    </span>
                   </div>
                 )}
 
@@ -586,8 +753,9 @@ export function ServiceOperations({
                 {index === 0 && <div className="journey-divider" />}
               </article>
             )
-          })}
-        </div>
+            })}
+          </div>
+        )}
       </section>
       {deployRelease && state && (
         <DeployDialog

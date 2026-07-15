@@ -94,6 +94,24 @@ const repositoryState: RepositoryReleaseState = {
       },
     },
   ],
+  backMergeSteps: [
+    {
+      route: 'default-to-release',
+      fromBranch: 'master',
+      toBranch: 'release',
+      commitsAhead: 2,
+      commitsBehind: 0,
+      state: 'needs_pr',
+    },
+    {
+      route: 'release-to-dev',
+      fromBranch: 'release',
+      toBranch: 'dev',
+      commitsAhead: 0,
+      commitsBehind: 0,
+      state: 'up_to_date',
+    },
+  ],
   pendingBackMerges: [],
   jenkinsServices: ['accounts'],
   fetchedAt: '2026-07-13T12:01:00Z',
@@ -102,6 +120,18 @@ const repositoryState: RepositoryReleaseState = {
 afterEach(() => vi.restoreAllMocks())
 
 describe('ServiceOperations', () => {
+  it('shows loading states while branch data is being resolved', () => {
+    vi.spyOn(api, 'repositoryState').mockReturnValue(new Promise(() => {}))
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+
+    expect(
+      screen.getByText(/Checking dev, release, and default branches/),
+    ).toBeVisible()
+    expect(
+      screen.getByText(/Loading Dev → Release → Default journey/),
+    ).toBeVisible()
+  })
+
   it('shows tag build status and repository-specific branch journey', async () => {
     vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
     render(<ServiceOperations repository="Orange-Health/service-api" />)
@@ -112,7 +142,8 @@ describe('ServiceOperations', () => {
       'href',
       'https://github.test/run/2',
     )
-    expect(screen.getByText('Default ·')).toHaveTextContent('master')
+    expect(screen.getAllByText('Default ·')).toHaveLength(2)
+    expect(screen.getAllByText('Default ·')[0]).toHaveTextContent('master')
     expect(screen.getByRole('link', { name: 'Live in S1' })).toHaveAttribute(
       'href',
       'https://jenkins.test/job/DEV/job/DEV%20Deployer/2152/',
@@ -120,6 +151,10 @@ describe('ServiceOperations', () => {
     expect(
       screen.getByRole('button', { name: 'Merge to master' }),
     ).toBeEnabled()
+    expect(screen.getByRole('link', { name: 'View diff ↗' })).toHaveAttribute(
+      'href',
+      'https://github.com/Orange-Health/service-api/compare/release...dev',
+    )
     const deployButtons = screen.getAllByRole('button', { name: 'Deploy' })
     expect(deployButtons[0]).toBeDisabled()
     expect(deployButtons[1]).toBeEnabled()
@@ -210,5 +245,102 @@ describe('ServiceOperations', () => {
     expect(
       screen.getByRole('dialog', { name: 'Deploy to production' }),
     ).toBeVisible()
+  })
+
+  it('highlights outdated branches and merges an existing back-merge PR', async () => {
+    const user = userEvent.setup()
+    const merge = vi
+      .spyOn(api, 'mergeBackMergePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Merged' })
+    vi.spyOn(api, 'repositoryState').mockResolvedValue({
+      ...repositoryState,
+      backMergeSteps: [
+        repositoryState.backMergeSteps[0],
+        {
+          route: 'release-to-dev',
+          fromBranch: 'release',
+          toBranch: 'dev',
+          commitsAhead: 3,
+          commitsBehind: 0,
+          state: 'pr_open',
+          pullRequest: {
+            number: 43,
+            title: 'Back-merge release into dev',
+            url: 'https://github.test/pull/43',
+            baseBranch: 'dev',
+            headBranch: 'release',
+            draft: false,
+            mergeable: true,
+            mergeableState: 'blocked',
+            reviewDecision: 'review_required',
+            checks: 'failure',
+          },
+        },
+      ],
+    })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+
+    expect(await screen.findByText('release is 2 commits behind')).toBeVisible()
+    expect(
+      screen.getByRole('link', {
+        name: /PR #43 · Back-merge release into dev/,
+      }),
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Merge to dev' }))
+
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'Orange-Health/service-api',
+      pullNumber: 43,
+    })
+  })
+
+  it('creates a missing back-merge PR and switches to its details', async () => {
+    const user = userEvent.setup()
+    const createdPull = {
+      number: 44,
+      title: 'Back-merge master into release',
+      url: 'https://github.test/pull/44',
+      baseBranch: 'release',
+      headBranch: 'master',
+      draft: false,
+      mergeable: true,
+      mergeableState: 'clean',
+      reviewDecision: 'review_required' as const,
+      checks: 'success' as const,
+    }
+    const repositoryStateRequest = vi
+      .spyOn(api, 'repositoryState')
+      .mockResolvedValueOnce(repositoryState)
+      .mockResolvedValue({
+        ...repositoryState,
+        backMergeSteps: [
+          {
+            ...repositoryState.backMergeSteps[0],
+            state: 'pr_open',
+            pullRequest: createdPull,
+          },
+          repositoryState.backMergeSteps[1],
+        ],
+      })
+    const create = vi
+      .spyOn(api, 'createBackMergePullRequest')
+      .mockResolvedValue(createdPull)
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Create back-merge PR' }),
+    )
+
+    expect(create).toHaveBeenCalledWith({
+      repository: 'Orange-Health/service-api',
+      route: 'default-to-release',
+    })
+    expect(
+      await screen.findByRole('link', {
+        name: /PR #44 · Back-merge master into release/,
+      }),
+    ).toHaveAttribute('href', 'https://github.test/pull/44')
+    expect(repositoryStateRequest).toHaveBeenCalledTimes(2)
   })
 })

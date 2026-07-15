@@ -334,7 +334,10 @@ function productionConfig(config: ConnectionConfig): ConnectionConfig {
   }
 }
 
-export async function testJenkinsConnection(config: ConnectionConfig) {
+export async function testJenkinsConnection(
+  config: ConnectionConfig,
+  environment: 'staging' | 'production' = 'staging',
+) {
   try {
     const info = (await jenkinsClient(config).info()) as {
       nodeName?: string
@@ -342,10 +345,26 @@ export async function testJenkinsConnection(config: ConnectionConfig) {
     }
     return { name: info.nodeName || info.mode || 'Jenkins' }
   } catch (error) {
+    const requestError = error as Error & {
+      res?: {
+        statusCode?: number
+        headers?: { location?: string }
+      }
+    }
+    const status = requestError.res?.statusCode
+    const location = requestError.res?.headers?.location
+    let message = `Jenkins ${environment} connection failed.`
+    if (status === 301 || status === 302 || status === 303) {
+      message =
+        `Jenkins ${environment} redirected the API request` +
+        `${location ? ` to ${location}` : ''}. Verify the Jenkins URL, username, and API token; the request may be reaching the SSO login page.`
+    } else if (status === 401 || status === 403) {
+      message = `Jenkins ${environment} rejected the username or API token.`
+    } else if (error instanceof Error) {
+      message = `Jenkins ${environment} connection failed: ${error.message}`
+    }
     throw new ProviderError(
-      error instanceof Error
-        ? `Jenkins connection failed: ${error.message}`
-        : 'Jenkins connection failed.',
+      message,
       'JENKINS_CONNECTION_FAILED',
       'jenkins',
       502,

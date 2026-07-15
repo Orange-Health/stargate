@@ -43,6 +43,26 @@ const reasonLabels: Record<EligibilityReason, string> = {
   ALREADY_MERGED: 'Merged',
 }
 
+function hasDevPullRequestIssues(service: ServiceRelease) {
+  return service.items.some((item) => {
+    const pull = item.pullRequest
+    return (
+      pull?.baseBranch === 'dev' &&
+      !pull.merged &&
+      (pull.reviewDecision !== 'approved' ||
+        item.blockingReasons.includes('HAS_CONFLICTS'))
+    )
+  })
+}
+
+function isClearedMerge(item: ReleaseItem) {
+  return (
+    Boolean(item.pullRequest?.merged) &&
+    (item.pullRequest?.baseBranch === 'dev' ||
+      item.pullRequest?.baseBranch === 'main')
+  )
+}
+
 function formatDate(value?: string) {
   if (!value) return 'No date set'
   return new Intl.DateTimeFormat('en-IN', {
@@ -435,11 +455,18 @@ export function ReleaseOverview({
   const [productionReleaseRepository, setProductionReleaseRepository] =
     useState('')
   const [serviceFilter, setServiceFilter] = useState<
-    'all' | 'pending' | 'issues' | 'outdated'
+    'all' | 'pending' | 'issues' | 'backmerges' | 'outdated'
   >('all')
   const [serviceSearch, setServiceSearch] = useState('')
   const [repositoryRisks, setRepositoryRisks] = useState<
-    Record<string, { backMergePending: boolean; checkFailed: boolean }>
+    Record<
+      string,
+      {
+        backMergePending: boolean
+        backMergeOutdated: boolean
+        checkFailed: boolean
+      }
+    >
   >({})
   const [risksLoading, setRisksLoading] = useState(false)
   const [deploymentFreshness, setDeploymentFreshness] = useState<
@@ -467,6 +494,7 @@ export function ReleaseOverview({
               risk.repository,
               {
                 backMergePending: risk.backMergePending,
+                backMergeOutdated: risk.backMergeOutdated,
                 checkFailed: risk.checkFailed,
               },
             ]),
@@ -479,7 +507,11 @@ export function ReleaseOverview({
           Object.fromEntries(
             repositories.map((repository) => [
               repository,
-              { backMergePending: false, checkFailed: true },
+              {
+                backMergePending: false,
+                backMergeOutdated: false,
+                checkFailed: true,
+              },
             ]),
           ),
         )
@@ -547,13 +579,14 @@ export function ReleaseOverview({
       )
     }
     if (serviceFilter === 'issues') {
+      services = services.filter(hasDevPullRequestIssues)
+    }
+    if (serviceFilter === 'backmerges') {
       services = services.filter(
         (service) =>
-          (repositoryRisks[service.repository]?.backMergePending ??
-            service.backMergePending) ||
-          service.items.some((item) =>
-            item.blockingReasons.includes('HAS_CONFLICTS'),
-          ),
+          repositoryRisks[service.repository]?.backMergeOutdated ||
+          repositoryRisks[service.repository]?.backMergePending ||
+          service.backMergePending,
       )
     }
     if (serviceFilter === 'outdated') {
@@ -583,10 +616,7 @@ export function ReleaseOverview({
   const mergedIssueKeys = new Set(
     dashboard?.services.flatMap((service) =>
       service.items
-        .filter(
-          (item) =>
-            item.pullRequest?.merged && item.pullRequest.baseBranch === 'dev',
-        )
+        .filter(isClearedMerge)
         .map((item) => item.issue.key),
     ) ?? [],
   )
@@ -599,13 +629,13 @@ export function ReleaseOverview({
       ),
     ).length ?? 0
   const issueServiceCount =
+    dashboard?.services.filter(hasDevPullRequestIssues).length ?? 0
+  const backMergeServiceCount =
     dashboard?.services.filter(
       (service) =>
-        (repositoryRisks[service.repository]?.backMergePending ??
-          service.backMergePending) ||
-        service.items.some((item) =>
-          item.blockingReasons.includes('HAS_CONFLICTS'),
-        ),
+        repositoryRisks[service.repository]?.backMergeOutdated ||
+        repositoryRisks[service.repository]?.backMergePending ||
+        service.backMergePending,
     ).length ?? 0
   const outdatedServiceCount =
     dashboard?.services.filter(
@@ -807,6 +837,7 @@ export function ReleaseOverview({
                   <button
                     className={serviceFilter === 'all' ? 'active' : ''}
                     type="button"
+                    data-tooltip="Shows every service included in the selected Jira release, regardless of its dev, release, or main branch status."
                     onClick={() => {
                       setServiceFilter('all')
                       onSelectRepository('')
@@ -817,6 +848,7 @@ export function ReleaseOverview({
                   <button
                     className={serviceFilter === 'pending' ? 'active' : ''}
                     type="button"
+                    data-tooltip="Shows services with at least one linked release PR that is still open and not merged into dev."
                     onClick={() => {
                       setServiceFilter('pending')
                       onSelectRepository('')
@@ -827,22 +859,37 @@ export function ReleaseOverview({
                   <button
                     className={serviceFilter === 'issues' ? 'active' : ''}
                     type="button"
+                    data-tooltip="Shows services with an open PR into dev that is not reviewer-approved or has Git merge conflicts."
                     onClick={() => {
                       setServiceFilter('issues')
                       onSelectRepository('')
                     }}
                   >
                     Issues{' '}
-                    <span>{risksLoading ? '…' : issueServiceCount}</span>
+                    <span>{issueServiceCount}</span>
+                  </button>
+                  <button
+                    className={serviceFilter === 'backmerges' ? 'active' : ''}
+                    type="button"
+                    data-tooltip="Shows services where main/default is ahead of release or release is ahead of dev, including services without an open back-merge PR."
+                    onClick={() => {
+                      setServiceFilter('backmerges')
+                      onSelectRepository('')
+                    }}
+                  >
+                    Back-merges{' '}
+                    <span>
+                      {risksLoading ? '…' : backMergeServiceCount}
+                    </span>
                   </button>
                   <button
                     className={serviceFilter === 'outdated' ? 'active' : ''}
                     type="button"
+                    data-tooltip="Shows services whose latest successful QA tag from GitHub Actions is not deployed to every mapped QA service in Jenkins."
                     onClick={() => {
                       setServiceFilter('outdated')
                       onSelectRepository('')
                     }}
-                    title="Latest successful QA build is not currently deployed in QA"
                   >
                     Outdated{' '}
                     <span>

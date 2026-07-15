@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { JiraIssue, PullRequest } from '../../src/shared/types.js'
-import { evaluateEligibility } from './releaseAggregator.js'
+import {
+  evaluateEligibility,
+  isClearedMerge,
+} from './releaseAggregator.js'
 
 const issue: JiraIssue = {
   key: 'OH-123',
@@ -64,5 +67,21 @@ describe('evaluateEligibility', () => {
       eligible: false,
       blockingReasons: ['NO_MATCHING_PR'],
     })
+  })
+})
+
+describe('isClearedMerge', () => {
+  it('clears release PRs merged into dev or main', () => {
+    expect(isClearedMerge({ ...readyPull, merged: true })).toBe(true)
+    expect(
+      isClearedMerge({ ...readyPull, merged: true, baseBranch: 'main' }),
+    ).toBe(true)
+  })
+
+  it('does not clear unmerged PRs or PRs merged into other branches', () => {
+    expect(isClearedMerge(readyPull)).toBe(false)
+    expect(
+      isClearedMerge({ ...readyPull, merged: true, baseBranch: 'release' }),
+    ).toBe(false)
   })
 })

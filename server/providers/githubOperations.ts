@@ -1,4 +1,6 @@
 import type {
+  BackMergeRoute,
+  BackMergeStep,
   BuildStatus,
   CheckStatus,
   ConnectionConfig,
@@ -77,9 +79,13 @@ type GitHubChecks = {
 const stagingTagPattern =
   /^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/
 const RISK_CACHE_MS = 45_000
+type BackMergeRiskStatus = {
+  pendingPulls: PendingBackMerge[]
+  outdated: boolean
+}
 const riskCache = new Map<
   string,
-  { expiresAt: number; value: Promise<PendingBackMerge[]> }
+  { expiresAt: number; value: Promise<BackMergeRiskStatus> }
 >()
 const qaBuildCache = new Map<
   string,
@@ -434,6 +440,47 @@ async function pendingBackMerges(
   ]
 }
 
+export function backMergeBranches(
+  route: BackMergeRoute,
+  defaultBranch: string,
+) {
+  return route === 'default-to-release'
+    ? { fromBranch: defaultBranch, toBranch: 'release' }
+    : { fromBranch: 'release', toBranch: 'dev' }
+}
+
+async function backMergeStep(
+  config: ConnectionConfig,
+  repository: string,
+  route: BackMergeRoute,
+  defaultBranch: string,
+): Promise<BackMergeStep> {
+  const { fromBranch, toBranch } = backMergeBranches(route, defaultBranch)
+  const [comparison, openPulls] = await Promise.all([
+    githubApi<{ ahead_by: number; behind_by: number }>(
+      config,
+      `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
+    ),
+    findPulls(config, repository, 'open', fromBranch, toBranch),
+  ])
+  const openPull = openPulls[0]
+  return {
+    route,
+    fromBranch,
+    toBranch,
+    commitsAhead: comparison.ahead_by,
+    commitsBehind: comparison.behind_by,
+    state: openPull
+      ? 'pr_open'
+      : comparison.ahead_by > 0
+        ? 'needs_pr'
+        : 'up_to_date',
+    pullRequest: openPull
+      ? await promotionPullDetails(config, repository, openPull)
+      : undefined,
+  }
+}
+
 export async function getRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
@@ -443,7 +490,7 @@ export async function getRepositoryReleaseState(
     config,
     `/repos/${repositoryPath(repository)}`,
   )
-  const [trackedReleases, promotionSteps, backMerges] = await Promise.all([
+  const [trackedReleases, promotionSteps, backMergeSteps] = await Promise.all([
     listTrackedReleases(config, repository),
     Promise.all([
       promotionStep(
@@ -459,8 +506,34 @@ export async function getRepositoryReleaseState(
         metadata.default_branch,
       ),
     ]),
-    pendingBackMerges(config, repository, metadata.default_branch),
+    Promise.all([
+      backMergeStep(
+        config,
+        repository,
+        'default-to-release',
+        metadata.default_branch,
+      ),
+      backMergeStep(
+        config,
+        repository,
+        'release-to-dev',
+        metadata.default_branch,
+      ),
+    ]),
   ])
+  const backMerges = backMergeSteps.flatMap((step) =>
+    step.pullRequest
+      ? [
+          {
+            number: step.pullRequest.number,
+            title: step.pullRequest.title,
+            url: step.pullRequest.url,
+            fromBranch: step.fromBranch,
+            toBranch: step.toBranch,
+          },
+        ]
+      : [],
+  )
   return {
     repository,
     defaultBranch: metadata.default_branch,
@@ -475,6 +548,7 @@ export async function getRepositoryReleaseState(
         step.commitsBehind === 0,
     ),
     promotionSteps,
+    backMergeSteps,
     pendingBackMerges: backMerges,
     jenkinsServices: servicesForRepository(repository),
     fetchedAt: new Date().toISOString(),
@@ -518,7 +592,22 @@ export async function getRepositoryBackMergeStatus(
       config,
       `/repos/${repositoryPath(repository)}`,
     )
-    return pendingBackMerges(config, repository, metadata.default_branch)
+    const [pendingPulls, defaultToRelease, releaseToDev] = await Promise.all([
+      pendingBackMerges(config, repository, metadata.default_branch),
+      githubApi<{ ahead_by: number }>(
+        config,
+        `/repos/${repositoryPath(repository)}/compare/release...${encodeURIComponent(metadata.default_branch)}`,
+      ),
+      githubApi<{ ahead_by: number }>(
+        config,
+        `/repos/${repositoryPath(repository)}/compare/dev...release`,
+      ),
+    ])
+    return {
+      pendingPulls,
+      outdated:
+        defaultToRelease.ahead_by > 0 || releaseToDev.ahead_by > 0,
+    }
   })()
   riskCache.set(key, { expiresAt: Date.now() + RISK_CACHE_MS, value })
   value.catch(() => riskCache.delete(key))
@@ -536,19 +625,21 @@ export async function getRepositoryRisks(
       const index = cursor++
       const repository = repositories[index]
       try {
-        const backMerges = await getRepositoryBackMergeStatus(
+        const backMergeStatus = await getRepositoryBackMergeStatus(
           config,
           repository,
         )
         results[index] = {
           repository,
-          backMergePending: backMerges.length > 0,
+          backMergePending: backMergeStatus.pendingPulls.length > 0,
+          backMergeOutdated: backMergeStatus.outdated,
           checkFailed: false,
         }
       } catch {
         results[index] = {
           repository,
           backMergePending: false,
+          backMergeOutdated: false,
           checkFailed: true,
         }
       }
@@ -609,6 +700,49 @@ export async function createPromotionPullRequest(
   return promotionPullDetails(config, repository, created)
 }
 
+export async function createBackMergePullRequest(
+  config: ConnectionConfig,
+  repository: string,
+  route: BackMergeRoute,
+): Promise<PromotionPullRequest> {
+  assertConnectedRepository(config, repository)
+  const metadata = await githubApi<GitHubRepository>(
+    config,
+    `/repos/${repositoryPath(repository)}`,
+  )
+  const step = await backMergeStep(
+    config,
+    repository,
+    route,
+    metadata.default_branch,
+  )
+  if (step.pullRequest) return step.pullRequest
+  if (step.commitsAhead === 0) {
+    throw new ProviderError(
+      `${step.fromBranch} has no changes to back-merge into ${step.toBranch}.`,
+      'NO_CHANGES_TO_BACK_MERGE',
+      'github',
+      409,
+    )
+  }
+  const created = await githubApi<GitHubPull>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        title: `Back-merge ${step.fromBranch} into ${step.toBranch}`,
+        body: `Back-merges the current ${step.fromBranch} branch into ${step.toBranch} to keep the branches synchronized.`,
+        head: step.fromBranch,
+        base: step.toBranch,
+        draft: false,
+      }),
+    },
+  )
+  clearRepositoryCaches(config, repository)
+  return promotionPullDetails(config, repository, created)
+}
+
 export async function mergePromotionPullRequest(
   config: ConnectionConfig,
   repository: string,
@@ -644,6 +778,79 @@ export async function mergePromotionPullRequest(
     throw new ProviderError(
       'Only Dev → Release or Release → default branch PRs can be merged here.',
       'INVALID_PROMOTION_PR',
+      'github',
+      409,
+    )
+  }
+  const result = await githubApi<MergePromotionPullRequestResult>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls/${pullNumber}/merge`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ merge_method: 'merge' }),
+    },
+  )
+  clearRepositoryCaches(config, repository)
+  return result
+}
+
+export async function mergeBackMergePullRequest(
+  config: ConnectionConfig,
+  repository: string,
+  pullNumber: number,
+): Promise<MergePromotionPullRequestResult> {
+  assertConnectedRepository(config, repository)
+  const metadata = await githubApi<GitHubRepository>(
+    config,
+    `/repos/${repositoryPath(repository)}`,
+  )
+  const pull = await githubApi<GitHubPull>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls/${pullNumber}`,
+  )
+  const validRoute =
+    (pull.head.ref === metadata.default_branch &&
+      pull.base.ref === 'release') ||
+    (pull.head.ref === 'release' && pull.base.ref === 'dev')
+  if (!validRoute) {
+    throw new ProviderError(
+      'Only default → release or release → dev back-merge PRs can be merged here.',
+      'INVALID_BACK_MERGE_PR',
+      'github',
+      409,
+    )
+  }
+  if (pull.draft || pull.merged_at) {
+    throw new ProviderError(
+      pull.draft
+        ? 'Draft back-merge PRs cannot be merged.'
+        : 'This back-merge PR is already merged.',
+      'BACK_MERGE_PR_NOT_OPEN',
+      'github',
+      409,
+    )
+  }
+  const details = await promotionPullDetails(config, repository, pull)
+  if (details.mergeable === null) {
+    throw new ProviderError(
+      'GitHub is still calculating mergeability.',
+      'BACK_MERGE_NOT_MERGEABLE',
+      'github',
+      409,
+    )
+  }
+  if (hasActualMergeConflict(details.mergeable, details.mergeableState)) {
+    throw new ProviderError(
+      'The back-merge PR has merge conflicts.',
+      'BACK_MERGE_NOT_MERGEABLE',
+      'github',
+      409,
+    )
+  }
+  if (details.checks === 'pending') {
+    throw new ProviderError(
+      'Required checks are still pending.',
+      'BACK_MERGE_CHECKS_PENDING',
       'github',
       409,
     )
