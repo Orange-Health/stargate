@@ -211,6 +211,49 @@ describe('ServiceOperations', () => {
     ).toBeVisible()
   })
 
+  it('polls only active build status without reloading repository state', async () => {
+    const stateRequest = vi
+      .spyOn(api, 'repositoryState')
+      .mockResolvedValue(repositoryState)
+    const buildStatusRequest = vi
+      .spyOn(api, 'releaseBuildStatuses')
+      .mockResolvedValue([
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-qa-v26.0713.2',
+          createdAt: '2026-07-13T12:00:00Z',
+          buildStatus: 'succeeded',
+          runs: [
+            {
+              id: 2,
+              name: 'Build service',
+              status: 'completed',
+              conclusion: 'success',
+              url: 'https://github.test/run/2',
+              startedAt: '2026-07-13T12:00:10Z',
+              updatedAt: '2026-07-13T12:02:00Z',
+            },
+          ],
+        },
+      ])
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+    await screen.findByText('v-qa-v26.0713.2')
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    expect(buildStatusRequest).toHaveBeenCalledWith([
+      {
+        repository: 'Orange-Health/service-api',
+        tag: 'v-qa-v26.0713.2',
+        createdAt: '2026-07-13T12:00:00Z',
+      },
+    ])
+    expect(stateRequest).toHaveBeenCalledTimes(1)
+    expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(1)
+  })
+
   it('temporarily allows production deployment while branches differ', async () => {
     vi.spyOn(api, 'repositoryState').mockResolvedValue({
       ...repositoryState,

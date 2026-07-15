@@ -1,11 +1,19 @@
-import { describe, expect, it } from 'vitest'
-import type { WorkflowRun } from '../../src/shared/types.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type {
+  ConnectionConfig,
+  WorkflowRun,
+} from '../../src/shared/types.js'
 import {
   aggregateBuildStatus,
   backMergeBranches,
+  clearRepositoryCaches,
+  getReleaseBuildStatuses,
+  getRepositoryReleaseState,
   hasActualMergeConflict,
   promotionBranches,
 } from './githubOperations.js'
+
+afterEach(() => vi.unstubAllGlobals())
 
 function run(
   status: string,
@@ -104,5 +112,122 @@ describe('merge conflict classification', () => {
 
   it('detects actual Git merge conflicts', () => {
     expect(hasActualMergeConflict(false, 'dirty')).toBe(true)
+  })
+})
+
+describe('repository state cache', () => {
+  it('coalesces concurrent reads for the same repository', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(
+          JSON.stringify({
+            full_name: 'Orange-Health/service-api',
+            default_branch: 'main',
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/releases?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0 }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/pulls?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+
+    const [first, second] = await Promise.all([
+      getRepositoryReleaseState(config, 'Orange-Health/service-api'),
+      getRepositoryReleaseState(config, 'Orange-Health/service-api'),
+    ])
+
+    expect(first).toBe(second)
+    expect(fetchMock).toHaveBeenCalledTimes(12)
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+  })
+})
+
+describe('release build status polling', () => {
+  it('fetches only workflow runs for the requested active tag', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          workflow_runs: [
+            {
+              id: 7,
+              name: 'Build image',
+              event: 'release',
+              head_branch: 'v-26.0715.1',
+              status: 'completed',
+              conclusion: 'success',
+              html_url: 'https://github.test/actions/7',
+              run_started_at: '2026-07-15T09:00:00Z',
+              updated_at: '2026-07-15T09:02:00Z',
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const [result] = await getReleaseBuildStatuses(config, [
+      {
+        repository: 'Orange-Health/service-api',
+        tag: 'v-26.0715.1',
+        createdAt: '2026-07-15T08:59:00Z',
+      },
+    ])
+
+    expect(result.buildStatus).toBe('succeeded')
+    expect(result.runs).toHaveLength(1)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/actions/runs?branch=v-26.0715.1',
+    )
+    const [cached] = await getReleaseBuildStatuses(config, [
+      {
+        repository: 'Orange-Health/service-api',
+        tag: 'v-26.0715.1',
+        createdAt: '2026-07-15T08:59:00Z',
+      },
+    ])
+    expect(cached).toEqual(result)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    clearRepositoryCaches(
+      config,
+      'Orange-Health/service-api',
+      [],
+      true,
+    )
   })
 })

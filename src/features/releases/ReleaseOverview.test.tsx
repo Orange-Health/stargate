@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
@@ -524,5 +524,42 @@ describe('ReleaseOverview', () => {
     expect(onRefresh).toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Merge to dev' })).not.toBeInTheDocument()
     expect(screen.getByText('Merged')).toBeInTheDocument()
+  })
+
+  it('does not reload enrichment when only dashboard freshness changes', async () => {
+    const props = {
+      connection: {
+        connected: true as const,
+        githubOrg: 'orange',
+        projectKey: 'OH',
+      },
+      releases: [dashboard.version],
+      selectedVersionId: '10351',
+      loading: false,
+      onSelectVersion: vi.fn(),
+      onRefresh: vi.fn(),
+      onDisconnect: vi.fn(),
+    }
+    const view = render(<ReleaseOverview {...props} dashboard={dashboard} />)
+    await waitFor(() =>
+      expect(api.repositoryRisks).toHaveBeenCalledTimes(1),
+    )
+    await waitFor(() =>
+      expect(api.deploymentFreshness).toHaveBeenCalledTimes(1),
+    )
+
+    view.rerender(
+      <ReleaseOverview
+        {...props}
+        dashboard={{
+          ...dashboard,
+          fetchedAt: '2026-07-15T10:00:00Z',
+          cached: true,
+        }}
+      />,
+    )
+
+    expect(api.repositoryRisks).toHaveBeenCalledTimes(1)
+    expect(api.deploymentFreshness).toHaveBeenCalledTimes(1)
   })
 })

@@ -16,7 +16,10 @@ import type {
   MergePromotionPullRequestInput,
   MergePromotionPullRequestResult,
   PromotionPullRequest,
+  ReleaseBuildStatusInput,
+  ReleaseBuildStatusResult,
   ReleaseDashboard,
+  RepositoryReleaseHistory,
   RepositoryReleaseState,
   RepositoryRisk,
   ServiceRefreshResult,
@@ -110,6 +113,18 @@ export const api = {
   repositoryState: (repository: string) =>
     request<RepositoryReleaseState>(
       `/api/github/repository-state?repository=${encodeURIComponent(repository)}`,
+    ),
+  releaseHistory: (repository: string) =>
+    request<RepositoryReleaseHistory>(
+      `/api/github/release-history?repository=${encodeURIComponent(repository)}`,
+    ),
+  releaseBuildStatuses: (releases: ReleaseBuildStatusInput[]) =>
+    request<ReleaseBuildStatusResult[]>(
+      '/api/github/release-build-statuses',
+      {
+        method: 'POST',
+        body: JSON.stringify({ releases }),
+      },
     ),
   repositoryRisks: (repositories: string[]) =>
     request<RepositoryRisk[]>('/api/github/repository-risks', {

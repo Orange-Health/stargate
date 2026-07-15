@@ -72,6 +72,8 @@ export function ServiceOperations({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busyRoute, setBusyRoute] = useState('')
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
   const [deployRelease, setDeployRelease] =
     useState<TrackedStagingRelease>()
   const [productionDeployRelease, setProductionDeployRelease] =
@@ -149,6 +151,7 @@ export function ServiceOperations({
         if (sequence !== loadSequence.current) return
         announceCompletedBuilds(nextState)
         setState(nextState)
+        setHistoryLoaded(false)
       } catch (reason) {
         if (sequence !== loadSequence.current) return
         setError(
@@ -167,10 +170,10 @@ export function ServiceOperations({
     setState(undefined)
     setLoading(true)
     setError('')
+    setHistoryLoaded(false)
     previousBuilds.current = new Map()
     buildsInitialized.current = false
     void load()
-    const interval = window.setInterval(() => void load(true), 15_000)
     const refresh = (event: Event) => {
       const detail = (
         event as CustomEvent<{
@@ -194,12 +197,87 @@ export function ServiceOperations({
     window.addEventListener('production-release-created', refresh)
     window.addEventListener('service-refresh-requested', refresh)
     return () => {
-      window.clearInterval(interval)
       window.removeEventListener('staging-release-created', refresh)
       window.removeEventListener('production-release-created', refresh)
       window.removeEventListener('service-refresh-requested', refresh)
     }
   }, [announceCompletedBuilds, load, repository])
+
+  useEffect(() => {
+    if (!state) return
+    const activeReleases = [
+      ...state.stagingReleases,
+      ...state.productionReleases,
+    ]
+      .filter((release) =>
+        ['starting', 'running'].includes(release.buildStatus),
+      )
+      .map((release) => ({
+        repository,
+        tag: release.tag,
+        createdAt: release.createdAt,
+      }))
+    if (activeReleases.length === 0) return
+
+    let active = true
+    let running = false
+    let timeout: number | undefined
+    const schedule = () => {
+      if (!active || document.hidden) return
+      timeout = window.setTimeout(() => void poll(), 15_000)
+    }
+    const poll = async () => {
+      if (!active || running || document.hidden) return
+      running = true
+      try {
+        const results = await api.releaseBuildStatuses(activeReleases)
+        if (!active) return
+        const byTag = new Map(results.map((result) => [result.tag, result]))
+        const nextState: RepositoryReleaseState = {
+          ...state,
+          stagingReleases: state.stagingReleases.map((release) => {
+            const result = byTag.get(release.tag)
+            return result
+              ? {
+                  ...release,
+                  buildStatus: result.buildStatus,
+                  runs: result.runs,
+                }
+              : release
+          }),
+          productionReleases: state.productionReleases.map((release) => {
+            const result = byTag.get(release.tag)
+            return result
+              ? {
+                  ...release,
+                  buildStatus: result.buildStatus,
+                  runs: result.runs,
+                }
+              : release
+          }),
+          fetchedAt: new Date().toISOString(),
+        }
+        announceCompletedBuilds(nextState)
+        setState(nextState)
+      } catch {
+        // Keep the last known build state and retry on the next scheduled poll.
+      } finally {
+        running = false
+        schedule()
+      }
+    }
+    const visibilityChanged = () => {
+      if (timeout) window.clearTimeout(timeout)
+      if (!document.hidden) void poll()
+    }
+    document.addEventListener('visibilitychange', visibilityChanged)
+    schedule()
+    return () => {
+      active = false
+      if (timeout) window.clearTimeout(timeout)
+      document.removeEventListener('visibilitychange', visibilityChanged)
+    }
+  }, [announceCompletedBuilds, repository, state])
 
   useEffect(() => {
     if (!notificationToast) return
@@ -231,6 +309,32 @@ export function ServiceOperations({
       setNotificationToast({
         message: 'Browser notifications are blocked.',
       })
+    }
+  }
+
+  async function loadReleaseHistory() {
+    setHistoryLoading(true)
+    setError('')
+    try {
+      const history = await api.releaseHistory(repository)
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              stagingReleases: history.stagingReleases,
+              productionReleases: history.productionReleases,
+            }
+          : current,
+      )
+      setHistoryLoaded(true)
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not load release history.',
+      )
+    } finally {
+      setHistoryLoading(false)
     }
   }
 
@@ -351,6 +455,18 @@ export function ServiceOperations({
             <h3>Staging releases</h3>
           </div>
           <div className="operation-heading-actions">
+            <button
+              className="notification-toggle"
+              type="button"
+              onClick={() => void loadReleaseHistory()}
+              disabled={historyLoading || historyLoaded}
+            >
+              {historyLoading
+                ? 'Loading history…'
+                : historyLoaded
+                  ? 'History loaded'
+                  : 'Show history'}
+            </button>
             <button
               className={`notification-toggle ${browserNotifications ? 'active' : ''}`}
               type="button"

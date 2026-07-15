@@ -479,6 +479,11 @@ export function ReleaseOverview({
     Record<string, DeploymentFreshness>
   >({})
   const [freshnessLoading, setFreshnessLoading] = useState(false)
+  const repositoryScope =
+    dashboard?.services
+      .map((service) => service.repository)
+      .sort()
+      .join('\n') ?? ''
 
   useEffect(() => {
     const syncView = () =>
@@ -499,8 +504,7 @@ export function ReleaseOverview({
   }
 
   useEffect(() => {
-    const repositories =
-      dashboard?.services.map((service) => service.repository) ?? []
+    const repositories = repositoryScope ? repositoryScope.split('\n') : []
     setRepositoryRisks({})
     if (repositories.length === 0) {
       setRisksLoading(false)
@@ -546,11 +550,10 @@ export function ReleaseOverview({
     return () => {
       active = false
     }
-  }, [dashboard])
+  }, [repositoryScope])
 
   useEffect(() => {
-    const repositories =
-      dashboard?.services.map((service) => service.repository) ?? []
+    const repositories = repositoryScope ? repositoryScope.split('\n') : []
     setDeploymentFreshness({})
     if (repositories.length === 0) {
       setFreshnessLoading(false)
@@ -590,7 +593,7 @@ export function ReleaseOverview({
     return () => {
       active = false
     }
-  }, [dashboard])
+  }, [repositoryScope])
 
   const filteredServices = useMemo(() => {
     if (!dashboard) return []

@@ -13,6 +13,7 @@ import {
 } from './connectionStore.js'
 import { ProviderError } from './errors.js'
 import {
+  clearGitHubProviderCache,
   createProductionRelease,
   createStagingRelease,
   testGitHubConnection,
@@ -21,6 +22,8 @@ import {
   clearRepositoryCaches,
   createBackMergePullRequest,
   createPromotionPullRequest,
+  getReleaseBuildStatuses,
+  getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   getRepositoryRisks,
   mergeBackMergePullRequest,
@@ -138,6 +141,21 @@ const productionDeploymentSchema = z
 const repositoryRisksSchema = z.object({
   repositories: z.array(repositorySchema).max(100),
 })
+const releaseBuildStatusesSchema = z.object({
+  releases: z
+    .array(
+      z.object({
+        repository: repositorySchema,
+        tag: z
+          .string()
+          .regex(
+            /^(?:v(?:-prod)?-\d{2}\.\d{4}\.\d+|v-(?:qa|s[1-6])-v\d{2}\.\d{4}\.\d+)$/,
+          ),
+        createdAt: z.iso.datetime(),
+      }),
+    )
+    .max(100),
+})
 const serviceRefreshSchema = z.object({
   repository: repositorySchema,
   issueKeys: z
@@ -212,6 +230,7 @@ export function createApp() {
           ]
         : []),
     ])
+    clearGitHubProviderCache()
     clearReleaseCache()
     setConnection(config)
     response.json({
@@ -226,6 +245,7 @@ export function createApp() {
   })
 
   app.delete('/api/connection', (_request, response) => {
+    clearGitHubProviderCache()
     clearConnection()
     clearReleaseCache()
     response.status(204).end()
@@ -307,7 +327,11 @@ export function createApp() {
         return
       }
       const config = requireConnection()
-      clearRepositoryCaches(config, parsed.data.repository, true)
+      clearRepositoryCaches(
+        config,
+        parsed.data.repository,
+        parsed.data.issueKeys,
+      )
       const [service, state, deploymentResult] = await Promise.all([
         refreshServiceRelease(
           config,
@@ -345,14 +369,15 @@ export function createApp() {
       } satisfies ApiErrorBody)
       return
     }
-    response.status(201).json(
-      await createStagingRelease(
-        requireConnection(),
-        parsed.data.repository,
-        parsed.data.environment,
-        parsed.data.date,
-      ),
+    const config = requireConnection()
+    const release = await createStagingRelease(
+      config,
+      parsed.data.repository,
+      parsed.data.environment,
+      parsed.data.date,
     )
+    clearRepositoryCaches(config, parsed.data.repository)
+    response.status(201).json(release)
   })
 
   app.post('/api/github/production-releases', async (request, response) => {
@@ -368,14 +393,15 @@ export function createApp() {
       } satisfies ApiErrorBody)
       return
     }
-    response.status(201).json(
-      await createProductionRelease(
-        requireConnection(),
-        parsed.data.repository,
-        parsed.data.date,
-        parsed.data.operationId,
-      ),
+    const config = requireConnection()
+    const release = await createProductionRelease(
+      config,
+      parsed.data.repository,
+      parsed.data.date,
+      parsed.data.operationId,
     )
+    clearRepositoryCaches(config, parsed.data.repository)
+    response.status(201).json(release)
   })
 
   app.get('/api/github/repository-state', async (request, response) => {
@@ -402,6 +428,41 @@ export function createApp() {
       deployedTags: deploymentResult.deployedTags,
       deploymentLookupFailed: deploymentResult.failed,
     })
+  })
+
+  app.get('/api/github/release-history', async (request, response) => {
+    const parsed = repositorySchema.safeParse(request.query.repository)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORY',
+          message: 'Repository must use the owner/name format.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json(
+      await getRepositoryReleaseHistory(requireConnection(), parsed.data),
+    )
+  })
+
+  app.post('/api/github/release-build-statuses', async (request, response) => {
+    const parsed = releaseBuildStatusesSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_RELEASE_BUILD_STATUSES',
+          message: 'Valid repositories, tags, and creation times are required.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json(
+      await getReleaseBuildStatuses(
+        requireConnection(),
+        parsed.data.releases,
+      ),
+    )
   })
 
   app.post('/api/github/repository-risks', async (request, response) => {
@@ -456,6 +517,7 @@ export function createApp() {
     clearRepositoryCaches(
       requireConnection(),
       parsed.data.repository,
+      [],
       true,
     )
     response.status(204).end()

@@ -60,6 +60,9 @@ describe('local API', () => {
     const stateResponse = await request(app)
       .get('/api/github/repository-state')
       .query({ repository: '../outside' })
+    const historyResponse = await request(app)
+      .get('/api/github/release-history')
+      .query({ repository: '../outside' })
     const createResponse = await request(app)
       .post('/api/github/promotion-pull-requests')
       .send({
@@ -74,6 +77,7 @@ describe('local API', () => {
       })
 
     expect(stateResponse.body.error.code).toBe('INVALID_REPOSITORY')
+    expect(historyResponse.body.error.code).toBe('INVALID_REPOSITORY')
     expect(createResponse.body.error.code).toBe('INVALID_PROMOTION')
     expect(mergeResponse.body.error.code).toBe('INVALID_PROMOTION_MERGE')
   })
@@ -113,6 +117,24 @@ describe('local API', () => {
       .send({ repositories: ['../outside'] })
     expect(response.status).toBe(400)
     expect(response.body.error.code).toBe('INVALID_REPOSITORIES')
+  })
+
+  it('validates lightweight release build status requests', async () => {
+    const response = await request(createApp())
+      .post('/api/github/release-build-statuses')
+      .send({
+        releases: [
+          {
+            repository: 'Orange-Health/accounts',
+            tag: 'not-a-release-tag',
+            createdAt: 'yesterday',
+          },
+        ],
+      })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe(
+      'INVALID_RELEASE_BUILD_STATUSES',
+    )
   })
 
   it('validates deployment freshness requests', async () => {

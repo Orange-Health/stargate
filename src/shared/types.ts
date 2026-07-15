@@ -184,6 +184,17 @@ export type WorkflowRun = {
   updatedAt: string
 }
 
+export type ReleaseBuildStatusInput = {
+  repository: string
+  tag: string
+  createdAt: string
+}
+
+export type ReleaseBuildStatusResult = ReleaseBuildStatusInput & {
+  buildStatus: BuildStatus
+  runs: WorkflowRun[]
+}
+
 export type TrackedStagingRelease = {
   id: number
   tag: string
@@ -267,6 +278,12 @@ export type RepositoryReleaseState = {
   pendingBackMerges: PendingBackMerge[]
   jenkinsServices: string[]
   fetchedAt: string
+}
+
+export type RepositoryReleaseHistory = {
+  repository: string
+  stagingReleases: TrackedStagingRelease[]
+  productionReleases: TrackedProductionRelease[]
 }
 
 export type ServiceRefreshResult = {

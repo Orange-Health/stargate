@@ -132,6 +132,8 @@ describe('ReleaseDayOperations', () => {
       ).toBeEnabled(),
     )
     expect(screen.getByText('Merged PR #12.')).toBeVisible()
+    expect(api.refreshRepository).not.toHaveBeenCalled()
+    expect(api.repositoryState).toHaveBeenCalledTimes(2)
   })
 
   it('creates an idempotent production release and unlocks deploy after success', async () => {

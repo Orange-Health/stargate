@@ -237,7 +237,7 @@ export function ReleaseDayOperations({
   )
 
   const refreshStates = useCallback(
-    async (silent = false) => {
+    async (silent = false, force = false) => {
       const repositories = sessionRef.current.selectedRepositories
       if (repositories.length === 0) return
       const sequence = ++loadSequence.current
@@ -245,6 +245,7 @@ export function ReleaseDayOperations({
       const next: Record<string, RepositoryReleaseState | undefined> = {}
       await mapConcurrent(repositories, async (repository) => {
         try {
+          if (force) await api.refreshRepository(repository)
           next[repository] = await api.repositoryState(repository)
         } catch (reason) {
           if (!silent) {
@@ -266,12 +267,89 @@ export function ReleaseDayOperations({
 
   useEffect(() => {
     void refreshStates()
-    const interval = window.setInterval(
-      () => void refreshStates(true),
-      POLL_INTERVAL,
-    )
-    return () => window.clearInterval(interval)
   }, [refreshStates])
+
+  useEffect(() => {
+    const activeReleases = selected.flatMap((repository) => {
+      const release = session.repositories[repository]?.productionRelease
+      if (!release) return []
+      const status = states[repository]?.productionReleases.find(
+        (item) => item.tag === release.tag,
+      )?.buildStatus
+      return status && ['succeeded', 'failed', 'canceled'].includes(status)
+        ? []
+        : [
+            {
+              repository,
+              tag: release.tag,
+              createdAt: release.createdAt,
+            },
+          ]
+    })
+    if (activeReleases.length === 0) return
+
+    let active = true
+    let running = false
+    let timeout: number | undefined
+    const schedule = () => {
+      if (!active || document.hidden) return
+      timeout = window.setTimeout(() => void poll(), POLL_INTERVAL)
+    }
+    const poll = async () => {
+      if (!active || running || document.hidden) return
+      running = true
+      try {
+        const results = await api.releaseBuildStatuses(activeReleases)
+        if (!active) return
+        setStates((current) => {
+          const next = { ...current }
+          for (const result of results) {
+            const repositoryState = next[result.repository]
+            const created =
+              session.repositories[result.repository]?.productionRelease
+            if (!repositoryState || !created) continue
+            const tracked = repositoryState.productionReleases.find(
+              (release) => release.tag === result.tag,
+            )
+            const updated = {
+              id: tracked?.id ?? created.id,
+              tag: result.tag,
+              url: tracked?.url ?? created.url,
+              createdAt: result.createdAt,
+              buildStatus: result.buildStatus,
+              runs: result.runs,
+            }
+            next[result.repository] = {
+              ...repositoryState,
+              productionReleases: tracked
+                ? repositoryState.productionReleases.map((release) =>
+                    release.tag === result.tag ? updated : release,
+                  )
+                : [updated, ...repositoryState.productionReleases],
+              fetchedAt: new Date().toISOString(),
+            }
+          }
+          return next
+        })
+      } catch {
+        // Keep the last known build state and retry on the next scheduled poll.
+      } finally {
+        running = false
+        schedule()
+      }
+    }
+    const visibilityChanged = () => {
+      if (timeout) window.clearTimeout(timeout)
+      if (!document.hidden) void poll()
+    }
+    document.addEventListener('visibilitychange', visibilityChanged)
+    schedule()
+    return () => {
+      active = false
+      if (timeout) window.clearTimeout(timeout)
+      document.removeEventListener('visibilitychange', visibilityChanged)
+    }
+  }, [selected, session.repositories, states])
 
   const everySelected = useCallback(
     (predicate: (repository: string) => boolean) =>
@@ -375,9 +453,6 @@ export function ReleaseDayOperations({
       })
       if (!result.merged) throw new Error(result.message || 'GitHub did not merge the PR.')
       log('success', `Merged PR #${step.pullRequest.number}.`, repository)
-      await api.refreshRepository(repository)
-      const next = await api.repositoryState(repository)
-      setStates((current) => ({ ...current, [repository]: next }))
     })
   }
 
@@ -455,7 +530,7 @@ export function ReleaseDayOperations({
                 <button
                   className="secondary-button"
                   type="button"
-                  onClick={() => void refreshStates()}
+                  onClick={() => void refreshStates(false, true)}
                   disabled={refreshing || Boolean(busyAction)}
                 >
                   {refreshing ? 'Refreshing…' : '↻ Refresh status'}

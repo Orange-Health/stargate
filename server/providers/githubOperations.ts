@@ -9,6 +9,9 @@ import type {
   PromotionPullRequest,
   PromotionRoute,
   PromotionStep,
+  ReleaseBuildStatusInput,
+  ReleaseBuildStatusResult,
+  RepositoryReleaseHistory,
   RepositoryReleaseState,
   RepositoryRisk,
   ReviewDecision,
@@ -79,6 +82,7 @@ type GitHubChecks = {
 const stagingTagPattern =
   /^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/
 const RISK_CACHE_MS = 45_000
+const REPOSITORY_STATE_CACHE_MS = 30_000
 type BackMergeRiskStatus = {
   pendingPulls: PendingBackMerge[]
   outdated: boolean
@@ -91,16 +95,29 @@ const qaBuildCache = new Map<
   string,
   { expiresAt: number; value: Promise<string | undefined> }
 >()
+const repositoryStateCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<RepositoryReleaseState> }
+>()
+const terminalBuildCache = new Map<string, WorkflowRun[]>()
 
 export function clearRepositoryCaches(
   config: ConnectionConfig,
   repository: string,
-  includeSearches = false,
+  searchIssueKeys: string[] = [],
+  includeBuilds = false,
 ) {
-  clearGitHubProviderCache(repository, includeSearches)
+  clearGitHubProviderCache(repository, searchIssueKeys)
   const key = `${config.githubOrg}:${repository}`.toLowerCase()
   riskCache.delete(key)
   qaBuildCache.delete(key)
+  repositoryStateCache.delete(key)
+  if (includeBuilds) {
+    const buildPrefix = `${key}:`
+    for (const buildKey of terminalBuildCache.keys()) {
+      if (buildKey.startsWith(buildPrefix)) terminalBuildCache.delete(buildKey)
+    }
+  }
 }
 
 function assertConnectedRepository(
@@ -163,6 +180,10 @@ async function listReleaseRuns(
   repository: string,
   release: GitHubRelease,
 ): Promise<WorkflowRun[]> {
+  const cacheKey =
+    `${config.githubOrg}:${repository}:${release.tag_name}`.toLowerCase()
+  const cached = terminalBuildCache.get(cacheKey)
+  if (cached) return cached
   const query = new URLSearchParams({
     branch: release.tag_name,
     per_page: '100',
@@ -172,7 +193,7 @@ async function listReleaseRuns(
     `/repos/${repositoryPath(repository)}/actions/runs?${query}`,
   )
 
-  return response.workflow_runs
+  const runs = response.workflow_runs
     .filter(
       (run) =>
         run.head_branch === release.tag_name ||
@@ -188,11 +209,49 @@ async function listReleaseRuns(
       startedAt: run.run_started_at,
       updatedAt: run.updated_at,
     }))
+  if (
+    ['succeeded', 'failed', 'canceled'].includes(aggregateBuildStatus(runs))
+  ) {
+    terminalBuildCache.set(cacheKey, runs)
+  }
+  return runs
+}
+
+export async function getReleaseBuildStatuses(
+  config: ConnectionConfig,
+  releases: ReleaseBuildStatusInput[],
+): Promise<ReleaseBuildStatusResult[]> {
+  const results: ReleaseBuildStatusResult[] = new Array(releases.length)
+  let cursor = 0
+  async function worker() {
+    while (cursor < releases.length) {
+      const index = cursor++
+      const release = releases[index]
+      assertConnectedRepository(config, release.repository)
+      const runs = await listReleaseRuns(config, release.repository, {
+        id: 0,
+        tag_name: release.tag,
+        html_url: '',
+        prerelease: false,
+        created_at: release.createdAt,
+      })
+      results[index] = {
+        ...release,
+        buildStatus: aggregateBuildStatus(runs),
+        runs,
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(3, releases.length) }, () => worker()),
+  )
+  return results
 }
 
 async function listTrackedReleases(
   config: ConnectionConfig,
   repository: string,
+  limit = 3,
 ): Promise<{
   stagingReleases: TrackedStagingRelease[]
   productionReleases: TrackedProductionRelease[]
@@ -206,7 +265,7 @@ async function listTrackedReleases(
       (release) =>
         release.prerelease && stagingTagPattern.test(release.tag_name),
     )
-    .slice(0, 12)
+    .slice(0, limit)
 
   const production = releases
     .filter(
@@ -214,7 +273,7 @@ async function listTrackedReleases(
         !release.prerelease &&
         /^v(?:-prod)?-\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
     )
-    .slice(0, 12)
+    .slice(0, limit)
 
   const stagingReleases = await Promise.all(
     staging.map(async (release) => {
@@ -246,6 +305,17 @@ async function listTrackedReleases(
     }),
   )
   return { stagingReleases, productionReleases }
+}
+
+export async function getRepositoryReleaseHistory(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<RepositoryReleaseHistory> {
+  assertConnectedRepository(config, repository)
+  return {
+    repository,
+    ...(await listTrackedReleases(config, repository, 12)),
+  }
 }
 
 export async function getLatestSuccessfulQaTag(
@@ -481,7 +551,7 @@ async function backMergeStep(
   }
 }
 
-export async function getRepositoryReleaseState(
+async function loadRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
 ): Promise<RepositoryReleaseState> {
@@ -553,6 +623,24 @@ export async function getRepositoryReleaseState(
     jenkinsServices: servicesForRepository(repository),
     fetchedAt: new Date().toISOString(),
   }
+}
+
+export function getRepositoryReleaseState(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<RepositoryReleaseState> {
+  assertConnectedRepository(config, repository)
+  const key = `${config.githubOrg}:${repository}`.toLowerCase()
+  const cached = repositoryStateCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+
+  const value = loadRepositoryReleaseState(config, repository)
+  repositoryStateCache.set(key, {
+    expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
+    value,
+  })
+  value.catch(() => repositoryStateCache.delete(key))
+  return value
 }
 
 export async function assertProductionBranchesIdentical(
@@ -697,6 +785,7 @@ export async function createPromotionPullRequest(
       }),
     },
   )
+  clearRepositoryCaches(config, repository)
   return promotionPullDetails(config, repository, created)
 }
 

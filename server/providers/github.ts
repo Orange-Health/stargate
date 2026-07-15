@@ -65,6 +65,18 @@ export type GitHubDiscovery = {
 
 let latestRateLimit: RateLimit | undefined
 const PROVIDER_CACHE_MS = 30_000
+const CONDITIONAL_CACHE_MAX_ENTRIES = 2_000
+type ConditionalCacheEntry = {
+  etag: string
+  body: unknown
+}
+const conditionalCaches = new WeakMap<
+  ConnectionConfig,
+  Map<string, ConditionalCacheEntry>
+>()
+const knownConditionalCaches = new Set<
+  Map<string, ConditionalCacheEntry>
+>()
 const pullCache = new Map<
   string,
   { expiresAt: number; value: Promise<PullRequest> }
@@ -77,20 +89,70 @@ const searchCache = new Map<
   }
 >()
 
+function conditionalCache(config: ConnectionConfig) {
+  let cache = conditionalCaches.get(config)
+  if (!cache) {
+    cache = new Map()
+    conditionalCaches.set(config, cache)
+  }
+  knownConditionalCaches.add(cache)
+  return cache
+}
+
+function cacheConditionalResponse(
+  cache: Map<string, ConditionalCacheEntry>,
+  key: string,
+  entry: ConditionalCacheEntry,
+) {
+  cache.delete(key)
+  cache.set(key, entry)
+  if (cache.size > CONDITIONAL_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value
+    if (oldestKey) cache.delete(oldestKey)
+  }
+}
+
 export function clearGitHubProviderCache(
   repository?: string,
-  includeSearches = false,
+  searchIssueKeys: string[] = [],
 ) {
   if (!repository) {
     pullCache.clear()
     searchCache.clear()
+    for (const cache of knownConditionalCaches) cache.clear()
+    knownConditionalCaches.clear()
+    githubRequestScheduler.reset()
     return
   }
   const prefix = `${repository.toLowerCase()}#`
   for (const key of pullCache.keys()) {
     if (key.startsWith(prefix)) pullCache.delete(key)
   }
-  if (includeSearches) searchCache.clear()
+  const normalizedIssueKeys = searchIssueKeys.map((key) => key.toLowerCase())
+  for (const key of searchCache.keys()) {
+    if (
+      normalizedIssueKeys.some((issueKey) =>
+        key.toLowerCase().endsWith(`:${issueKey}`),
+      )
+    ) {
+      searchCache.delete(key)
+    }
+  }
+  const repositoryMarker = `/repos/${repository.toLowerCase()}`
+  for (const cache of knownConditionalCaches) {
+    for (const key of cache.keys()) {
+      const normalized = key.toLowerCase()
+      if (
+        normalized.includes(repositoryMarker) ||
+        (normalized.includes('/search/') &&
+          normalizedIssueKeys.some((issueKey) =>
+            normalized.includes(issueKey),
+          ))
+      ) {
+        cache.delete(key)
+      }
+    }
+  }
 }
 
 function githubHeaders(config: ConnectionConfig) {
@@ -101,20 +163,184 @@ function githubHeaders(config: ConnectionConfig) {
   }
 }
 
+type ScheduledGitHubRequest = {
+  id: number
+  method: string
+  task: () => Promise<Response>
+  resolve: (response: Response) => void
+  reject: (error: unknown) => void
+}
+
+const MAX_CONCURRENT_GITHUB_READS = 3
+const MUTATION_PAUSE_MS = 1_000
+const MAX_GITHUB_RETRIES = 2
+
+function retryAfterMs(response: Response) {
+  const value = response.headers.get('retry-after')
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000)
+  const date = Date.parse(value)
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now())
+}
+
+async function rateLimitDelay(response: Response, attempt: number) {
+  if (response.status !== 429 && response.status !== 403) return undefined
+  const retryAfter = retryAfterMs(response)
+  if (retryAfter !== undefined) return retryAfter
+
+  if (response.headers.get('x-ratelimit-remaining') === '0') {
+    const reset = Number(response.headers.get('x-ratelimit-reset'))
+    if (Number.isFinite(reset)) {
+      return Math.max(0, reset * 1_000 - Date.now())
+    }
+  }
+
+  if (response.status === 403) {
+    const detail = await response.clone().text().catch(() => '')
+    if (!/secondary rate limit|abuse detection/i.test(detail)) return undefined
+  }
+  return 60_000 * 2 ** attempt
+}
+
+class GitHubRequestScheduler {
+  private queue: ScheduledGitHubRequest[] = []
+  private activeReads = 0
+  private mutationActive = false
+  private lastMutationFinishedAt = 0
+  private blockedUntil = 0
+  private pumpTimer?: ReturnType<typeof setTimeout>
+  private nextId = 0
+
+  schedule(method: string, task: () => Promise<Response>) {
+    return new Promise<Response>((resolve, reject) => {
+      this.queue.push({
+        id: this.nextId++,
+        method,
+        task,
+        resolve,
+        reject,
+      })
+      this.queue.sort(
+        (left, right) =>
+          Number(left.method === 'GET') - Number(right.method === 'GET') ||
+          left.id - right.id,
+      )
+      this.pump()
+    })
+  }
+
+  reset() {
+    if (this.queue.length > 0 || this.activeReads > 0 || this.mutationActive) {
+      return
+    }
+    this.blockedUntil = 0
+    this.lastMutationFinishedAt = 0
+    if (this.pumpTimer) clearTimeout(this.pumpTimer)
+    this.pumpTimer = undefined
+  }
+
+  private schedulePump(delay: number) {
+    if (this.pumpTimer) clearTimeout(this.pumpTimer)
+    this.pumpTimer = setTimeout(() => {
+      this.pumpTimer = undefined
+      this.pump()
+    }, Math.max(1, delay))
+  }
+
+  private pump() {
+    if (this.pumpTimer) return
+    const blockedFor = this.blockedUntil - Date.now()
+    if (blockedFor > 0) {
+      this.schedulePump(blockedFor)
+      return
+    }
+    if (this.mutationActive) return
+
+    const mutationIndex = this.queue.findIndex((item) => item.method !== 'GET')
+    if (mutationIndex >= 0) {
+      if (this.activeReads > 0) return
+      const spacing = this.lastMutationFinishedAt + MUTATION_PAUSE_MS - Date.now()
+      if (spacing > 0) {
+        this.schedulePump(spacing)
+        return
+      }
+      const [item] = this.queue.splice(mutationIndex, 1)
+      this.mutationActive = true
+      void this.run(item, true)
+      return
+    }
+
+    while (
+      this.activeReads < MAX_CONCURRENT_GITHUB_READS &&
+      this.queue.length > 0
+    ) {
+      const item = this.queue.shift()!
+      this.activeReads += 1
+      void this.run(item, false)
+    }
+  }
+
+  private async execute(item: ScheduledGitHubRequest) {
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await item.task()
+      const rateDelay = await rateLimitDelay(response, attempt)
+      const transientDelay =
+        item.method === 'GET' && response.status >= 500
+          ? 1_000 * 2 ** attempt
+          : undefined
+      const delay = rateDelay ?? transientDelay
+      if (delay === undefined || attempt >= MAX_GITHUB_RETRIES) {
+        return response
+      }
+      this.blockedUntil = Math.max(this.blockedUntil, Date.now() + delay)
+      await new Promise<void>((resolve) => setTimeout(resolve, delay))
+    }
+  }
+
+  private async run(item: ScheduledGitHubRequest, mutation: boolean) {
+    try {
+      item.resolve(await this.execute(item))
+    } catch (error) {
+      item.reject(error)
+    } finally {
+      if (mutation) {
+        this.mutationActive = false
+        this.lastMutationFinishedAt = Date.now()
+      } else {
+        this.activeReads -= 1
+      }
+      this.pump()
+    }
+  }
+}
+
+const githubRequestScheduler = new GitHubRequestScheduler()
+
 async function githubFetch<T>(
   config: ConnectionConfig,
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(`https://api.github.com${path}`, {
-    ...init,
-    headers: {
-      ...githubHeaders(config),
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...init?.headers,
-    },
-    signal: AbortSignal.timeout(20_000),
-  })
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const cache = conditionalCache(config)
+  const cacheKey = method === 'GET' && !init?.body ? path : undefined
+  const cached = cacheKey ? cache.get(cacheKey) : undefined
+  const headers = new Headers(githubHeaders(config))
+  if (init?.body) headers.set('Content-Type', 'application/json')
+  if (init?.headers) {
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+  }
+  if (cached && !headers.has('If-None-Match')) {
+    headers.set('If-None-Match', cached.etag)
+  }
+  const response = await githubRequestScheduler.schedule(method, () =>
+    fetch(`https://api.github.com${path}`, {
+      ...init,
+      headers,
+      signal: AbortSignal.timeout(20_000),
+    }),
+  )
 
   const remaining = response.headers.get('x-ratelimit-remaining')
   const limit = response.headers.get('x-ratelimit-limit')
@@ -127,11 +353,21 @@ async function githubFetch<T>(
     }
   }
 
+  if (response.status === 304 && cached) {
+    cache.delete(cacheKey!)
+    cache.set(cacheKey!, cached)
+    return cached.body as T
+  }
   if (!response.ok) {
     throw await providerResponseError(response, 'github')
   }
 
-  return (await response.json()) as T
+  const body = (await response.json()) as T
+  const etag = response.headers.get('etag')
+  if (cacheKey && etag) {
+    cacheConditionalResponse(cache, cacheKey, { etag, body })
+  }
+  return body
 }
 
 export function repositoryPath(repository: string) {
@@ -401,6 +637,33 @@ export function titleContainsIssueKey(title: string, issueKey: string) {
   return new RegExp(`(^|[^A-Z0-9])${escaped}(?=$|[^A-Z0-9])`, 'i').test(title)
 }
 
+export function developmentPullRequests(summary?: string) {
+  if (!summary) return []
+  const normalized = summary
+    .replaceAll('\\/', '/')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&amp;', '&')
+  const matches = new Map<
+    string,
+    { repository: string; number: number }
+  >()
+  const patterns = [
+    /https?:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)/gi,
+    /https?:\/\/api\.github\.com\/repos\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pulls\/(\d+)/gi,
+  ]
+  for (const pattern of patterns) {
+    for (const match of normalized.matchAll(pattern)) {
+      const repository = `${match[1]}/${match[2]}`
+      const number = Number(match[3])
+      matches.set(`${repository.toLowerCase()}#${number}`, {
+        repository,
+        number,
+      })
+    }
+  }
+  return [...matches.values()]
+}
+
 function reviewDecision(reviews: GitHubReview[]): ReviewDecision {
   const latestByUser = new Map<string, GitHubReview>()
   for (const review of reviews) {
@@ -585,31 +848,60 @@ async function searchIssueKey(
 
 export async function discoverPullRequests(
   config: ConnectionConfig,
-  issueKeys: string[],
+  issues: Array<{ key: string; developmentSummary?: string }>,
   reportProgress?: (progress: DashboardProgress) => void,
 ): Promise<GitHubDiscovery> {
   latestRateLimit = undefined
   const byIssue = new Map<string, PullRequest[]>(
-    issueKeys.map((key) => [key, []]),
+    issues.map((issue) => [issue.key, []]),
   )
   const warnings: string[] = []
+  const linkedByIssue = new Map(
+    issues.map((issue) => [
+      issue.key,
+      developmentPullRequests(issue.developmentSummary).filter(
+        (pull) =>
+          pull.repository.split('/')[0].toLowerCase() ===
+          config.githubOrg.toLowerCase(),
+      ),
+    ]),
+  )
+  const issuesToSearch = issues.filter(
+    (issue) => linkedByIssue.get(issue.key)?.length === 0,
+  )
   let searchesStarted = 0
-  const searches = await mapConcurrent(issueKeys, 6, (key) => {
+  const searches = await mapConcurrent(issuesToSearch, 6, (issue) => {
     searchesStarted += 1
     reportProgress?.({
       phase: 'github-search',
-      message: `Searching GitHub for pull requests linked to ${key}…`,
+      message: `Searching GitHub for pull requests linked to ${issue.key}…`,
       current: searchesStarted,
-      total: issueKeys.length,
+      total: issuesToSearch.length,
     })
-    return searchIssueKey(config, key)
+    return searchIssueKey(config, issue.key)
   })
   const uniquePulls = new Map<string, GitHubSearchItem>()
   const pullToIssues = new Map<string, Set<string>>()
 
+  for (const [issueKey, linkedPulls] of linkedByIssue) {
+    for (const linked of linkedPulls) {
+      const id = `${linked.repository}#${linked.number}`
+      uniquePulls.set(id, {
+        id: linked.number,
+        number: linked.number,
+        title: issueKey,
+        repository_url: `https://api.github.com/repos/${linked.repository}`,
+      })
+      const matches = pullToIssues.get(id) ?? new Set<string>()
+      matches.add(issueKey)
+      pullToIssues.set(id, matches)
+    }
+  }
   searches.forEach((result, index) => {
     if (result.status === 'rejected') {
-      warnings.push(`Could not search GitHub for ${issueKeys[index]}.`)
+      warnings.push(
+        `Could not search GitHub for ${issuesToSearch[index].key}.`,
+      )
       return
     }
     for (const { issueKey, item } of result.value) {

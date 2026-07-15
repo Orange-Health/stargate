@@ -126,7 +126,10 @@ export async function aggregateRelease(
   })
   const discovery = await discoverPullRequests(
     config,
-    issues.map((issue) => issue.key),
+    issues.map((issue) => ({
+      key: issue.key,
+      developmentSummary: issue.developmentSummary,
+    })),
     reportProgress,
   )
   reportProgress?.({
@@ -193,7 +196,10 @@ export async function refreshServiceRelease(
   )
   const discovery = await discoverPullRequests(
     config,
-    issues.map((issue) => issue.key),
+    issues.map((issue) => ({
+      key: issue.key,
+      developmentSummary: issue.developmentSummary,
+    })),
   )
   const items: ReleaseItem[] = []
   for (const issue of issues) {
