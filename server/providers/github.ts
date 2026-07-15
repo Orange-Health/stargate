@@ -303,6 +303,7 @@ export async function createProductionRelease(
   config: ConnectionConfig,
   repository: string,
   date: string,
+  operationId?: string,
 ): Promise<CreatedProductionRelease> {
   const [owner] = repository.split('/')
   if (owner.toLowerCase() !== config.githubOrg.toLowerCase()) {
@@ -312,6 +313,35 @@ export async function createProductionRelease(
   const path = repositoryPath(repository)
   await githubFetch(config, `/repos/${path}/branches/release`)
   const prefix = productionTagPrefix(repository, date)
+  const operationMarker = operationId
+    ? `<!-- release-desk-operation:${operationId} -->`
+    : undefined
+
+  if (operationMarker) {
+    const releases = await githubFetch<
+      Array<{
+        id: number
+        tag_name: string
+        target_commitish: string
+        html_url: string
+        created_at: string
+        body: string | null
+      }>
+    >(config, `/repos/${path}/releases?per_page=100`)
+    const existing = releases.find((release) =>
+      release.body?.includes(operationMarker),
+    )
+    if (existing) {
+      return {
+        id: existing.id,
+        repository,
+        tag: existing.tag_name,
+        sourceBranch: existing.target_commitish || 'release',
+        url: existing.html_url,
+        createdAt: existing.created_at,
+      }
+    }
+  }
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const tag = nextProductionTag(
@@ -333,6 +363,7 @@ export async function createProductionRelease(
           draft: false,
           prerelease: false,
           generate_release_notes: true,
+          ...(operationMarker ? { body: operationMarker } : {}),
         }),
       })
       return {

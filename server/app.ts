@@ -93,6 +93,7 @@ const repositorySchema = z
 const productionReleaseSchema = z.object({
   repository: repositorySchema,
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  operationId: z.uuid().optional(),
 })
 
 const promotionSchema = z.object({
@@ -372,6 +373,7 @@ export function createApp() {
         requireConnection(),
         parsed.data.repository,
         parsed.data.date,
+        parsed.data.operationId,
       ),
     )
   })

@@ -12,6 +12,7 @@ import type {
 } from '../../shared/types'
 import { StagingReleaseDialog } from './StagingReleaseDialog'
 import { ProductionReleaseDialog } from './ProductionReleaseDialog'
+import { ReleaseDayOperations } from './ReleaseDayOperations'
 import { ServiceOperations } from './ServiceOperations'
 import { ThemeToggle } from '../theme/ThemeToggle'
 
@@ -458,6 +459,11 @@ export function ReleaseOverview({
     'all' | 'pending' | 'issues' | 'backmerges' | 'outdated'
   >('all')
   const [serviceSearch, setServiceSearch] = useState('')
+  const [releaseDayOpen, setReleaseDayOpen] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get('view') ===
+      'release-day',
+  )
   const [repositoryRisks, setRepositoryRisks] = useState<
     Record<
       string,
@@ -473,6 +479,24 @@ export function ReleaseOverview({
     Record<string, DeploymentFreshness>
   >({})
   const [freshnessLoading, setFreshnessLoading] = useState(false)
+
+  useEffect(() => {
+    const syncView = () =>
+      setReleaseDayOpen(
+        new URLSearchParams(window.location.search).get('view') ===
+          'release-day',
+      )
+    window.addEventListener('popstate', syncView)
+    return () => window.removeEventListener('popstate', syncView)
+  }, [])
+
+  function showReleaseDay(open: boolean) {
+    const url = new URL(window.location.href)
+    if (open) url.searchParams.set('view', 'release-day')
+    else url.searchParams.delete('view')
+    window.history.pushState({}, '', url)
+    setReleaseDayOpen(open)
+  }
 
   useEffect(() => {
     const repositories =
@@ -653,6 +677,37 @@ export function ReleaseOverview({
       }
     : undefined
 
+  if (releaseDayOpen && dashboard) {
+    return (
+      <div className="app-shell release-day-app-shell">
+        <header className="topbar">
+          <div className="brand">
+            <span className="brand-mark compact">RD</span>
+            <span>
+              <strong>Release Desk</strong>
+              <small>Release-day control room</small>
+            </span>
+          </div>
+          <div className="topbar-actions">
+            <ThemeToggle />
+            <span className="connection-dot" />
+            <span className="connected-label">
+              {connection.githubOrg} · {connection.projectKey}
+            </span>
+          </div>
+        </header>
+        <main className="release-day-page-shell">
+          <ReleaseDayOperations
+            key={dashboard.version.id}
+            dashboard={dashboard}
+            productionEnabled={Boolean(connection.productionEnabled)}
+            onClose={() => showReleaseDay(false)}
+          />
+        </main>
+      </div>
+    )
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -801,6 +856,24 @@ export function ReleaseOverview({
                 <strong>Partial GitHub data.</strong> {warning.message}
               </div>
             ))}
+
+            <section className="release-day-launcher">
+              <div>
+                <p className="eyebrow">Release-day automation</p>
+                <h2>Batch production rollout</h2>
+                <p>
+                  Promote selected services, create production releases, and
+                  monitor builds from a dedicated control room.
+                </p>
+              </div>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => showReleaseDay(true)}
+              >
+                Open release control room
+              </button>
+            </section>
 
             <div className="dashboard-grid">
               <section className="services-panel">

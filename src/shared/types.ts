@@ -145,6 +145,7 @@ export type CreateStagingReleaseInput = {
 export type CreateProductionReleaseInput = {
   repository: string
   date: string
+  operationId?: string
 }
 
 export type CreatedStagingRelease = {

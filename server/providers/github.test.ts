@@ -181,4 +181,49 @@ describe('production release tags', () => {
       generate_release_notes: true,
     })
   })
+
+  it('returns the release from an interrupted operation without duplicating it', async () => {
+    const operationId = '5ce8a585-87f7-4c58-8e4f-8a3dd49b16df'
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ name: 'release' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: 101,
+              tag_name: 'v-26.0714.3',
+              target_commitish: 'release',
+              html_url: 'https://github.test/releases/101',
+              created_at: '2026-07-14T12:05:00Z',
+              body: `<!-- release-desk-operation:${operationId} -->`,
+            },
+          ]),
+          { status: 200 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await createProductionRelease(
+      config,
+      'orange/service-api',
+      '2026-07-14',
+      operationId,
+    )
+
+    expect(result.tag).toBe('v-26.0714.3')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
 })

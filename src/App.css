@@ -2201,6 +2201,382 @@ label {
   font-size: 13px;
 }
 
+.release-day-launcher {
+  align-items: center;
+  background:
+    linear-gradient(115deg, rgb(29 53 91 / 96%), rgb(18 34 61 / 98%)),
+    var(--surface-strong);
+  border: 1px solid #2b4773;
+  border-radius: 14px;
+  color: var(--on-strong);
+  display: flex;
+  justify-content: space-between;
+  margin: 0 0 26px;
+  padding: 20px 24px;
+}
+
+.release-day-launcher h2 {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 500;
+  margin: 3px 0 5px;
+}
+
+.release-day-launcher > div > p:last-child,
+.release-day-header p {
+  color: #aeb8ca;
+  font-size: 12px;
+  margin: 0;
+}
+
+.release-day-launcher .primary-button {
+  flex: 0 0 auto;
+  margin-left: 24px;
+  max-width: 240px;
+  width: auto;
+}
+
+.release-day-app-shell {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.release-day-page-shell {
+  height: calc(100vh - 68px);
+  margin: 0 auto;
+  max-width: 1600px;
+  padding: 18px 28px 22px;
+}
+
+.release-day-page {
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 20px;
+  position: relative;
+  width: 100%;
+}
+
+.release-day-page > * {
+  flex-shrink: 0;
+}
+
+.release-day-header,
+.release-day-header-actions,
+.release-day-config,
+.release-day-step,
+.release-day-log > div {
+  align-items: center;
+  display: flex;
+}
+
+.release-day-header {
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding-right: 42px;
+}
+
+.release-day-header h2 {
+  font-family: var(--serif);
+  font-size: 30px;
+  font-weight: 500;
+  margin: 3px 0 5px;
+}
+
+.release-day-header-actions {
+  gap: 10px;
+}
+
+.release-day-config {
+  background: var(--paper-warm);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+}
+
+.release-day-config label {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  font-size: 11px;
+  gap: 9px;
+  margin: 0;
+}
+
+.release-day-config input[type='date'] {
+  min-height: 34px;
+  padding: 5px 8px;
+  width: auto;
+}
+
+.release-day-config > span {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.release-day-config .text-button {
+  margin-left: 0;
+}
+
+.release-day-steps {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 18px;
+}
+
+.release-day-step {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  gap: 10px;
+  min-height: 76px;
+  padding: 10px;
+}
+
+.release-day-step.locked {
+  background: var(--paper-warm);
+  opacity: 0.68;
+}
+
+.release-day-step > span:first-child {
+  align-items: center;
+  background: var(--surface-strong);
+  border-radius: 50%;
+  color: var(--on-strong);
+  display: flex;
+  flex: 0 0 28px;
+  font-family: var(--mono);
+  font-size: 11px;
+  height: 28px;
+  justify-content: center;
+}
+
+.release-day-step > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.release-day-step strong {
+  font-size: 12px;
+}
+
+.release-day-step small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.release-day-step .primary-button {
+  flex: 0 0 118px;
+  font-size: 10px;
+  max-width: 138px;
+  min-height: 34px;
+  padding: 0 10px;
+  width: auto;
+}
+
+.release-day-table-wrap {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.release-day-table {
+  border-collapse: collapse;
+  font-size: 11px;
+  width: 100%;
+}
+
+.release-day-table th {
+  background: var(--paper-warm);
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  position: sticky;
+  text-align: left;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 1;
+}
+
+.release-day-table th,
+.release-day-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  vertical-align: top;
+}
+
+.release-day-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.release-day-table tr.unselected {
+  opacity: 0.42;
+}
+
+.release-day-table td {
+  min-width: 140px;
+}
+
+.release-day-table td:first-child {
+  min-width: 38px;
+  width: 38px;
+}
+
+.release-day-table td:nth-child(2) {
+  min-width: 190px;
+}
+
+.release-day-table td > strong,
+.release-day-table td > small,
+.release-day-table td > a,
+.release-day-table td > span {
+  display: block;
+}
+
+.release-day-table td > small {
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.release-day-table td > a {
+  color: var(--green);
+  margin-bottom: 5px;
+  text-decoration: none;
+}
+
+.batch-status {
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-block !important;
+  font-size: 9px;
+  line-height: 1.35;
+  margin-top: 4px;
+  padding: 4px 7px;
+}
+
+.batch-status.success,
+.batch-status.succeeded {
+  background: rgb(34 197 94 / 12%);
+  color: var(--success);
+}
+
+.batch-status.error,
+.batch-status.failed,
+.batch-status.canceled {
+  background: rgb(239 68 68 / 12%);
+  color: var(--danger);
+}
+
+.batch-status.pending,
+.batch-status.starting,
+.batch-status.running {
+  background: rgb(245 158 11 / 12%);
+  color: var(--warning);
+}
+
+.release-day-error {
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.35;
+  margin-top: 5px;
+  max-width: 240px;
+}
+
+.release-day-log {
+  background: var(--surface-strong);
+  border-radius: 10px;
+  color: var(--on-strong);
+  display: flex;
+  flex-direction: column;
+  margin-top: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.release-day-log > div {
+  justify-content: space-between;
+}
+
+.release-day-log h3 {
+  font-size: 12px;
+  margin: 0;
+}
+
+.release-day-log > div > span,
+.release-day-log > p {
+  color: #aeb8ca;
+  font-size: 10px;
+}
+
+.release-day-log ol {
+  flex: 1;
+  list-style: none;
+  margin: 10px 0 0;
+  overflow: auto;
+  padding: 0;
+}
+
+.release-day-workspace {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 14px;
+  grid-template-columns: minmax(0, 3fr) minmax(220px, 1fr);
+  min-height: 320px;
+  overflow: hidden;
+}
+
+.release-day-log li {
+  align-items: baseline;
+  border-top: 1px solid #2b3a54;
+  display: grid;
+  font-size: 10px;
+  gap: 9px;
+  grid-template-columns: 72px 110px 1fr;
+  padding: 7px 0;
+}
+
+.release-day-log time,
+.release-day-log code {
+  color: #aeb8ca;
+}
+
+.release-day-log li.success span {
+  color: #8de0ad;
+}
+
+.release-day-log li.warning span {
+  color: #f4c56a;
+}
+
+.release-day-log li.error span {
+  color: #ff9b9b;
+}
+
+.sr-only {
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  width: 1px;
+}
+
 @media (max-width: 980px) {
   .connection-layout {
     grid-template-columns: 1fr;
@@ -2258,6 +2634,46 @@ label {
     grid-template-columns: auto 1fr auto auto;
   }
 
+  .release-day-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .release-day-step .primary-button {
+    flex-basis: 128px;
+  }
+
+  .release-day-app-shell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
+  .release-day-page-shell {
+    height: auto;
+    min-height: calc(100vh - 68px);
+  }
+
+  .release-day-page {
+    height: auto;
+    overflow: visible;
+  }
+
+  .release-day-workspace {
+    display: block;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .release-day-table-wrap {
+    height: max(420px, 55vh);
+    min-height: 420px;
+  }
+
+  .release-day-log {
+    height: 220px;
+    margin-top: 14px;
+  }
+
   .workflow-links {
     align-items: flex-start;
     grid-column: 2 / -1;
@@ -2289,6 +2705,55 @@ label {
 
   .release-toolbar {
     align-items: flex-end;
+  }
+
+  .release-day-launcher {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .release-day-launcher .primary-button {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .release-day-page-shell {
+    padding: 0;
+  }
+
+  .release-day-page {
+    border-radius: 0;
+    padding: 18px 14px;
+  }
+
+  .release-day-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .release-day-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .release-day-step .primary-button {
+    flex: 0 0 auto;
+    max-width: none;
+    width: 100%;
+  }
+
+  .release-day-table-wrap {
+    height: 420px;
+    min-height: 420px;
+  }
+
+  .release-day-log li {
+    grid-template-columns: 68px 1fr;
+  }
+
+  .release-day-log li span {
+    grid-column: 1 / -1;
   }
 
   .release-picker-trigger {
