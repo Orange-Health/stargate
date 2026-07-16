@@ -12,7 +12,7 @@ import { isClosedWithoutMerge } from '../../src/shared/pullRequests.js'
 import { discoverPullRequests } from '../providers/github.js'
 import { getVersion, listVersionIssues } from '../providers/jira.js'
 
-const CACHE_TTL_MS = 45_000
+const CACHE_TTL_MS = 60_000
 const cache = new Map<
   string,
   { expiresAt: number; dashboard: ReleaseDashboard }

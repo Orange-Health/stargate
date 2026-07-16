@@ -39,6 +39,7 @@ type GitHubRelease = {
   html_url: string
   prerelease: boolean
   created_at: string
+  published_at?: string | null
 }
 
 type GitHubWorkflowRun = {
@@ -175,6 +176,23 @@ export function hasActualMergeConflict(
   return mergeable === false || mergeableState === 'dirty'
 }
 
+export function releaseTimestamp(release: {
+  created_at: string
+  published_at?: string | null
+}) {
+  return release.published_at ?? release.created_at
+}
+
+export function sortReleasesNewestFirst<
+  T extends { created_at: string; published_at?: string | null },
+>(releases: T[]) {
+  return [...releases].sort(
+    (left, right) =>
+      new Date(releaseTimestamp(right)).getTime() -
+      new Date(releaseTimestamp(left)).getTime(),
+  )
+}
+
 async function listReleaseRuns(
   config: ConnectionConfig,
   repository: string,
@@ -198,7 +216,7 @@ async function listReleaseRuns(
       (run) =>
         run.head_branch === release.tag_name ||
         new Date(run.run_started_at).getTime() >=
-          new Date(release.created_at).getTime() - 60_000,
+          new Date(releaseTimestamp(release)).getTime() - 60_000,
     )
     .map((run) => ({
       id: run.id,
@@ -260,19 +278,21 @@ async function listTrackedReleases(
     config,
     `/repos/${repositoryPath(repository)}/releases?per_page=30`,
   )
-  const staging = releases
-    .filter(
+  const staging = sortReleasesNewestFirst(
+    releases.filter(
       (release) =>
         release.prerelease && stagingTagPattern.test(release.tag_name),
-    )
+    ),
+  )
     .slice(0, limit)
 
-  const production = releases
-    .filter(
+  const production = sortReleasesNewestFirst(
+    releases.filter(
       (release) =>
         !release.prerelease &&
         /^v(?:-prod)?-\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
-    )
+    ),
+  )
     .slice(0, limit)
 
   const stagingReleases = await Promise.all(
@@ -285,7 +305,7 @@ async function listTrackedReleases(
           release.tag_name,
         )?.[1] as StagingEnvironment,
         url: release.html_url,
-        createdAt: release.created_at,
+        createdAt: releaseTimestamp(release),
         buildStatus: aggregateBuildStatus(runs),
         runs,
       }
@@ -298,7 +318,7 @@ async function listTrackedReleases(
         id: release.id,
         tag: release.tag_name,
         url: release.html_url,
-        createdAt: release.created_at,
+        createdAt: releaseTimestamp(release),
         buildStatus: aggregateBuildStatus(runs),
         runs,
       }

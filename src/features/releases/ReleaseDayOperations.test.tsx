@@ -91,11 +91,13 @@ function repositoryState(
 describe('ReleaseDayOperations', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    vi.spyOn(api, 'refreshRepository').mockResolvedValue()
   })
 
   afterEach(() => vi.restoreAllMocks())
 
-  it('shows initial repository synchronization progress', async () => {
+  it('waits for manual synchronization and then shows progress', async () => {
+    const user = userEvent.setup()
     let resolveState!: (state: RepositoryReleaseState) => void
     vi.spyOn(api, 'repositoryState').mockReturnValue(
       new Promise((resolve) => {
@@ -111,10 +113,17 @@ describe('ReleaseDayOperations', () => {
       />,
     )
 
+    expect(api.repositoryState).not.toHaveBeenCalled()
+    expect(screen.getAllByText('Checking')).toHaveLength(2)
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh status' }),
+    )
     expect(
       await screen.findByRole('button', { name: 'Syncing 0/1' }),
     ).toBeDisabled()
-    expect(screen.getByText('Syncing')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Sync service-api' }),
+    ).toHaveTextContent('Syncing…')
 
     await act(async () => {
       resolveState(repositoryState('needs_pr', 'needs_pr'))
@@ -126,6 +135,122 @@ describe('ReleaseDayOperations', () => {
       ).toBeEnabled(),
     )
     expect(screen.getByText('Synced')).toBeVisible()
+  })
+
+  it('syncs an individual table row and updates it immediately', async () => {
+    const user = userEvent.setup()
+    let state = repositoryState('needs_pr', 'needs_pr')
+    vi.spyOn(api, 'repositoryState').mockImplementation(async () => state)
+    const refreshRepository = vi
+      .spyOn(api, 'refreshRepository')
+      .mockResolvedValue()
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    state = repositoryState('up_to_date', 'up_to_date')
+    await user.click(screen.getByRole('button', { name: 'Sync service-api' }))
+
+    const row = screen.getByText(repository).closest('tr')
+    expect(row).not.toBeNull()
+    await waitFor(() =>
+      expect(within(row as HTMLElement).getAllByText('Merged')).toHaveLength(2),
+    )
+    expect(refreshRepository).toHaveBeenCalledWith(repository)
+  })
+
+  it('restores repository state from the one-minute local cache', async () => {
+    const user = userEvent.setup()
+    const repositoryStateRequest = vi
+      .spyOn(api, 'repositoryState')
+      .mockResolvedValue(repositoryState('up_to_date', 'up_to_date'))
+    vi.spyOn(api, 'refreshRepository').mockResolvedValue()
+    const firstRender = render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Sync service-api' }))
+    await waitFor(() =>
+      expect(
+        window.localStorage.getItem(
+          'release-day-repository-states:release-1',
+        ),
+      ).not.toBeNull(),
+    )
+    firstRender.unmount()
+    repositoryStateRequest.mockClear()
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getAllByText('Merged')).toHaveLength(2)
+    expect(screen.getByText('Synced')).toBeVisible()
+    expect(repositoryStateRequest).not.toHaveBeenCalled()
+  })
+
+  it('updates each table row as bulk synchronization completes', async () => {
+    const user = userEvent.setup()
+    const secondRepository = 'Orange-Health/service-web'
+    const twoServiceDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        dashboard.services[0],
+        { ...dashboard.services[0], repository: secondRepository },
+      ],
+    }
+    let resolveSecond!: (state: RepositoryReleaseState) => void
+    vi.spyOn(api, 'repositoryState').mockImplementation((repositoryName) =>
+      repositoryName === repository
+        ? Promise.resolve(
+            repositoryState('up_to_date', 'up_to_date', repositoryName),
+          )
+        : new Promise((resolve) => {
+            resolveSecond = resolve
+          }),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={twoServiceDashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh status' }),
+    )
+    await waitFor(() =>
+      expect(api.repositoryState).toHaveBeenCalledWith(secondRepository),
+    )
+
+    const firstRow = screen.getByText(repository).closest('tr')
+    const secondRow = screen.getByText(secondRepository).closest('tr')
+    expect(firstRow).not.toBeNull()
+    expect(secondRow).not.toBeNull()
+    expect(within(firstRow as HTMLElement).getAllByText('Ready')).toHaveLength(2)
+    expect(
+      within(secondRow as HTMLElement).getAllByText('Checking'),
+    ).toHaveLength(2)
+
+    await act(async () => {
+      resolveSecond(
+        repositoryState('needs_pr', 'needs_pr', secondRepository),
+      )
+    })
   })
 
   it('logs existing PRs and unlocks the next phase only after merge', async () => {
@@ -144,6 +269,9 @@ describe('ReleaseDayOperations', () => {
         productionEnabled={true}
         onClose={vi.fn()}
       />,
+    )
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh status' }),
     )
     await screen.findByText('PR #12')
 
@@ -166,7 +294,7 @@ describe('ReleaseDayOperations', () => {
       ).toBeEnabled(),
     )
     expect(screen.getByText('Result: merged PR #12 into release.')).toBeVisible()
-    expect(api.refreshRepository).not.toHaveBeenCalled()
+    expect(api.refreshRepository).toHaveBeenCalledTimes(1)
     expect(api.repositoryState).toHaveBeenCalledTimes(1)
   })
 
@@ -228,6 +356,9 @@ describe('ReleaseDayOperations', () => {
         onClose={vi.fn()}
       />,
     )
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh status' }),
+    )
     await waitFor(() => expect(repositoryStateRequest).toHaveBeenCalledTimes(2))
     expect(
       screen.getAllByText('Checking repository promotion and release state.'),
@@ -244,7 +375,7 @@ describe('ReleaseDayOperations', () => {
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
     expect(creationOrder).toEqual([repository])
-    expect(maxActiveStateRequests).toBe(1)
+    expect(maxActiveStateRequests).toBe(2)
     expect(screen.getByText('Creating PR')).toBeVisible()
     expect(
       screen.getByText(
@@ -305,6 +436,9 @@ describe('ReleaseDayOperations', () => {
         productionEnabled={true}
         onClose={vi.fn()}
       />,
+    )
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh status' }),
     )
     await screen.findAllByText('Merged')
     await user.click(

@@ -55,6 +55,18 @@ type RepositorySyncStatus = 'queued' | 'syncing' | 'synced' | 'failed'
 
 const POLL_INTERVAL = 15_000
 const MAX_CONCURRENCY = 3
+const REPOSITORY_SYNC_CONCURRENCY = 2
+const REPOSITORY_STATE_CACHE_MS = 60_000
+
+type CachedRepositoryStates = {
+  cachedAt: number
+  states: Record<string, RepositoryReleaseState>
+}
+
+type LegacyCachedRepositoryStates = Record<
+  string,
+  { syncedAt: number; state: RepositoryReleaseState }
+>
 
 function localDate() {
   const now = new Date()
@@ -63,6 +75,60 @@ function localDate() {
 
 function sessionKey(versionId: string) {
   return `release-day-operations:${versionId}`
+}
+
+function repositoryStateCacheKey(versionId: string) {
+  return `release-day-repository-states:${versionId}`
+}
+
+function restoreRepositoryStates(dashboard: ReleaseDashboard) {
+  const states: Record<string, RepositoryReleaseState | undefined> = {}
+  let cachedAt = 0
+  try {
+    const raw = window.localStorage.getItem(
+      repositoryStateCacheKey(dashboard.version.id),
+    )
+    if (!raw) return { states, cachedAt }
+    const parsed = JSON.parse(raw) as
+      | CachedRepositoryStates
+      | LegacyCachedRepositoryStates
+    const currentCache = parsed as CachedRepositoryStates
+    const cached: CachedRepositoryStates =
+      typeof currentCache.cachedAt === 'number' &&
+      typeof currentCache.states === 'object'
+        ? currentCache
+        : {
+            cachedAt: Math.max(
+              0,
+              ...Object.values(
+                parsed as LegacyCachedRepositoryStates,
+              ).map((entry) => entry.syncedAt),
+            ),
+            states: Object.fromEntries(
+              Object.entries(
+                parsed as LegacyCachedRepositoryStates,
+              ).map(([repository, entry]) => [repository, entry.state]),
+            ),
+          }
+    cachedAt = cached.cachedAt
+    if (Date.now() - cachedAt >= REPOSITORY_STATE_CACHE_MS) {
+      return { states, cachedAt: 0 }
+    }
+    const available = new Set(
+      dashboard.services.map((service) => service.repository),
+    )
+    for (const [repository, state] of Object.entries(cached.states)) {
+      if (
+        available.has(repository) &&
+        state?.repository === repository
+      ) {
+        states[repository] = state
+      }
+    }
+  } catch {
+    // Ignore invalid or expired local cache data.
+  }
+  return { states, cachedAt }
 }
 
 function newSession(dashboard: ReleaseDashboard): BatchSession {
@@ -115,6 +181,7 @@ function restoreSession(dashboard: ReleaseDashboard): BatchSession {
 async function mapConcurrent<T>(
   values: T[],
   task: (value: T) => Promise<void>,
+  concurrency = MAX_CONCURRENCY,
 ) {
   let cursor = 0
   async function worker() {
@@ -125,7 +192,7 @@ async function mapConcurrent<T>(
   }
   await Promise.all(
     Array.from(
-      { length: Math.min(MAX_CONCURRENCY, values.length) },
+      { length: Math.min(concurrency, values.length) },
       () => worker(),
     ),
   )
@@ -185,18 +252,29 @@ export function ReleaseDayOperations({
   onClose,
 }: Props) {
   const [session, setSession] = useState(() => restoreSession(dashboard))
+  const restoredRepositoryStates = useRef(
+    restoreRepositoryStates(dashboard),
+  ).current
   const [states, setStates] = useState<
     Record<string, RepositoryReleaseState | undefined>
-  >({})
+  >(restoredRepositoryStates.states)
   const [refreshing, setRefreshing] = useState(false)
   const [busyAction, setBusyAction] = useState('')
   const [cellOperation, setCellOperation] = useState<CellOperation>()
   const [repositorySync, setRepositorySync] = useState<
     Record<string, RepositorySyncStatus>
-  >({})
+  >(
+    Object.fromEntries(
+      Object.keys(restoredRepositoryStates.states).map((repository) => [
+        repository,
+        'synced' as const,
+      ]),
+    ),
+  )
   const [deployTarget, setDeployTarget] = useState<DeployTarget>()
   const sessionRef = useRef(session)
   const loadSequence = useRef(0)
+  const repositoryCacheTimestamp = useRef(restoredRepositoryStates.cachedAt)
 
   useEffect(() => {
     sessionRef.current = session
@@ -205,6 +283,29 @@ export function ReleaseDayOperations({
       JSON.stringify(session),
     )
   }, [session])
+
+  useEffect(() => {
+    const cachedStates = Object.fromEntries(
+      Object.entries(states).filter(
+        (entry): entry is [string, RepositoryReleaseState] =>
+          entry[1] !== undefined,
+      ),
+    )
+    if (
+      Object.keys(cachedStates).length === 0 ||
+      !repositoryCacheTimestamp.current
+    ) {
+      window.localStorage.removeItem(repositoryStateCacheKey(dashboard.version.id))
+      return
+    }
+    window.localStorage.setItem(
+      repositoryStateCacheKey(dashboard.version.id),
+      JSON.stringify({
+        cachedAt: repositoryCacheTimestamp.current,
+        states: cachedStates,
+      } satisfies CachedRepositoryStates),
+    )
+  }, [dashboard.version.id, states])
 
   const selected = session.selectedRepositories
   const selectedSet = useMemo(() => new Set(selected), [selected])
@@ -248,6 +349,68 @@ export function ReleaseDayOperations({
     [],
   )
 
+  const syncRepository = useCallback(
+    async (repository: string, force: boolean, sequence: number) => {
+      setRepositoryError(repository)
+      setRepositorySync((current) => ({
+        ...current,
+        [repository]: 'syncing',
+      }))
+      try {
+        log('info', 'Checking repository promotion and release state.', repository)
+        if (force) {
+          log('info', 'Invalidating cached repository state.', repository)
+          await api.refreshRepository(repository)
+        }
+        const repositoryState = await api.repositoryState(repository)
+        if (sequence !== loadSequence.current) return
+        repositoryCacheTimestamp.current = Date.now()
+        setStates((current) => ({
+          ...current,
+          [repository]: repositoryState,
+        }))
+        for (const step of repositoryState.promotionSteps) {
+          if (step.state === 'pr_open' && step.pullRequest) {
+            log(
+              'success',
+              `Discovered open ${step.fromBranch} → ${step.toBranch} PR #${step.pullRequest.number}: ${step.pullRequest.title}.`,
+              repository,
+            )
+          } else if (step.state === 'up_to_date') {
+            log(
+              'success',
+              `Discovered ${step.fromBranch} → ${step.toBranch} is already up to date.`,
+              repository,
+            )
+          } else {
+            log(
+              'warning',
+              `Discovered ${step.fromBranch} → ${step.toBranch} needs a PR (${step.commitsAhead} commits waiting).`,
+              repository,
+            )
+          }
+        }
+        setRepositorySync((current) => ({
+          ...current,
+          [repository]: 'synced',
+        }))
+      } catch (reason) {
+        if (sequence !== loadSequence.current) return
+        const message =
+          reason instanceof Error
+            ? reason.message
+            : 'Could not refresh repository state.'
+        setRepositoryError(repository, message)
+        setRepositorySync((current) => ({
+          ...current,
+          [repository]: 'failed',
+        }))
+        log('error', `Repository state check failed: ${message}`, repository)
+      }
+    },
+    [log, setRepositoryError],
+  )
+
   const refreshStates = useCallback(
     async (silent = false, force = false) => {
       const repositories = sessionRef.current.selectedRepositories
@@ -260,69 +423,22 @@ export function ReleaseDayOperations({
           repositories.map((repository) => [repository, 'queued' as const]),
         ),
       }))
-      const next: Record<string, RepositoryReleaseState | undefined> = {}
-      for (const repository of repositories) {
-        try {
-          setRepositorySync((current) => ({
-            ...current,
-            [repository]: 'syncing',
-          }))
-          log('info', 'Checking repository promotion and release state.', repository)
-          if (force) {
-            log('info', 'Invalidating cached repository state.', repository)
-            await api.refreshRepository(repository)
-          }
-          const repositoryState = await api.repositoryState(repository)
-          next[repository] = repositoryState
-          for (const step of repositoryState.promotionSteps) {
-            if (step.state === 'pr_open' && step.pullRequest) {
-              log(
-                'success',
-                `Discovered open ${step.fromBranch} → ${step.toBranch} PR #${step.pullRequest.number}: ${step.pullRequest.title}.`,
-                repository,
-              )
-            } else if (step.state === 'up_to_date') {
-              log(
-                'success',
-                `Discovered ${step.fromBranch} → ${step.toBranch} is already up to date.`,
-                repository,
-              )
-            } else {
-              log(
-                'warning',
-                `Discovered ${step.fromBranch} → ${step.toBranch} needs a PR (${step.commitsAhead} commits waiting).`,
-                repository,
-              )
-            }
-          }
-          setRepositorySync((current) => ({
-            ...current,
-            [repository]: 'synced',
-          }))
-        } catch (reason) {
-          const message =
-            reason instanceof Error
-              ? reason.message
-              : 'Could not refresh repository state.'
-          setRepositoryError(repository, message)
-          setRepositorySync((current) => ({
-            ...current,
-            [repository]: 'failed',
-          }))
-          log('error', `Repository state check failed: ${message}`, repository)
-        }
-      }
-      if (sequence === loadSequence.current) {
-        setStates((current) => ({ ...current, ...next }))
-        if (!silent) setRefreshing(false)
-      }
+      await mapConcurrent(
+        repositories,
+        (repository) => syncRepository(repository, force, sequence),
+        REPOSITORY_SYNC_CONCURRENCY,
+      )
+      if (!silent && sequence === loadSequence.current) setRefreshing(false)
     },
-    [log, setRepositoryError],
+    [syncRepository],
   )
 
-  useEffect(() => {
-    void refreshStates()
-  }, [refreshStates])
+  const refreshOneRepository = useCallback(
+    async (repository: string) => {
+      await syncRepository(repository, true, loadSequence.current)
+    },
+    [syncRepository],
+  )
 
   useEffect(() => {
     const activeReleases = selected.flatMap((repository) => {
@@ -765,7 +881,13 @@ export function ReleaseDayOperations({
     const next = newSession(dashboard)
     setSession(next)
     sessionRef.current = next
+    loadSequence.current += 1
+    repositoryCacheTimestamp.current = 0
     setStates({})
+    setRepositorySync({})
+    window.localStorage.removeItem(
+      repositoryStateCacheKey(dashboard.version.id),
+    )
   }
 
   return (
@@ -1015,20 +1137,34 @@ export function ReleaseDayOperations({
                         <td>
                           <strong>{repository.split('/').at(-1)}</strong>
                           <small>{repository}</small>
-                          {syncStatus && (
+                          <button
+                            className="release-day-row-sync"
+                            type="button"
+                            onClick={() => void refreshOneRepository(repository)}
+                            disabled={
+                              refreshing ||
+                              Boolean(busyAction) ||
+                              syncStatus === 'syncing'
+                            }
+                            aria-label={`Sync ${repository.split('/').at(-1)}`}
+                          >
+                            {syncStatus === 'syncing' ? (
+                              <>
+                                <span className="spinner" /> Syncing…
+                              </>
+                            ) : (
+                              '↻ Sync'
+                            )}
+                          </button>
+                          {syncStatus && syncStatus !== 'syncing' && (
                             <span
                               className={`release-day-repository-sync ${syncStatus}`}
                             >
-                              {syncStatus === 'syncing' && (
-                                <span className="spinner" />
-                              )}
                               {syncStatus === 'queued'
                                 ? 'Queued'
-                                : syncStatus === 'syncing'
-                                  ? 'Syncing'
-                                  : syncStatus === 'synced'
-                                    ? 'Synced'
-                                    : 'Sync failed'}
+                                : syncStatus === 'synced'
+                                  ? 'Synced'
+                                  : 'Sync failed'}
                             </span>
                           )}
                           {progress?.error && (

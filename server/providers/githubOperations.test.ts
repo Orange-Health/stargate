@@ -11,6 +11,8 @@ import {
   getRepositoryReleaseState,
   hasActualMergeConflict,
   promotionBranches,
+  releaseTimestamp,
+  sortReleasesNewestFirst,
 } from './githubOperations.js'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -112,6 +114,33 @@ describe('merge conflict classification', () => {
 
   it('detects actual Git merge conflicts', () => {
     expect(hasActualMergeConflict(false, 'dirty')).toBe(true)
+  })
+})
+
+describe('release ordering', () => {
+  it('sorts by publication time and uses it for display', () => {
+    const older = {
+      tag: 'v-s2-v26.0715.1',
+      created_at: '2026-07-15T10:00:00Z',
+      published_at: '2026-07-15T10:00:00Z',
+    }
+    const newlyPublished = {
+      tag: 'v-qa-v26.0716.1',
+      created_at: '2026-07-15T08:00:00Z',
+      published_at: '2026-07-16T06:00:00Z',
+    }
+
+    expect(sortReleasesNewestFirst([older, newlyPublished])).toEqual([
+      newlyPublished,
+      older,
+    ])
+    expect(releaseTimestamp(newlyPublished)).toBe('2026-07-16T06:00:00Z')
+  })
+
+  it('falls back to creation time when publication time is unavailable', () => {
+    expect(releaseTimestamp({ created_at: '2026-07-16T06:00:00Z' })).toBe(
+      '2026-07-16T06:00:00Z',
+    )
   })
 })
 
