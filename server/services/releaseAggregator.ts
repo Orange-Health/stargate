@@ -8,6 +8,7 @@ import type {
   ReleaseItem,
   ServiceRelease,
 } from '../../src/shared/types.js'
+import { isClosedWithoutMerge } from '../../src/shared/pullRequests.js'
 import { discoverPullRequests } from '../providers/github.js'
 import { getVersion, listVersionIssues } from '../providers/jira.js'
 
@@ -25,6 +26,7 @@ export function evaluateEligibility(
   issue: JiraIssue,
   pullRequest?: PullRequest,
 ): ReleaseItem {
+  if (isClosedWithoutMerge(pullRequest)) pullRequest = undefined
   const blockingReasons: EligibilityReason[] = []
   const warningReasons: EligibilityReason[] = []
 
@@ -82,14 +84,19 @@ function summarizeService(
   repository: string,
   items: ReleaseItem[],
 ): ServiceRelease {
+  const visibleItems = items.filter(
+    (item) => !isClosedWithoutMerge(item.pullRequest),
+  )
   return {
     repository,
-    items: items.sort((a, b) => a.issue.key.localeCompare(b.issue.key)),
-    eligibleCount: items.filter((item) => item.eligible).length,
-    blockedCount: items.filter(
+    items: visibleItems.sort((a, b) => a.issue.key.localeCompare(b.issue.key)),
+    eligibleCount: visibleItems.filter((item) => item.eligible).length,
+    blockedCount: visibleItems.filter(
       (item) => !item.eligible && !item.pullRequest?.merged,
     ).length,
-    mergedCount: items.filter((item) => isClearedMerge(item.pullRequest)).length,
+    mergedCount: visibleItems.filter((item) =>
+      isClearedMerge(item.pullRequest),
+    ).length,
     backMergePending: false,
   }
 }

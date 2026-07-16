@@ -145,12 +145,17 @@ export const api = {
     versionId: string,
     repository: string,
     issueKeys: string[],
+    includeRepositoryState = true,
   ) =>
     request<ServiceRefreshResult>(
       `/api/releases/${encodeURIComponent(versionId)}/service-refresh`,
       {
         method: 'POST',
-        body: JSON.stringify({ repository, issueKeys }),
+        body: JSON.stringify({
+          repository,
+          issueKeys,
+          includeRepositoryState,
+        }),
       },
     ),
   createPromotionPullRequest: (input: CreatePromotionPullRequestInput) =>

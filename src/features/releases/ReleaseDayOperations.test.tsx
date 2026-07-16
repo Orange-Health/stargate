@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
@@ -67,9 +67,10 @@ function promotionStep(
 function repositoryState(
   devState: PromotionStep['state'],
   defaultState: PromotionStep['state'],
+  repositoryName = repository,
 ): RepositoryReleaseState {
   return {
-    repository,
+    repository: repositoryName,
     defaultBranch: 'main',
     stagingReleases: [],
     productionReleases: [],
@@ -93,6 +94,39 @@ describe('ReleaseDayOperations', () => {
   })
 
   afterEach(() => vi.restoreAllMocks())
+
+  it('shows initial repository synchronization progress', async () => {
+    let resolveState!: (state: RepositoryReleaseState) => void
+    vi.spyOn(api, 'repositoryState').mockReturnValue(
+      new Promise((resolve) => {
+        resolveState = resolve
+      }),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Syncing 0/1' }),
+    ).toBeDisabled()
+    expect(screen.getByText('Syncing')).toBeVisible()
+
+    await act(async () => {
+      resolveState(repositoryState('needs_pr', 'needs_pr'))
+    })
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '↻ Refresh status' }),
+      ).toBeEnabled(),
+    )
+    expect(screen.getByText('Synced')).toBeVisible()
+  })
 
   it('logs existing PRs and unlocks the next phase only after merge', async () => {
     const user = userEvent.setup()
@@ -131,9 +165,107 @@ describe('ReleaseDayOperations', () => {
         screen.getByRole('button', { name: 'Create PRs' }),
       ).toBeEnabled(),
     )
-    expect(screen.getByText('Merged PR #12.')).toBeVisible()
+    expect(screen.getByText('Result: merged PR #12 into release.')).toBeVisible()
     expect(api.refreshRepository).not.toHaveBeenCalled()
-    expect(api.repositoryState).toHaveBeenCalledTimes(2)
+    expect(api.repositoryState).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates PRs sequentially and patches state without full reconciliation', async () => {
+    const user = userEvent.setup()
+    const secondRepository = 'Orange-Health/service-web'
+    const twoServiceDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        dashboard.services[0],
+        {
+          ...dashboard.services[0],
+          repository: secondRepository,
+        },
+      ],
+    }
+    let activeStateRequests = 0
+    let maxActiveStateRequests = 0
+    const repositoryStateRequest = vi
+      .spyOn(api, 'repositoryState')
+      .mockImplementation(async (repositoryName) => {
+        activeStateRequests += 1
+        maxActiveStateRequests = Math.max(
+          maxActiveStateRequests,
+          activeStateRequests,
+        )
+        await Promise.resolve()
+        activeStateRequests -= 1
+        return repositoryState('needs_pr', 'needs_pr', repositoryName)
+      })
+    let resolveFirst!: () => void
+    const firstPending = new Promise<void>((resolve) => {
+      resolveFirst = resolve
+    })
+    const creationOrder: string[] = []
+    const create = vi
+      .spyOn(api, 'createPromotionPullRequest')
+      .mockImplementation(async ({ repository: repositoryName }) => {
+        creationOrder.push(repositoryName)
+        if (repositoryName === repository) await firstPending
+        return {
+          number: repositoryName === repository ? 21 : 22,
+          title: 'Promote dev to release',
+          url: `https://github.test/${repositoryName}/pull`,
+          baseBranch: 'release',
+          headBranch: 'dev',
+          draft: false,
+          mergeable: true,
+          mergeableState: 'clean',
+          reviewDecision: 'approved',
+          checks: 'success',
+        }
+      })
+
+    render(
+      <ReleaseDayOperations
+        dashboard={twoServiceDashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    await waitFor(() => expect(repositoryStateRequest).toHaveBeenCalledTimes(2))
+    expect(
+      screen.getAllByText('Checking repository promotion and release state.'),
+    ).toHaveLength(2)
+    const createStep = screen
+      .getByText('Create Dev → Release PRs')
+      .closest('article')
+    expect(createStep).not.toBeNull()
+    await user.click(
+      within(createStep as HTMLElement).getByRole('button', {
+        name: 'Create PRs',
+      }),
+    )
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    expect(creationOrder).toEqual([repository])
+    expect(maxActiveStateRequests).toBe(1)
+    expect(screen.getByText('Creating PR')).toBeVisible()
+    expect(
+      screen.getByText(
+        'Discovery: no open dev → release PR in loaded state.',
+      ),
+    ).toBeVisible()
+    expect(
+      screen.getByText('Attempting Dev → Release PR creation (1/2).'),
+    ).toBeVisible()
+
+    resolveFirst()
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    expect(creationOrder).toEqual([repository, secondRepository])
+    await waitFor(() =>
+      expect(
+        screen.getByText('Attempting Dev → Release PR creation (2/2).'),
+      ).toBeVisible(),
+    )
+    expect(screen.getByText('GitHub created PR #21.')).toBeVisible()
+    expect(screen.getByText('GitHub created PR #22.')).toBeVisible()
+    expect(repositoryStateRequest).toHaveBeenCalledTimes(2)
   })
 
   it('creates an idempotent production release and unlocks deploy after success', async () => {

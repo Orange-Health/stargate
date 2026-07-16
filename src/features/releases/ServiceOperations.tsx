@@ -14,6 +14,9 @@ import { ProductionDeployDialog } from './ProductionDeployDialog'
 type Props = {
   repository: string
   productionEnabled?: boolean
+  view?: 'all' | 'releases' | 'branches' | 'hidden'
+  onCreateStagingRelease?: () => void
+  onCreateProductionRelease?: () => void
 }
 
 const buildLabels: Record<BuildStatus, string> = {
@@ -67,11 +70,15 @@ function backMergeBlockReason(step: BackMergeStep) {
 export function ServiceOperations({
   repository,
   productionEnabled = false,
+  view = 'all',
+  onCreateStagingRelease,
+  onCreateProductionRelease,
 }: Props) {
   const [state, setState] = useState<RepositoryReleaseState>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busyRoute, setBusyRoute] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [deployRelease, setDeployRelease] =
@@ -204,6 +211,7 @@ export function ServiceOperations({
   }, [announceCompletedBuilds, load, repository])
 
   useEffect(() => {
+    if (view !== 'all' && view !== 'releases') return
     if (!state) return
     const activeReleases = [
       ...state.stagingReleases,
@@ -277,7 +285,7 @@ export function ServiceOperations({
       if (timeout) window.clearTimeout(timeout)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [announceCompletedBuilds, repository, state])
+  }, [announceCompletedBuilds, repository, state, view])
 
   useEffect(() => {
     if (!notificationToast) return
@@ -335,6 +343,23 @@ export function ServiceOperations({
       )
     } finally {
       setHistoryLoading(false)
+    }
+  }
+
+  async function refreshOperations() {
+    setRefreshing(true)
+    setError('')
+    try {
+      await api.refreshRepository(repository)
+      await load()
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not refresh repository operations.',
+      )
+    } finally {
+      setRefreshing(false)
     }
   }
 
@@ -448,6 +473,25 @@ export function ServiceOperations({
         </div>
       )}
 
+      {(view === 'releases' || view === 'branches') && (
+        <div className="service-tab-panel-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void refreshOperations()}
+            disabled={refreshing}
+          >
+            {refreshing
+              ? 'Refreshing…'
+              : view === 'releases'
+                ? '↻ Refresh releases'
+                : '↻ Refresh branch ops'}
+          </button>
+        </div>
+      )}
+
+      {(view === 'all' || view === 'releases') && (
+        <>
       <section className="operation-section">
         <div className="operation-heading">
           <div>
@@ -455,6 +499,15 @@ export function ServiceOperations({
             <h3>Staging releases</h3>
           </div>
           <div className="operation-heading-actions">
+            {onCreateStagingRelease && (
+              <button
+                className="create-release-button"
+                type="button"
+                onClick={onCreateStagingRelease}
+              >
+                <span aria-hidden="true">＋</span> Create staging release
+              </button>
+            )}
             <button
               className="notification-toggle"
               type="button"
@@ -582,7 +635,18 @@ export function ServiceOperations({
               <p className="eyebrow">GitHub Actions · Production</p>
               <h3>Production releases</h3>
             </div>
-            <span className="auto-refresh">Live · 15s</span>
+            <div className="operation-heading-actions">
+              {onCreateProductionRelease && (
+                <button
+                  className="create-release-button"
+                  type="button"
+                  onClick={onCreateProductionRelease}
+                >
+                  <span aria-hidden="true">＋</span> Create production release
+                </button>
+              )}
+              <span className="auto-refresh">Live · 15s</span>
+            </div>
           </div>
 
           {loading && !state ? (
@@ -651,16 +715,22 @@ export function ServiceOperations({
           )}
         </section>
       )}
+        </>
+      )}
 
+      {(view === 'all' || view === 'branches') && (
+        <>
       <section className="operation-section branch-sync-section">
         <div className="operation-heading">
           <div>
             <p className="eyebrow">Back-merge health</p>
             <h3>Branch synchronization</h3>
           </div>
-          <span className="default-branch">
-            Default · <code>{state?.defaultBranch ?? '—'}</code>
-          </span>
+          <div className="operation-heading-actions">
+            <span className="default-branch">
+              Default · <code>{state?.defaultBranch ?? '—'}</code>
+            </span>
+          </div>
         </div>
         {loading && !state ? (
           <div className="operation-loading">
@@ -873,6 +943,8 @@ export function ServiceOperations({
           </div>
         )}
       </section>
+        </>
+      )}
       {deployRelease && state && (
         <DeployDialog
           repository={repository}

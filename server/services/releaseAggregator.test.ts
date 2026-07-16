@@ -68,11 +68,26 @@ describe('evaluateEligibility', () => {
       blockingReasons: ['NO_MATCHING_PR'],
     })
   })
+
+  it('treats closed unmerged PRs as absent', () => {
+    expect(
+      evaluateEligibility(issue, {
+        ...readyPull,
+        state: 'closed',
+      }),
+    ).toMatchObject({
+      pullRequest: undefined,
+      eligible: false,
+      blockingReasons: ['NO_MATCHING_PR'],
+    })
+  })
 })
 
 describe('isClearedMerge', () => {
   it('clears release PRs merged into dev or main', () => {
-    expect(isClearedMerge({ ...readyPull, merged: true })).toBe(true)
+    expect(
+      isClearedMerge({ ...readyPull, state: 'closed', merged: true }),
+    ).toBe(true)
     expect(
       isClearedMerge({ ...readyPull, merged: true, baseBranch: 'main' }),
     ).toBe(true)

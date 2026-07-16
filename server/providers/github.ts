@@ -9,6 +9,7 @@ import type {
   ReviewDecision,
   StagingEnvironment,
 } from '../../src/shared/types.js'
+import { isClosedWithoutMerge } from '../../src/shared/pullRequests.js'
 import { ProviderError, providerResponseError } from '../errors.js'
 
 type GitHubSearchItem = {
@@ -16,6 +17,8 @@ type GitHubSearchItem = {
   number: number
   title: string
   repository_url: string
+  state?: 'open' | 'closed'
+  pull_request?: { merged_at?: string | null }
 }
 
 type GitHubPull = {
@@ -754,16 +757,19 @@ async function getPullRequest(
       config,
       `${base}/pulls/${number}`,
     )
-    const [reviews, checks] = await Promise.all([
-      githubFetch<GitHubReview[]>(
-        config,
-        `${base}/pulls/${number}/reviews?per_page=100`,
-      ),
-      githubFetch<GitHubChecks>(
-        config,
-        `${base}/commits/${pull.head.sha}/check-runs?per_page=100`,
-      ),
-    ])
+    const [reviews, checks] =
+      pull.state === 'closed' && !pull.merged
+        ? [[], { check_runs: [] }]
+        : await Promise.all([
+            githubFetch<GitHubReview[]>(
+              config,
+              `${base}/pulls/${number}/reviews?per_page=100`,
+            ),
+            githubFetch<GitHubChecks>(
+              config,
+              `${base}/commits/${pull.head.sha}/check-runs?per_page=100`,
+            ),
+          ])
 
     return {
       id: pull.id,
@@ -835,7 +841,11 @@ async function searchIssueKey(
     }>(config, `/search/issues?q=${query}&per_page=100`)
 
     return response.items
-      .filter((item) => titleContainsIssueKey(item.title, issueKey))
+      .filter(
+        (item) =>
+          titleContainsIssueKey(item.title, issueKey) &&
+          (item.state !== 'closed' || Boolean(item.pull_request?.merged_at)),
+      )
       .map((item) => ({ issueKey, item }))
   })()
   searchCache.set(cacheKey, {
@@ -933,6 +943,7 @@ export async function discoverPullRequests(
       warnings.push(`Could not load details for ${entries[index][0]}.`)
       return
     }
+    if (isClosedWithoutMerge(result.value.pull)) return
     for (const issueKey of pullToIssues.get(result.value.id) ?? []) {
       byIssue.get(issueKey)?.push(result.value.pull)
     }

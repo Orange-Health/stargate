@@ -162,6 +162,7 @@ const serviceRefreshSchema = z.object({
     .array(z.string().regex(/^[A-Z][A-Z0-9]+-\d+$/i))
     .min(1)
     .max(200),
+  includeRepositoryState: z.boolean().optional().default(true),
 })
 
 export function createApp() {
@@ -332,6 +333,17 @@ export function createApp() {
         parsed.data.repository,
         parsed.data.issueKeys,
       )
+      if (!parsed.data.includeRepositoryState) {
+        response.json({
+          service: await refreshServiceRelease(
+            config,
+            versionId,
+            parsed.data.repository,
+            parsed.data.issueKeys,
+          ),
+        })
+        return
+      }
       const [service, state, deploymentResult] = await Promise.all([
         refreshServiceRelease(
           config,

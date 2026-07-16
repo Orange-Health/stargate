@@ -228,6 +228,7 @@ export type PromotionPullRequest = {
   mergeableState: string
   reviewDecision: ReviewDecision
   checks: CheckStatus
+  resolution?: 'existing' | 'created'
 }
 
 export type PromotionStep = {
@@ -288,7 +289,7 @@ export type RepositoryReleaseHistory = {
 
 export type ServiceRefreshResult = {
   service: ServiceRelease
-  repositoryState: RepositoryReleaseState
+  repositoryState?: RepositoryReleaseState
 }
 
 export type RepositoryRisk = {

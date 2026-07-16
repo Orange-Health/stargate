@@ -758,7 +758,9 @@ export async function createPromotionPullRequest(
     route,
     metadata.default_branch,
   )
-  if (step.pullRequest) return step.pullRequest
+  if (step.pullRequest) {
+    return { ...step.pullRequest, resolution: 'existing' }
+  }
   if (step.commitsAhead === 0) {
     throw new ProviderError(
       `${step.fromBranch} has no changes to promote to ${step.toBranch}.`,
@@ -786,7 +788,10 @@ export async function createPromotionPullRequest(
     },
   )
   clearRepositoryCaches(config, repository)
-  return promotionPullDetails(config, repository, created)
+  return {
+    ...(await promotionPullDetails(config, repository, created)),
+    resolution: 'created',
+  }
 }
 
 export async function createBackMergePullRequest(

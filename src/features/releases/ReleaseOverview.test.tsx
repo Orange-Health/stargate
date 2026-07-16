@@ -193,6 +193,7 @@ describe('ReleaseOverview', () => {
 
   it('opens staging-only release creation for the selected service', async () => {
     const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockReturnValue(new Promise(() => {}))
     render(
       <ReleaseOverview
         connection={{
@@ -210,6 +211,7 @@ describe('ReleaseOverview', () => {
       />,
     )
 
+    await user.click(screen.getByRole('tab', { name: 'Releases' }))
     await user.click(
       screen.getByRole('button', { name: /create staging release/i }),
     )
@@ -274,13 +276,14 @@ describe('ReleaseOverview', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: '↻ Refresh service' }),
+      screen.getByRole('button', { name: '↻ Refresh PRs' }),
     )
 
     expect(refreshService).toHaveBeenCalledWith(
       '10351',
       'orange/service-api',
       ['OH-123'],
+      false,
     )
     expect(
       screen.getByText('OH-123 Refreshed pull request'),
@@ -311,6 +314,119 @@ describe('ReleaseOverview', () => {
 
     expect(screen.getByText('No services match your search.')).toBeVisible()
     expect(screen.getByText('No matching services')).toBeVisible()
+  })
+
+  it('lazy-loads operations once and redistributes content across tabs', async () => {
+    const user = userEvent.setup()
+    const repositoryState = vi
+      .spyOn(api, 'repositoryState')
+      .mockReturnValue(new Promise(() => {}))
+    const view = render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={dashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('OH-123 Release API')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: '↻ Refresh PRs' }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: /Create staging release/ }),
+    ).not.toBeInTheDocument()
+    expect(repositoryState).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('tab', { name: 'Releases' }))
+    expect(
+      screen.getByRole('button', { name: /Create staging release/ }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: '↻ Refresh releases' }),
+    ).toBeVisible()
+    expect(screen.getByText(/Loading release builds/)).toBeVisible()
+    expect(
+      screen.queryByText(/Checking dev, release, and default branches/),
+    ).not.toBeInTheDocument()
+    expect(repositoryState).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole('tab', { name: 'Branch Ops' }))
+    expect(
+      screen.getByText(/Checking dev, release, and default branches/),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: '↻ Refresh branch ops' }),
+    ).toBeVisible()
+    expect(screen.queryByText(/Loading release builds/)).not.toBeInTheDocument()
+    expect(repositoryState).toHaveBeenCalledTimes(1)
+
+    view.rerender(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={{ ...dashboard, fetchedAt: '2026-07-15T11:00:00Z' }}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+    expect(repositoryState).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits closed unmerged PRs from service lists and counts', () => {
+    const closedDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        {
+          ...dashboard.services[0],
+          items: [
+            {
+              ...dashboard.services[0].items[0],
+              pullRequest: {
+                ...dashboard.services[0].items[0].pullRequest!,
+                state: 'closed',
+                merged: false,
+              },
+            },
+          ],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={closedDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByText('OH-123 Release API')).not.toBeInTheDocument()
+    expect(screen.getByText('No services match your search.')).toBeVisible()
   })
 
   it('filters services whose latest QA build is not live', async () => {

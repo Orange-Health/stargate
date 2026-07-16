@@ -260,14 +260,15 @@ describe('Jira development links', () => {
   it('loads Jira-linked PRs without using GitHub Search', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input)
-      if (url.endsWith('/repos/Orange-Health/service-api/pulls/42')) {
+      const pullNumber = Number(url.match(/\/pulls\/(42|43)$/)?.[1])
+      if (pullNumber) {
         return new Response(
           JSON.stringify({
-            id: 42,
-            number: 42,
+            id: pullNumber,
+            number: pullNumber,
             title: 'OH-123 linked work',
-            html_url: 'https://github.com/Orange-Health/service-api/pull/42',
-            state: 'open',
+            html_url: `https://github.com/Orange-Health/service-api/pull/${pullNumber}`,
+            state: pullNumber === 43 ? 'closed' : 'open',
             draft: false,
             merged: false,
             mergeable: true,
@@ -279,15 +280,15 @@ describe('Jira development links', () => {
               ref: 'dev',
               repo: { full_name: 'Orange-Health/service-api' },
             },
-            head: { ref: 'feature/OH-123', sha: 'abc123' },
+            head: { ref: 'feature/OH-123', sha: `abc${pullNumber}` },
           }),
           { status: 200 },
         )
       }
-      if (url.endsWith('/pulls/42/reviews?per_page=100')) {
+      if (/\/pulls\/(?:42|43)\/reviews\?per_page=100$/.test(url)) {
         return new Response(JSON.stringify([]), { status: 200 })
       }
-      if (url.endsWith('/commits/abc123/check-runs?per_page=100')) {
+      if (/\/commits\/abc(?:42|43)\/check-runs\?per_page=100$/.test(url)) {
         return new Response(JSON.stringify({ check_runs: [] }), {
           status: 200,
         })
@@ -310,12 +311,13 @@ describe('Jira development links', () => {
       {
         key: 'OH-123',
         developmentSummary:
-          'https://github.com/Orange-Health/service-api/pull/42',
+          'https://github.com/Orange-Health/service-api/pull/42 https://github.com/Orange-Health/service-api/pull/43',
       },
     ])
 
     expect(result.byIssue.get('OH-123')?.[0].number).toBe(42)
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(result.byIssue.get('OH-123')).toHaveLength(1)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/search/'))).toBe(false)
   })
 })

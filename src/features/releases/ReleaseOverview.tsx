@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../shared/api'
+import { isClosedWithoutMerge } from '../../shared/pullRequests'
 import type {
   ConnectionStatus,
   DashboardProgress,
@@ -62,6 +63,22 @@ function isClearedMerge(item: ReleaseItem) {
     (item.pullRequest?.baseBranch === 'dev' ||
       item.pullRequest?.baseBranch === 'main')
   )
+}
+
+function withoutClosedPullRequests(service: ServiceRelease): ServiceRelease {
+  const items = service.items.filter(
+    (item) => !isClosedWithoutMerge(item.pullRequest),
+  )
+  if (items.length === service.items.length) return service
+  return {
+    ...service,
+    items,
+    eligibleCount: items.filter((item) => item.eligible).length,
+    blockedCount: items.filter(
+      (item) => !item.eligible && !item.pullRequest?.merged,
+    ).length,
+    mergedCount: items.filter(isClearedMerge).length,
+  }
 }
 
 function formatDate(value?: string) {
@@ -226,9 +243,17 @@ function ServiceDetail({
   const [merging, setMerging] = useState<number>()
   const [refreshing, setRefreshing] = useState(false)
   const [mergeError, setMergeError] = useState('')
+  const [activeTab, setActiveTab] = useState<'prs' | 'releases' | 'branches'>(
+    'prs',
+  )
+  const [operationsActivated, setOperationsActivated] = useState(false)
   const [optimisticallyMerged, setOptimisticallyMerged] = useState<Set<number>>(
     new Set(),
   )
+
+  useEffect(() => {
+    setService(initialService)
+  }, [initialService])
 
   async function mergePullRequest(pullNumber: number) {
     if (!window.confirm(`Merge feature PR #${pullNumber} into dev?`)) return
@@ -258,16 +283,19 @@ function ServiceDetail({
         selectedVersionId,
         service.repository,
         service.items.map((item) => item.issue.key),
+        false,
       )
       setService(result.service)
-      window.dispatchEvent(
-        new CustomEvent('service-refresh-requested', {
-          detail: {
-            repository: service.repository,
-            state: result.repositoryState,
-          },
-        }),
-      )
+      if (result.repositoryState) {
+        window.dispatchEvent(
+          new CustomEvent('service-refresh-requested', {
+            detail: {
+              repository: service.repository,
+              state: result.repositoryState,
+            },
+          }),
+        )
+      }
     } catch (reason) {
       setMergeError(
         reason instanceof Error
@@ -279,39 +307,19 @@ function ServiceDetail({
     }
   }
 
+  function selectTab(tab: 'prs' | 'releases' | 'branches') {
+    setActiveTab(tab)
+    if (tab !== 'prs') setOperationsActivated(true)
+  }
+
   return (
     <section className="detail-panel">
       <div className="detail-heading">
         <div>
-          <p className="eyebrow">Service detail</p>
           <h2>{name}</h2>
           <p className="muted">{service.repository}</p>
         </div>
         <div className="detail-actions">
-          <button
-            className="secondary-button"
-            type="button"
-            onClick={() => void refreshService()}
-            disabled={refreshing || merging !== undefined}
-          >
-            {refreshing ? 'Refreshing…' : '↻ Refresh service'}
-          </button>
-          <button
-            className="create-release-button"
-            type="button"
-            onClick={onCreateRelease}
-          >
-            <span aria-hidden="true">＋</span> Create staging release
-          </button>
-          {productionEnabled && (
-            <button
-              className="create-release-button"
-              type="button"
-              onClick={onCreateProductionRelease}
-            >
-              <span aria-hidden="true">＋</span> Create production release
-            </button>
-          )}
           <div className="summary-badge">
             {service.eligibleCount + service.mergedCount}/{service.items.length}
             <small>clear</small>
@@ -325,6 +333,44 @@ function ServiceDetail({
         </div>
       )}
 
+      <div className="service-detail-tabs" role="tablist" aria-label="Service details">
+        {[
+          ['prs', 'PRs'],
+          ['branches', 'Branch Ops'],
+          ['releases', 'Releases'],
+        ].map(([tab, label]) => (
+          <button
+            className={activeTab === tab ? 'active' : ''}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tab}
+            key={tab}
+            onClick={() =>
+              selectTab(tab as 'prs' | 'releases' | 'branches')
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'prs' && (
+      <div
+        className="service-operations"
+        role="tabpanel"
+        aria-label="PRs"
+      >
+        <div className="service-tab-panel-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={() => void refreshService()}
+            disabled={refreshing || merging !== undefined}
+          >
+            {refreshing ? 'Refreshing…' : '↻ Refresh PRs'}
+          </button>
+        </div>
+      <div className="operation-section">
       <div className="pr-list">
         {service.items.map((item) => {
           const mergeReady =
@@ -429,11 +475,33 @@ function ServiceDetail({
           )
         })}
       </div>
-      <ServiceOperations
-        key={service.repository}
-        repository={service.repository}
-        productionEnabled={productionEnabled}
-      />
+      </div>
+      </div>
+      )}
+      {operationsActivated && (
+        <div
+          role="tabpanel"
+          aria-label={activeTab === 'branches' ? 'Branch Ops' : 'Releases'}
+          hidden={activeTab === 'prs'}
+        >
+          <ServiceOperations
+            key={service.repository}
+            repository={service.repository}
+            productionEnabled={productionEnabled}
+            onCreateStagingRelease={onCreateRelease}
+            onCreateProductionRelease={
+              productionEnabled ? onCreateProductionRelease : undefined
+            }
+            view={
+              activeTab === 'releases'
+                ? 'releases'
+                : activeTab === 'branches'
+                  ? 'branches'
+                  : 'hidden'
+            }
+          />
+        </div>
+      )}
     </section>
   )
 }
@@ -479,11 +547,27 @@ export function ReleaseOverview({
     Record<string, DeploymentFreshness>
   >({})
   const [freshnessLoading, setFreshnessLoading] = useState(false)
+  const serviceListRef = useRef<HTMLDivElement>(null)
+  const [serviceListOverflow, setServiceListOverflow] = useState({
+    top: false,
+    bottom: false,
+  })
+  const visibleServices = useMemo(
+    () =>
+      dashboard?.services
+        .map(withoutClosedPullRequests)
+        .filter((service) => service.items.length > 0) ?? [],
+    [dashboard],
+  )
+  const visibleDashboard = useMemo(
+    () => (dashboard ? { ...dashboard, services: visibleServices } : undefined),
+    [dashboard, visibleServices],
+  )
   const repositoryScope =
-    dashboard?.services
+    visibleServices
       .map((service) => service.repository)
       .sort()
-      .join('\n') ?? ''
+      .join('\n')
 
   useEffect(() => {
     const syncView = () =>
@@ -597,7 +681,7 @@ export function ReleaseOverview({
 
   const filteredServices = useMemo(() => {
     if (!dashboard) return []
-    let services = dashboard.services
+    let services = visibleServices
     if (serviceFilter === 'pending') {
       services = services.filter((service) =>
         service.items.some(
@@ -632,6 +716,7 @@ export function ReleaseOverview({
     repositoryRisks,
     serviceFilter,
     serviceSearch,
+    visibleServices,
   ])
   const selectedService = useMemo(
     () =>
@@ -641,33 +726,33 @@ export function ReleaseOverview({
     [filteredServices, selectedRepository],
   )
   const mergedIssueKeys = new Set(
-    dashboard?.services.flatMap((service) =>
+    visibleServices.flatMap((service) =>
       service.items
         .filter(isClearedMerge)
         .map((item) => item.issue.key),
-    ) ?? [],
+    ),
   )
   const totalItems = dashboard?.version.issueCount ?? 0
   const readyItems = mergedIssueKeys.size
   const pendingServiceCount =
-    dashboard?.services.filter((service) =>
+    visibleServices.filter((service) =>
       service.items.some(
         (item) => item.pullRequest && !item.pullRequest.merged,
       ),
-    ).length ?? 0
+    ).length
   const issueServiceCount =
-    dashboard?.services.filter(hasDevPullRequestIssues).length ?? 0
+    visibleServices.filter(hasDevPullRequestIssues).length
   const backMergeServiceCount =
-    dashboard?.services.filter(
+    visibleServices.filter(
       (service) =>
         repositoryRisks[service.repository]?.backMergeOutdated ||
         repositoryRisks[service.repository]?.backMergePending ||
         service.backMergePending,
-    ).length ?? 0
+    ).length
   const outdatedServiceCount =
-    dashboard?.services.filter(
+    visibleServices.filter(
       (service) => deploymentFreshness[service.repository]?.outdated,
-    ).length ?? 0
+    ).length
   const selectedServiceWithRisk = selectedService
     ? {
         ...selectedService,
@@ -680,7 +765,27 @@ export function ReleaseOverview({
       }
     : undefined
 
-  if (releaseDayOpen && dashboard) {
+  useEffect(() => {
+    const list = serviceListRef.current
+    if (!list) return
+    const update = () => {
+      const top = list.scrollTop > 1
+      const bottom =
+        list.scrollTop + list.clientHeight < list.scrollHeight - 1
+      setServiceListOverflow((current) =>
+        current.top === top && current.bottom === bottom
+          ? current
+          : { top, bottom },
+      )
+    }
+    update()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(update)
+    observer.observe(list)
+    return () => observer.disconnect()
+  }, [filteredServices])
+
+  if (releaseDayOpen && visibleDashboard) {
     return (
       <div className="app-shell release-day-app-shell">
         <header className="topbar">
@@ -701,8 +806,8 @@ export function ReleaseOverview({
         </header>
         <main className="release-day-page-shell">
           <ReleaseDayOperations
-            key={dashboard.version.id}
-            dashboard={dashboard}
+            key={visibleDashboard.version.id}
+            dashboard={visibleDashboard}
             productionEnabled={Boolean(connection.productionEnabled)}
             onClose={() => showReleaseDay(false)}
           />
@@ -722,6 +827,14 @@ export function ReleaseOverview({
           </span>
         </div>
         <div className="topbar-actions">
+          <button
+            className="create-release-button topbar-release-button"
+            type="button"
+            onClick={() => showReleaseDay(true)}
+            disabled={!dashboard}
+          >
+            Open release control room
+          </button>
           <ThemeToggle />
           <span className="connection-dot" />
           <span className="connected-label">
@@ -840,7 +953,7 @@ export function ReleaseOverview({
                 </div>
               </div>
               <div className="stat">
-                <strong>{dashboard.services.length}</strong>
+                <strong>{visibleServices.length}</strong>
                 <span>Services</span>
               </div>
               <div className="stat">
@@ -860,33 +973,14 @@ export function ReleaseOverview({
               </div>
             ))}
 
-            <section className="release-day-launcher">
-              <div>
-                <p className="eyebrow">Release-day automation</p>
-                <h2>Batch production rollout</h2>
-                <p>
-                  Promote selected services, create production releases, and
-                  monitor builds from a dedicated control room.
-                </p>
-              </div>
-              <button
-                className="primary-button"
-                type="button"
-                onClick={() => showReleaseDay(true)}
-              >
-                Open release control room
-              </button>
-            </section>
-
             <div className="dashboard-grid">
               <section className="services-panel">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">Release scope</p>
                     <h2>Services</h2>
                   </div>
                   <span>
-                    {filteredServices.length}/{dashboard.services.length}
+                    {filteredServices.length}/{visibleServices.length}
                   </span>
                 </div>
                 <label className="service-search">
@@ -919,7 +1013,7 @@ export function ReleaseOverview({
                       onSelectRepository('')
                     }}
                   >
-                    All <span>{dashboard.services.length}</span>
+                    All <span>{visibleServices.length}</span>
                   </button>
                   <button
                     className={serviceFilter === 'pending' ? 'active' : ''}
@@ -973,7 +1067,25 @@ export function ReleaseOverview({
                     </span>
                   </button>
                 </div>
-                <div className="service-list">
+                <div className="service-list-wrap">
+                  <span
+                    className={`service-list-gradient top ${serviceListOverflow.top ? 'visible' : ''}`}
+                    aria-hidden="true"
+                  />
+                <div
+                  className="service-list"
+                  ref={serviceListRef}
+                  onScroll={() => {
+                    const list = serviceListRef.current
+                    if (!list) return
+                    setServiceListOverflow({
+                      top: list.scrollTop > 1,
+                      bottom:
+                        list.scrollTop + list.clientHeight <
+                        list.scrollHeight - 1,
+                    })
+                  }}
+                >
                   {filteredServices.length ? (
                     filteredServices.map((service) => (
                       <ServiceCard
@@ -993,10 +1105,15 @@ export function ReleaseOverview({
                     </div>
                   )}
                 </div>
+                  <span
+                    className={`service-list-gradient bottom ${serviceListOverflow.bottom ? 'visible' : ''}`}
+                    aria-hidden="true"
+                  />
+                </div>
               </section>
               {selectedServiceWithRisk ? (
                 <ServiceDetail
-                  key={`${selectedServiceWithRisk.repository}-${dashboard.fetchedAt}`}
+                  key={selectedServiceWithRisk.repository}
                   service={selectedServiceWithRisk}
                   selectedVersionId={selectedVersionId}
                   onCreateRelease={() =>

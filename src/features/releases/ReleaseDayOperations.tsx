@@ -45,6 +45,14 @@ type DeployTarget = {
   services: string[]
 }
 
+type CellOperation = {
+  repository: string
+  route: PromotionRoute
+  label: string
+}
+
+type RepositorySyncStatus = 'queued' | 'syncing' | 'synced' | 'failed'
+
 const POLL_INTERVAL = 15_000
 const MAX_CONCURRENCY = 3
 
@@ -182,6 +190,10 @@ export function ReleaseDayOperations({
   >({})
   const [refreshing, setRefreshing] = useState(false)
   const [busyAction, setBusyAction] = useState('')
+  const [cellOperation, setCellOperation] = useState<CellOperation>()
+  const [repositorySync, setRepositorySync] = useState<
+    Record<string, RepositorySyncStatus>
+  >({})
   const [deployTarget, setDeployTarget] = useState<DeployTarget>()
   const sessionRef = useRef(session)
   const loadSequence = useRef(0)
@@ -242,27 +254,70 @@ export function ReleaseDayOperations({
       if (repositories.length === 0) return
       const sequence = ++loadSequence.current
       if (!silent) setRefreshing(true)
+      setRepositorySync((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          repositories.map((repository) => [repository, 'queued' as const]),
+        ),
+      }))
       const next: Record<string, RepositoryReleaseState | undefined> = {}
-      await mapConcurrent(repositories, async (repository) => {
+      for (const repository of repositories) {
         try {
-          if (force) await api.refreshRepository(repository)
-          next[repository] = await api.repositoryState(repository)
-        } catch (reason) {
-          if (!silent) {
-            const message =
-              reason instanceof Error
-                ? reason.message
-                : 'Could not refresh repository state.'
-            setRepositoryError(repository, message)
+          setRepositorySync((current) => ({
+            ...current,
+            [repository]: 'syncing',
+          }))
+          log('info', 'Checking repository promotion and release state.', repository)
+          if (force) {
+            log('info', 'Invalidating cached repository state.', repository)
+            await api.refreshRepository(repository)
           }
+          const repositoryState = await api.repositoryState(repository)
+          next[repository] = repositoryState
+          for (const step of repositoryState.promotionSteps) {
+            if (step.state === 'pr_open' && step.pullRequest) {
+              log(
+                'success',
+                `Discovered open ${step.fromBranch} → ${step.toBranch} PR #${step.pullRequest.number}: ${step.pullRequest.title}.`,
+                repository,
+              )
+            } else if (step.state === 'up_to_date') {
+              log(
+                'success',
+                `Discovered ${step.fromBranch} → ${step.toBranch} is already up to date.`,
+                repository,
+              )
+            } else {
+              log(
+                'warning',
+                `Discovered ${step.fromBranch} → ${step.toBranch} needs a PR (${step.commitsAhead} commits waiting).`,
+                repository,
+              )
+            }
+          }
+          setRepositorySync((current) => ({
+            ...current,
+            [repository]: 'synced',
+          }))
+        } catch (reason) {
+          const message =
+            reason instanceof Error
+              ? reason.message
+              : 'Could not refresh repository state.'
+          setRepositoryError(repository, message)
+          setRepositorySync((current) => ({
+            ...current,
+            [repository]: 'failed',
+          }))
+          log('error', `Repository state check failed: ${message}`, repository)
         }
-      })
+      }
       if (sequence === loadSequence.current) {
         setStates((current) => ({ ...current, ...next }))
         if (!silent) setRefreshing(false)
       }
     },
-    [setRepositoryError],
+    [log, setRepositoryError],
   )
 
   useEffect(() => {
@@ -356,6 +411,9 @@ export function ReleaseDayOperations({
       selected.length > 0 && selected.every(predicate),
     [selected],
   )
+  const syncCompleted = selected.filter((repository) =>
+    ['synced', 'failed'].includes(repositorySync[repository]),
+  ).length
   const devPrsReady = everySelected((repository) => {
     const step = routeStep(states[repository], 'dev-to-release')
     return step?.state === 'pr_open' || step?.state === 'up_to_date'
@@ -391,12 +449,25 @@ export function ReleaseDayOperations({
   async function runAction(
     action: string,
     task: (repository: string) => Promise<void>,
+    options: {
+      sequential?: boolean
+      reconcile?: boolean
+      attemptLabel?: string
+    } = {},
   ) {
-    if (busyAction || selected.length === 0) return
+    if (busyAction || refreshing || selected.length === 0) return
+    const repositories = dashboard.services
+      .map((service) => service.repository)
+      .filter((repository) => selectedSet.has(repository))
     setBusyAction(action)
-    log('info', `${action} started for ${selected.length} services.`)
-    await mapConcurrent(selected, async (repository) => {
+    log('info', `${action} started for ${repositories.length} services.`)
+    const execute = async (repository: string, index: number) => {
       setRepositoryError(repository)
+      log(
+        'info',
+        `Attempting ${options.attemptLabel ?? action.toLowerCase()} (${index + 1}/${repositories.length}).`,
+        repository,
+      )
       try {
         await task(repository)
       } catch (reason) {
@@ -405,8 +476,17 @@ export function ReleaseDayOperations({
         setRepositoryError(repository, message)
         log('error', message, repository)
       }
-    })
-    await refreshStates(true)
+    }
+    if (options.sequential) {
+      for (const [index, repository] of repositories.entries()) {
+        await execute(repository, index)
+      }
+    } else {
+      await mapConcurrent(repositories, async (repository) => {
+        await execute(repository, repositories.indexOf(repository))
+      })
+    }
+    if (options.reconcile !== false) await refreshStates(true)
     log('info', `${action} finished. Review flagged services before continuing.`)
     setBusyAction('')
   }
@@ -416,21 +496,98 @@ export function ReleaseDayOperations({
       route === 'dev-to-release'
         ? 'Create Dev → Release PRs'
         : 'Create Release → Default PRs'
-    await runAction(title, async (repository) => {
-      const step = routeStep(states[repository], route)
-      if (step?.state === 'up_to_date') {
-        log('success', `${step.fromBranch} and ${step.toBranch} are already aligned.`, repository)
-        return
-      }
-      const pull =
-        step?.pullRequest ??
-        (await api.createPromotionPullRequest({ repository, route }))
-      log(
-        'success',
-        `PR #${pull.number}: ${pull.title} (${pull.headBranch} → ${pull.baseBranch})`,
-        repository,
-      )
-    })
+    await runAction(
+      title,
+      async (repository) => {
+        const step = routeStep(states[repository], route)
+        const fromBranch =
+          step?.fromBranch ?? (route === 'dev-to-release' ? 'dev' : 'release')
+        const toBranch =
+          step?.toBranch ??
+          (route === 'dev-to-release'
+            ? 'release'
+            : states[repository]?.defaultBranch ?? 'default')
+        log(
+          'info',
+          `Checking for an open ${fromBranch} → ${toBranch} PR.`,
+          repository,
+        )
+        if (step?.state === 'up_to_date') {
+          log(
+            'success',
+            `Discovery: ${step.fromBranch} and ${step.toBranch} are already aligned; no PR needed.`,
+            repository,
+          )
+          return
+        }
+        let pull = step?.pullRequest
+        if (pull) {
+          log(
+            'success',
+            `Discovery: found existing open PR #${pull.number}: ${pull.title}.`,
+            repository,
+          )
+        }
+        if (!pull) {
+          log(
+            'info',
+            `Discovery: no open ${fromBranch} → ${toBranch} PR in loaded state.`,
+            repository,
+          )
+          log(
+            'info',
+            'Submitting GitHub check-and-create request.',
+            repository,
+          )
+          setCellOperation({ repository, route, label: 'Creating PR' })
+          try {
+            pull = await api.createPromotionPullRequest({ repository, route })
+          } finally {
+            setCellOperation((current) =>
+              current?.repository === repository && current.route === route
+                ? undefined
+                : current,
+            )
+          }
+          log(
+            pull.resolution === 'existing' ? 'success' : 'info',
+            pull.resolution === 'existing'
+              ? `GitHub discovered existing PR #${pull.number}; no duplicate was created.`
+              : `GitHub created PR #${pull.number}.`,
+            repository,
+          )
+        }
+        setStates((current) => {
+          const repositoryState = current[repository]
+          if (!repositoryState) return current
+          return {
+            ...current,
+            [repository]: {
+              ...repositoryState,
+              promotionSteps: repositoryState.promotionSteps.map((item) =>
+                item.route === route
+                  ? { ...item, state: 'pr_open', pullRequest: pull }
+                  : item,
+              ),
+              fetchedAt: new Date().toISOString(),
+            },
+          }
+        })
+        log(
+          'success',
+          `Result: PR #${pull.number} is ready for tracking: ${pull.title} (${pull.headBranch} → ${pull.baseBranch}).`,
+          repository,
+        )
+      },
+      {
+        sequential: true,
+        reconcile: false,
+        attemptLabel:
+          route === 'dev-to-release'
+            ? 'Dev → Release PR creation'
+            : 'Release → Default PR creation',
+      },
+    )
   }
 
   async function mergePullRequests(route: PromotionRoute) {
@@ -438,22 +595,119 @@ export function ReleaseDayOperations({
       route === 'dev-to-release'
         ? 'Merge Dev → Release PRs'
         : 'Merge Release → Default PRs'
-    await runAction(title, async (repository) => {
-      const step = routeStep(states[repository], route)
-      if (step?.state === 'up_to_date') {
-        log('success', 'Branches are already aligned; no merge required.', repository)
-        return
-      }
-      if (!step?.pullRequest) throw new Error('No open promotion PR was found.')
-      const blocked = mergeBlockReason(step.pullRequest)
-      if (blocked) throw new Error(`${blocked} on PR #${step.pullRequest.number}.`)
-      const result = await api.mergePromotionPullRequest({
-        repository,
-        pullNumber: step.pullRequest.number,
-      })
-      if (!result.merged) throw new Error(result.message || 'GitHub did not merge the PR.')
-      log('success', `Merged PR #${step.pullRequest.number}.`, repository)
-    })
+    await runAction(
+      title,
+      async (repository) => {
+        const step = routeStep(states[repository], route)
+        log(
+          'info',
+          `Checking merge target for ${step?.fromBranch ?? route} → ${step?.toBranch ?? 'target branch'}.`,
+          repository,
+        )
+        if (step?.state === 'up_to_date') {
+          log(
+            'success',
+            'Discovery: branches are already aligned; no merge required.',
+            repository,
+          )
+          return
+        }
+        if (!step?.pullRequest) {
+          log('warning', 'Discovery: no open promotion PR to merge.', repository)
+          throw new Error('No open promotion PR was found.')
+        }
+        log(
+          'info',
+          `Discovery: validating PR #${step.pullRequest.number}: ${step.pullRequest.title}.`,
+          repository,
+        )
+        const blocked = mergeBlockReason(step.pullRequest)
+        if (blocked) {
+          log(
+            'warning',
+            `Validation blocked PR #${step.pullRequest.number}: ${blocked}.`,
+            repository,
+          )
+          throw new Error(`${blocked} on PR #${step.pullRequest.number}.`)
+        }
+        log(
+          'success',
+          `Validation passed for PR #${step.pullRequest.number}; submitting merge to ${step.toBranch}.`,
+          repository,
+        )
+        setCellOperation({
+          repository,
+          route,
+          label: `Merging to ${step.toBranch}`,
+        })
+        let result
+        try {
+          result = await api.mergePromotionPullRequest({
+            repository,
+            pullNumber: step.pullRequest.number,
+          })
+        } finally {
+          setCellOperation((current) =>
+            current?.repository === repository && current.route === route
+              ? undefined
+              : current,
+          )
+        }
+        if (!result.merged) {
+          log(
+            'error',
+            `GitHub rejected merge for PR #${step.pullRequest.number}: ${result.message || 'No reason returned.'}`,
+            repository,
+          )
+          throw new Error(result.message || 'GitHub did not merge the PR.')
+        }
+        setStates((current) => {
+          const repositoryState = current[repository]
+          if (!repositoryState) return current
+          return {
+            ...current,
+            [repository]: {
+              ...repositoryState,
+              promotionSteps: repositoryState.promotionSteps.map((item) => {
+                if (item.route === route) {
+                  return {
+                    ...item,
+                    commitsAhead: 0,
+                    state: 'up_to_date',
+                    pullRequest: undefined,
+                  }
+                }
+                if (
+                  route === 'dev-to-release' &&
+                  item.route === 'release-to-default'
+                ) {
+                  return { ...item, state: 'needs_pr' }
+                }
+                return item
+              }),
+              productionReady:
+                route === 'release-to-default'
+                  ? true
+                  : repositoryState.productionReady,
+              fetchedAt: new Date().toISOString(),
+            },
+          }
+        })
+        log(
+          'success',
+          `Result: merged PR #${step.pullRequest.number} into ${step.toBranch}${result.sha ? ` at ${result.sha.slice(0, 8)}` : ''}.`,
+          repository,
+        )
+      },
+      {
+        sequential: true,
+        reconcile: false,
+        attemptLabel:
+          route === 'dev-to-release'
+            ? 'Dev → Release PR merge'
+            : 'Release → Default PR merge',
+      },
+    )
   }
 
   async function createProductionReleases() {
@@ -518,29 +772,69 @@ export function ReleaseDayOperations({
     <>
       <section className="release-day-page" aria-labelledby="release-day-title">
             <header className="release-day-header">
-              <div>
-                <p className="eyebrow">Release-day control room</p>
+              <div className="release-day-title">
                 <h2 id="release-day-title">{dashboard.version.name}</h2>
-                <p>
-                  Saved locally · canonical state reconciled from GitHub every
-                  15 seconds
-                </p>
+                <span>
+                  {selected.length}/{dashboard.services.length} selected
+                  {refreshing && ` · Syncing ${syncCompleted}/${selected.length}`}
+                </span>
               </div>
-              <div className="release-day-header-actions">
+              <div className="release-day-toolbar">
+                <label>
+                  <span>Production date</span>
+                  <input
+                    type="date"
+                    value={session.releaseDate}
+                    disabled={
+                      releasesCreated || refreshing || Boolean(busyAction)
+                    }
+                    onChange={(event) =>
+                      setSession((current) => ({
+                        ...current,
+                        releaseDate: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={refreshing || Boolean(busyAction)}
+                  onClick={() =>
+                    setSession((current) => ({
+                      ...current,
+                      selectedRepositories: dashboard.services.map(
+                        (service) => service.repository,
+                      ),
+                    }))
+                  }
+                >
+                  Select all
+                </button>
+                <button
+                  className="text-button"
+                  type="button"
+                  disabled={refreshing || Boolean(busyAction)}
+                  onClick={resetSession}
+                >
+                  New run
+                </button>
                 <button
                   className="secondary-button"
                   type="button"
                   onClick={() => void refreshStates(false, true)}
                   disabled={refreshing || Boolean(busyAction)}
                 >
-                  {refreshing ? 'Refreshing…' : '↻ Refresh status'}
+                  {refreshing
+                    ? `Syncing ${syncCompleted}/${selected.length}`
+                    : '↻ Refresh status'}
                 </button>
                 <button
                   className="secondary-button"
                   type="button"
                   onClick={onClose}
                 >
-                  ← Back to dashboard
+                  ← Dashboard
                 </button>
               </div>
             </header>
@@ -552,60 +846,18 @@ export function ReleaseDayOperations({
               </div>
             )}
 
-            <div className="release-day-config">
-              <label>
-                Production release date
-                <input
-                  type="date"
-                  value={session.releaseDate}
-                  disabled={releasesCreated || Boolean(busyAction)}
-                  onChange={(event) =>
-                    setSession((current) => ({
-                      ...current,
-                      releaseDate: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <span>
-                {selected.length}/{dashboard.services.length} services selected
-              </span>
-              <button
-                className="text-button"
-                type="button"
-                disabled={Boolean(busyAction)}
-                onClick={() =>
-                  setSession((current) => ({
-                    ...current,
-                    selectedRepositories: dashboard.services.map(
-                      (service) => service.repository,
-                    ),
-                  }))
-                }
-              >
-                Select all
-              </button>
-              <button
-                className="text-button"
-                type="button"
-                disabled={Boolean(busyAction)}
-                onClick={resetSession}
-              >
-                New run
-              </button>
-            </div>
-
             <div className="release-day-steps">
               <article className="release-day-step">
                 <span>1</span>
                 <div>
                   <strong>Create Dev → Release PRs</strong>
-                  <small>Existing PRs are detected and logged.</small>
                 </div>
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={Boolean(busyAction) || selected.length === 0}
+                  disabled={
+                    refreshing || Boolean(busyAction) || selected.length === 0
+                  }
                   onClick={() => void createPullRequests('dev-to-release')}
                 >
                   {busyAction === 'Create Dev → Release PRs'
@@ -619,12 +871,11 @@ export function ReleaseDayOperations({
                 <span>2</span>
                 <div>
                   <strong>Merge Dev → Release PRs</strong>
-                  <small>Conflicts, drafts, and failing checks are flagged.</small>
                 </div>
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={!devPrsReady || Boolean(busyAction)}
+                  disabled={!devPrsReady || refreshing || Boolean(busyAction)}
                   onClick={() => void mergePullRequests('dev-to-release')}
                 >
                   {busyAction === 'Merge Dev → Release PRs'
@@ -638,12 +889,11 @@ export function ReleaseDayOperations({
                 <span>3</span>
                 <div>
                   <strong>Create Release → Default PRs</strong>
-                  <small>Default branch is discovered per repository.</small>
                 </div>
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={!devMerged || Boolean(busyAction)}
+                  disabled={!devMerged || refreshing || Boolean(busyAction)}
                   onClick={() => void createPullRequests('release-to-default')}
                 >
                   {busyAction === 'Create Release → Default PRs'
@@ -657,12 +907,13 @@ export function ReleaseDayOperations({
                 <span>4</span>
                 <div>
                   <strong>Merge Release → Default PRs</strong>
-                  <small>The release cannot advance until every branch is aligned.</small>
                 </div>
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={!defaultPrsReady || Boolean(busyAction)}
+                  disabled={
+                    !defaultPrsReady || refreshing || Boolean(busyAction)
+                  }
                   onClick={() => void mergePullRequests('release-to-default')}
                 >
                   {busyAction === 'Merge Release → Default PRs'
@@ -676,12 +927,11 @@ export function ReleaseDayOperations({
                 <span>5</span>
                 <div>
                   <strong>Create production releases</strong>
-                  <small>Backend/frontend tag formats and retries are automatic.</small>
                 </div>
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={!defaultMerged || Boolean(busyAction)}
+                  disabled={!defaultMerged || refreshing || Boolean(busyAction)}
                   onClick={() => void createProductionReleases()}
                 >
                   {busyAction === 'Create production releases'
@@ -695,13 +945,10 @@ export function ReleaseDayOperations({
                 <span>6</span>
                 <div>
                   <strong>Monitor builds and deploy</strong>
-                  <small>
-                    {buildsSucceeded
-                      ? 'Every selected build succeeded.'
-                      : 'Deploy unlocks separately for each successful build.'}
-                  </small>
                 </div>
-                <span className="auto-refresh">Live · 15s</span>
+                <span className={`batch-status ${buildsSucceeded ? 'success' : 'running'}`}>
+                  {buildsSucceeded ? 'Ready' : 'Live'}
+                </span>
               </article>
             </div>
 
@@ -724,6 +971,7 @@ export function ReleaseDayOperations({
                   {dashboard.services.map((service) => {
                     const repository = service.repository
                     const progress = session.repositories[repository]
+                    const syncStatus = repositorySync[repository]
                     const release = progress?.productionRelease
                     const trackedRelease = release
                       ? states[repository]?.productionReleases.find(
@@ -740,6 +988,16 @@ export function ReleaseDayOperations({
                       'release-to-default',
                       defaultPrsReady ? 'merge' : 'create',
                     )
+                    const devOperation =
+                      cellOperation?.repository === repository &&
+                      cellOperation.route === 'dev-to-release'
+                        ? cellOperation
+                        : undefined
+                    const mainOperation =
+                      cellOperation?.repository === repository &&
+                      cellOperation.route === 'release-to-default'
+                        ? cellOperation
+                        : undefined
                     return (
                       <tr
                         key={repository}
@@ -749,7 +1007,7 @@ export function ReleaseDayOperations({
                           <input
                             type="checkbox"
                             checked={selectedSet.has(repository)}
-                            disabled={Boolean(busyAction)}
+                            disabled={refreshing || Boolean(busyAction)}
                             onChange={() => toggleRepository(repository)}
                             aria-label={`Include ${repository}`}
                           />
@@ -757,6 +1015,22 @@ export function ReleaseDayOperations({
                         <td>
                           <strong>{repository.split('/').at(-1)}</strong>
                           <small>{repository}</small>
+                          {syncStatus && (
+                            <span
+                              className={`release-day-repository-sync ${syncStatus}`}
+                            >
+                              {syncStatus === 'syncing' && (
+                                <span className="spinner" />
+                              )}
+                              {syncStatus === 'queued'
+                                ? 'Queued'
+                                : syncStatus === 'syncing'
+                                  ? 'Syncing'
+                                  : syncStatus === 'synced'
+                                    ? 'Synced'
+                                    : 'Sync failed'}
+                            </span>
+                          )}
                           {progress?.error && (
                             <span className="release-day-error">
                               {progress.error}
@@ -764,6 +1038,13 @@ export function ReleaseDayOperations({
                           )}
                         </td>
                         <td>
+                          {devOperation ? (
+                            <span className="release-day-cell-operation">
+                              <span className="spinner" />
+                              {devOperation.label}
+                            </span>
+                          ) : (
+                            <>
                           <span className={`batch-status ${dev.tone}`}>
                             {dev.label}
                           </span>
@@ -780,8 +1061,17 @@ export function ReleaseDayOperations({
                               Open PR ↗
                             </a>
                           )}
+                            </>
+                          )}
                         </td>
                         <td>
+                          {mainOperation ? (
+                            <span className="release-day-cell-operation">
+                              <span className="spinner" />
+                              {mainOperation.label}
+                            </span>
+                          ) : (
+                            <>
                           <span className={`batch-status ${main.tone}`}>
                             {main.label}
                           </span>
@@ -799,6 +1089,8 @@ export function ReleaseDayOperations({
                             >
                               Open PR ↗
                             </a>
+                          )}
+                            </>
                           )}
                         </td>
                         <td>
