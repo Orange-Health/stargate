@@ -26,6 +26,7 @@ type OperationLog = {
 
 type RepositoryProgress = {
   productionRelease?: CreatedProductionRelease
+  productionReleaseError?: string
   error?: string
 }
 
@@ -260,6 +261,8 @@ export function ReleaseDayOperations({
   >(restoredRepositoryStates.states)
   const [refreshing, setRefreshing] = useState(false)
   const [busyAction, setBusyAction] = useState('')
+  const [activeProductionRelease, setActiveProductionRelease] =
+    useState('')
   const [cellOperation, setCellOperation] = useState<CellOperation>()
   const [repositorySync, setRepositorySync] = useState<
     Record<string, RepositorySyncStatus>
@@ -826,13 +829,23 @@ export function ReleaseDayOperations({
     )
   }
 
-  async function createProductionReleases() {
-    await runAction('Create production releases', async (repository) => {
-      const saved = sessionRef.current.repositories[repository]?.productionRelease
-      if (saved) {
-        log('success', `${saved.tag} was already created for this run.`, repository)
-        return
-      }
+  async function createProductionRelease(repository: string) {
+    const saved = sessionRef.current.repositories[repository]?.productionRelease
+    if (saved) {
+      log('success', `${saved.tag} was already created for this run.`, repository)
+      return
+    }
+    setSession((current) => ({
+      ...current,
+      repositories: {
+        ...current.repositories,
+        [repository]: {
+          ...current.repositories[repository],
+          productionReleaseError: undefined,
+        },
+      },
+    }))
+    try {
       const release = await api.createProductionRelease({
         repository,
         date: sessionRef.current.releaseDate,
@@ -845,17 +858,71 @@ export function ReleaseDayOperations({
           [repository]: {
             ...current.repositories[repository],
             productionRelease: release,
+            productionReleaseError: undefined,
             error: undefined,
           },
         },
       }))
-      log('success', `Created ${release.tag} from release.`, repository)
+      log(
+        'success',
+        `Created ${release.tag} from ${release.sourceBranch}.`,
+        repository,
+      )
       window.dispatchEvent(
         new CustomEvent('production-release-created', {
           detail: { repository },
         }),
       )
-    })
+    } catch (reason) {
+      const message =
+        reason instanceof Error
+          ? reason.message
+          : 'Could not create the production tag.'
+      setSession((current) => ({
+        ...current,
+        repositories: {
+          ...current.repositories,
+          [repository]: {
+            ...current.repositories[repository],
+            productionReleaseError: message,
+          },
+        },
+      }))
+      throw reason
+    }
+  }
+
+  async function createProductionReleases() {
+    await runAction('Create production releases', createProductionRelease)
+  }
+
+  async function createSingleProductionRelease(repository: string) {
+    if (busyAction || refreshing || activeProductionRelease) return
+    const retrying = Boolean(
+      sessionRef.current.repositories[repository]?.productionReleaseError,
+    )
+    setActiveProductionRelease(repository)
+    setRepositoryError(repository)
+    log(
+      'info',
+      retrying
+        ? 'Retrying production tag creation.'
+        : 'Creating production tag.',
+      repository,
+    )
+    try {
+      await createProductionRelease(repository)
+      await syncRepository(repository, false, loadSequence.current)
+    } catch (reason) {
+      const message =
+        reason instanceof Error
+          ? reason.message
+          : 'Could not create the production tag.'
+      setRepositoryError(repository, message)
+      log('error', message, repository)
+    } finally {
+      setActiveProductionRelease('')
+    }
   }
 
   function toggleRepository(repository: string) {
@@ -1095,6 +1162,8 @@ export function ReleaseDayOperations({
                     const progress = session.repositories[repository]
                     const syncStatus = repositorySync[repository]
                     const release = progress?.productionRelease
+                    const releaseCreationError =
+                      progress?.productionReleaseError
                     const trackedRelease = release
                       ? states[repository]?.productionReleases.find(
                           (item) => item.tag === release.tag,
@@ -1245,8 +1314,59 @@ export function ReleaseDayOperations({
                                   : 'Waiting for workflow'}
                               </span>
                             </>
+                          ) : releaseCreationError ? (
+                            <div className="release-day-release-failure">
+                              <span className="batch-status error">
+                                Tag creation failed
+                              </span>
+                              <small>{releaseCreationError}</small>
+                              <button
+                                className="release-day-tag-button retry"
+                                type="button"
+                                disabled={
+                                  refreshing ||
+                                  Boolean(busyAction) ||
+                                  Boolean(activeProductionRelease)
+                                }
+                                onClick={() =>
+                                  void createSingleProductionRelease(repository)
+                                }
+                              >
+                                {activeProductionRelease === repository ? (
+                                  <>
+                                    <span className="spinner" /> Retrying…
+                                  </>
+                                ) : (
+                                  '↻ Retry tag creation'
+                                )}
+                              </button>
+                            </div>
                           ) : (
-                            <span className="batch-status pending">Not created</span>
+                            <div className="release-day-release-empty">
+                              <span className="batch-status pending">
+                                Not created
+                              </span>
+                              <button
+                                className="release-day-tag-button"
+                                type="button"
+                                disabled={
+                                  refreshing ||
+                                  Boolean(busyAction) ||
+                                  Boolean(activeProductionRelease)
+                                }
+                                onClick={() =>
+                                  void createSingleProductionRelease(repository)
+                                }
+                              >
+                                {activeProductionRelease === repository ? (
+                                  <>
+                                    <span className="spinner" /> Creating…
+                                  </>
+                                ) : (
+                                  '+ Create tag'
+                                )}
+                              </button>
+                            </div>
                           )}
                         </td>
                         <td>

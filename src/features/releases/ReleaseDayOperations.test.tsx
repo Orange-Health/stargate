@@ -399,14 +399,17 @@ describe('ReleaseDayOperations', () => {
     expect(repositoryStateRequest).toHaveBeenCalledTimes(2)
   })
 
-  it('creates an idempotent production release and unlocks deploy after success', async () => {
+  it('creates a production release without requiring identical branches', async () => {
     const user = userEvent.setup()
-    let state = repositoryState('up_to_date', 'up_to_date')
+    let state = {
+      ...repositoryState('up_to_date', 'up_to_date'),
+      productionReady: false,
+    }
     const created = {
       id: 91,
       repository,
       tag: 'v-26.0716.1',
-      sourceBranch: 'release',
+      sourceBranch: 'main',
       url: 'https://github.test/releases/91',
       createdAt: '2026-07-16T08:05:00Z',
     }
@@ -442,7 +445,7 @@ describe('ReleaseDayOperations', () => {
     )
     await screen.findAllByText('Merged')
     await user.click(
-      screen.getByRole('button', { name: 'Create releases' }),
+      screen.getByRole('button', { name: '+ Create tag' }),
     )
 
     await waitFor(() =>
@@ -457,6 +460,53 @@ describe('ReleaseDayOperations', () => {
     )
     expect(
       screen.getByRole('link', { name: new RegExp(created.tag) }),
+    ).toBeVisible()
+  })
+
+  it('retries a failed production tag from its table cell', async () => {
+    const user = userEvent.setup()
+    const created = {
+      id: 92,
+      repository,
+      tag: 'v-26.0716.2',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/92',
+      createdAt: '2026-07-16T08:10:00Z',
+    }
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('up_to_date', 'up_to_date'),
+    )
+    const createRelease = vi
+      .spyOn(api, 'createProductionRelease')
+      .mockRejectedValueOnce(new Error('GitHub rejected the tag.'))
+      .mockResolvedValue(created)
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh status' }),
+    )
+    await screen.findAllByText('Merged')
+    await user.click(
+      screen.getByRole('button', { name: 'Create releases' }),
+    )
+
+    expect(await screen.findByText('Tag creation failed')).toBeVisible()
+    expect(screen.getAllByText('GitHub rejected the tag.')).toHaveLength(2)
+    const retry = screen.getByRole('button', {
+      name: '↻ Retry tag creation',
+    })
+    await waitFor(() => expect(retry).toBeEnabled())
+    await user.click(retry)
+
+    expect(createRelease).toHaveBeenCalledTimes(2)
+    expect(
+      await screen.findByRole('link', { name: new RegExp(created.tag) }),
     ).toBeVisible()
   })
 })

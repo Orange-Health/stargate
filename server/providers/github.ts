@@ -550,7 +550,11 @@ export async function createProductionRelease(
   }
 
   const path = repositoryPath(repository)
-  await githubFetch(config, `/repos/${path}/branches/release`)
+  const metadata = await githubFetch<{ default_branch: string }>(
+    config,
+    `/repos/${path}`,
+  )
+  const sourceBranch = metadata.default_branch
   const prefix = productionTagPrefix(repository, date)
   const operationMarker = operationId
     ? `<!-- release-desk-operation:${operationId} -->`
@@ -575,7 +579,7 @@ export async function createProductionRelease(
         id: existing.id,
         repository,
         tag: existing.tag_name,
-        sourceBranch: existing.target_commitish || 'release',
+        sourceBranch: existing.target_commitish || sourceBranch,
         url: existing.html_url,
         createdAt: existing.created_at,
       }
@@ -597,7 +601,7 @@ export async function createProductionRelease(
         method: 'POST',
         body: JSON.stringify({
           tag_name: tag,
-          target_commitish: 'release',
+          target_commitish: sourceBranch,
           name: tag,
           draft: false,
           prerelease: false,
@@ -609,7 +613,7 @@ export async function createProductionRelease(
         id: release.id,
         repository,
         tag,
-        sourceBranch: 'release',
+        sourceBranch,
         url: release.html_url,
         createdAt: release.created_at,
       }

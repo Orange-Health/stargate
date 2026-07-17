@@ -473,11 +473,11 @@ describe('production release tags', () => {
     ).toBe('v-prod-26.0714.4')
   })
 
-  it('creates a production release from release using generated notes', async () => {
+  it('creates a production release from the default branch using generated notes', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ name: 'release' }), { status: 200 }),
+        new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 }),
       )
       .mockResolvedValueOnce(
         new Response(
@@ -514,9 +514,10 @@ describe('production release tags', () => {
     )
 
     expect(result.tag).toBe('v-26.0714.2')
+    expect(result.sourceBranch).toBe('main')
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({
       tag_name: 'v-26.0714.2',
-      target_commitish: 'release',
+      target_commitish: 'main',
       prerelease: false,
       generate_release_notes: true,
     })
@@ -527,7 +528,9 @@ describe('production release tags', () => {
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ name: 'release' }), { status: 200 }),
+        new Response(JSON.stringify({ default_branch: 'master' }), {
+          status: 200,
+        }),
       )
       .mockResolvedValueOnce(
         new Response(
@@ -535,7 +538,7 @@ describe('production release tags', () => {
             {
               id: 101,
               tag_name: 'v-26.0714.3',
-              target_commitish: 'release',
+              target_commitish: 'master',
               html_url: 'https://github.test/releases/101',
               created_at: '2026-07-14T12:05:00Z',
               body: `<!-- release-desk-operation:${operationId} -->`,
@@ -564,6 +567,7 @@ describe('production release tags', () => {
     )
 
     expect(result.tag).toBe('v-26.0714.3')
+    expect(result.sourceBranch).toBe('master')
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })

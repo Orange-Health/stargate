@@ -98,7 +98,7 @@ export function ProductionReleaseDialog({ repository, onClose }: Props) {
             <h2 id="production-release-title">Create production release</h2>
             <p className="dialog-copy">
               A production release tag will be created from the latest commit
-              on <code>release</code>.
+              on the repository&apos;s default <code>main/master</code> branch.
             </p>
             <form onSubmit={submit}>
               <label>

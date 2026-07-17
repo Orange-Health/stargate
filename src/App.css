@@ -2633,17 +2633,66 @@ label {
   color: var(--warning);
 }
 
+.release-day-release-failure,
+.release-day-release-empty {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.release-day-release-failure small {
+  color: var(--danger);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.release-day-tag-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--green);
+  border-radius: 6px;
+  color: var(--green);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 9px;
+  gap: 5px;
+  min-height: 27px;
+  padding: 0 8px;
+}
+
+.release-day-tag-button:hover:not(:disabled) {
+  background: var(--green-faint);
+}
+
+.release-day-tag-button.retry {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.release-day-tag-button.retry:hover:not(:disabled) {
+  background: rgb(239 68 68 / 10%);
+}
+
+.release-day-tag-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.release-day-tag-button .spinner {
+  height: 11px;
+  width: 11px;
+}
+
 .release-day-cell-operation {
   align-items: center;
   color: var(--green-pale);
-  display: flex !important;
+  display: inline-flex !important;
   font-size: 10px;
   font-weight: 650;
   gap: 7px;
-  justify-content: center;
   min-height: 28px;
   white-space: nowrap;
-  width: 100%;
 }
 
 .release-day-cell-operation .spinner {
