@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types'
 import {
   ReleaseDayOperations,
+  developersForReleaseService,
   latestProductionReleaseOnOrBeforeDate,
   releaseCreatedOnOrBeforeDate,
 } from './ReleaseDayOperations'
@@ -99,6 +100,87 @@ describe('ReleaseDayOperations', () => {
   })
 
   afterEach(() => vi.restoreAllMocks())
+
+  it('shows included avatars immediately and caches the detailed modal', async () => {
+    const user = userEvent.setup()
+    const service = {
+      ...dashboard.services[0],
+      items: [101, 102].map((number) => ({
+        issue: {
+          key: `OH-${number}`,
+          summary: `Issue ${number}`,
+          status: 'Done',
+          url: `https://jira.test/OH-${number}`,
+        },
+        pullRequest: {
+          id: number,
+          repository,
+          number,
+          title: `OH-${number}: feature`,
+          url: `https://github.test/pull/${number}`,
+          state: 'closed' as const,
+          draft: false,
+          merged: true,
+          baseBranch: 'dev',
+          headBranch: `feature-${number}`,
+          author: 'alice',
+          assignees: [],
+          reviewDecision: 'approved' as const,
+          mergeable: true,
+          mergeableState: 'clean',
+          checks: 'success' as const,
+          updatedAt: '2026-07-16T08:00:00Z',
+          participants: [
+            {
+              login: 'alice',
+              avatarUrl: 'https://avatars.test/alice.png',
+              role: 'author' as const,
+            },
+            {
+              login: `reviewer-${number}`,
+              avatarUrl: `https://avatars.test/reviewer-${number}.png`,
+              role: 'reviewer' as const,
+            },
+          ],
+        },
+        eligible: false,
+        blockingReasons: [],
+        warningReasons: [],
+      })),
+    }
+    const developerDashboard = {
+      ...dashboard,
+      services: [service],
+    }
+
+    expect(developersForReleaseService(service)[0]).toMatchObject({
+      login: 'alice',
+      pullRequests: [101, 102],
+    })
+    render(
+      <ReleaseDayOperations
+        dashboard={developerDashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByAltText('alice')).toBeVisible()
+    await user.click(
+      screen.getByRole('button', { name: 'View Developers' }),
+    )
+
+    expect(
+      await screen.findByRole('dialog', { name: 'service-api Developers' }),
+    ).toBeVisible()
+    const aliceRow = screen.getByText('alice').closest('article')
+    expect(aliceRow).not.toBeNull()
+    expect(within(aliceRow!).getByRole('link', { name: '#101' })).toBeVisible()
+    expect(within(aliceRow!).getByRole('link', { name: '#102' })).toBeVisible()
+    expect(
+      window.localStorage.getItem('release-day-developers:release-1'),
+    ).toContain('alice')
+  })
 
   it('allows build refresh only for tags created by the release date', () => {
     expect(

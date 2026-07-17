@@ -55,6 +55,19 @@ type CellOperation = {
 
 type RepositorySyncStatus = 'queued' | 'syncing' | 'synced' | 'failed'
 
+type ReleaseDeveloper = {
+  login: string
+  avatarUrl: string
+  roles: Array<'author' | 'assignee' | 'reviewer'>
+  pullRequests: number[]
+}
+
+type DeveloperModalState = {
+  repository: string
+  developers: ReleaseDeveloper[]
+  loading: boolean
+}
+
 const POLL_INTERVAL = 15_000
 const MAX_CONCURRENCY = 3
 const REPOSITORY_SYNC_CONCURRENCY = 2
@@ -68,6 +81,11 @@ type CachedRepositoryStates = {
 type LegacyCachedRepositoryStates = Record<
   string,
   { syncedAt: number; state: RepositoryReleaseState }
+>
+
+type CachedReleaseDevelopers = Record<
+  string,
+  { cachedAt: number; developers: ReleaseDeveloper[] }
 >
 
 function localDate() {
@@ -105,6 +123,63 @@ function sessionKey(versionId: string) {
 
 function repositoryStateCacheKey(versionId: string) {
   return `release-day-repository-states:${versionId}`
+}
+
+function releaseDevelopersCacheKey(versionId: string) {
+  return `release-day-developers:${versionId}`
+}
+
+export function developersForReleaseService(
+  service: ReleaseDashboard['services'][number],
+) {
+  const developers = new Map<
+    string,
+    {
+      login: string
+      avatarUrl: string
+      roles: Set<'author' | 'assignee' | 'reviewer'>
+      pullRequests: Set<number>
+    }
+  >()
+  for (const item of service.items) {
+    const pull = item.pullRequest
+    if (!pull) continue
+    const participants =
+      pull.participants?.length
+        ? pull.participants
+        : [
+            {
+              login: pull.author,
+              avatarUrl: `https://github.com/${pull.author}.png?size=80`,
+              role: 'author' as const,
+            },
+            ...pull.assignees.map((login) => ({
+              login,
+              avatarUrl: `https://github.com/${login}.png?size=80`,
+              role: 'assignee' as const,
+            })),
+          ]
+    for (const participant of participants) {
+      const key = participant.login.toLowerCase()
+      const existing = developers.get(key) ?? {
+        login: participant.login,
+        avatarUrl: participant.avatarUrl,
+        roles: new Set(),
+        pullRequests: new Set(),
+      }
+      existing.roles.add(participant.role)
+      existing.pullRequests.add(pull.number)
+      developers.set(key, existing)
+    }
+  }
+  return [...developers.values()]
+    .map((developer) => ({
+      login: developer.login,
+      avatarUrl: developer.avatarUrl,
+      roles: [...developer.roles],
+      pullRequests: [...developer.pullRequests],
+    }))
+    .sort((left, right) => left.login.localeCompare(right.login))
 }
 
 function restoreRepositoryStates(dashboard: ReleaseDashboard) {
@@ -289,6 +364,18 @@ export function ReleaseDayOperations({
   const [activeProductionRelease, setActiveProductionRelease] =
     useState('')
   const [checkingBuildRepository, setCheckingBuildRepository] = useState('')
+  const [developerLists, setDeveloperLists] = useState<
+    Record<string, ReleaseDeveloper[]>
+  >(() =>
+    Object.fromEntries(
+      dashboard.services.map((service) => [
+        service.repository,
+        developersForReleaseService(service),
+      ]),
+    ),
+  )
+  const [developerModal, setDeveloperModal] =
+    useState<DeveloperModalState>()
   const [cellOperation, setCellOperation] = useState<CellOperation>()
   const [repositorySync, setRepositorySync] = useState<
     Record<string, RepositorySyncStatus>
@@ -376,6 +463,69 @@ export function ReleaseDayOperations({
       }))
     },
     [],
+  )
+
+  const openDevelopers = useCallback(
+    async (repository: string) => {
+      const includedDevelopers = developerLists[repository]
+      if (includedDevelopers) {
+        const cacheKey = releaseDevelopersCacheKey(dashboard.version.id)
+        let cached: CachedReleaseDevelopers = {}
+        try {
+          cached = JSON.parse(
+            window.localStorage.getItem(cacheKey) ?? '{}',
+          ) as CachedReleaseDevelopers
+        } catch {
+          cached = {}
+        }
+        cached[repository] = {
+          cachedAt: Date.now(),
+          developers: includedDevelopers,
+        }
+        window.localStorage.setItem(cacheKey, JSON.stringify(cached))
+        setDeveloperModal({
+          repository,
+          developers: includedDevelopers,
+          loading: false,
+        })
+        return
+      }
+      setDeveloperModal({ repository, developers: [], loading: true })
+      await Promise.resolve()
+      const cacheKey = releaseDevelopersCacheKey(dashboard.version.id)
+      let cachedDevelopers: ReleaseDeveloper[] | undefined
+      let cached: CachedReleaseDevelopers = {}
+      try {
+        cached = JSON.parse(
+          window.localStorage.getItem(cacheKey) ?? '{}',
+        ) as CachedReleaseDevelopers
+        const entry = cached[repository]
+        if (
+          entry &&
+          Date.now() - entry.cachedAt < REPOSITORY_STATE_CACHE_MS &&
+          Array.isArray(entry.developers)
+        ) {
+          cachedDevelopers = entry.developers
+        }
+      } catch {
+        cached = {}
+      }
+      const service = dashboard.services.find(
+        (item) => item.repository === repository,
+      )
+      const developers =
+        cachedDevelopers ?? (service ? developersForReleaseService(service) : [])
+      if (!cachedDevelopers) {
+        cached[repository] = { cachedAt: Date.now(), developers }
+        window.localStorage.setItem(cacheKey, JSON.stringify(cached))
+      }
+      setDeveloperLists((current) => ({
+        ...current,
+        [repository]: developers,
+      }))
+      setDeveloperModal({ repository, developers, loading: false })
+    },
+    [dashboard.services, dashboard.version.id, developerLists],
   )
 
   const syncRepository = useCallback(
@@ -1279,6 +1429,7 @@ export function ReleaseDayOperations({
                       <span className="sr-only">Selected</span>
                     </th>
                     <th scope="col">Service</th>
+                    <th scope="col">Developers</th>
                     <th scope="col">Dev → Release</th>
                     <th scope="col">Release → Default</th>
                     <th scope="col">Production build</th>
@@ -1386,6 +1537,42 @@ export function ReleaseDayOperations({
                               {progress.error}
                             </span>
                           )}
+                        </td>
+                        <td>
+                          <div className="release-day-developers-cell">
+                            {developerLists[repository] && (
+                              <div
+                                className="release-day-developer-avatars"
+                                aria-label={`Developers for ${repository}`}
+                              >
+                                {developerLists[repository]
+                                  .slice(0, 5)
+                                  .map((developer) => (
+                                    <img
+                                      src={developer.avatarUrl}
+                                      alt={developer.login}
+                                      title={developer.login}
+                                      key={developer.login}
+                                    />
+                                  ))}
+                                {developerLists[repository].length > 5 && (
+                                  <span>
+                                    +{developerLists[repository].length - 5}
+                                  </span>
+                                )}
+                                {developerLists[repository].length === 0 && (
+                                  <small>No developers found</small>
+                                )}
+                              </div>
+                            )}
+                            <button
+                              className="release-day-view-developers"
+                              type="button"
+                              onClick={() => void openDevelopers(repository)}
+                            >
+                              View Developers
+                            </button>
+                          </div>
                         </td>
                         <td>
                           {devOperation ? (
@@ -1621,6 +1808,72 @@ export function ReleaseDayOperations({
             </section>
             </div>
       </section>
+
+      {developerModal && (
+        <div
+          className="dialog-backdrop"
+          role="presentation"
+          onMouseDown={() => setDeveloperModal(undefined)}
+        >
+          <section
+            className="release-dialog release-developers-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="release-developers-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="dialog-close"
+              type="button"
+              onClick={() => setDeveloperModal(undefined)}
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <p className="eyebrow">Release contributors</p>
+            <h2 id="release-developers-title">
+              {developerModal.repository.split('/').at(-1)} Developers
+            </h2>
+            {developerModal.loading ? (
+              <div className="operation-loading">
+                <span className="spinner" /> Loading developers…
+              </div>
+            ) : developerModal.developers.length > 0 ? (
+              <div className="release-developer-list">
+                {developerModal.developers.map((developer) => (
+                  <article key={developer.login}>
+                    <img src={developer.avatarUrl} alt="" />
+                    <div>
+                      <strong>{developer.login}</strong>
+                      <small>
+                        {developer.roles.join(', ')} ·{' '}
+                        {developer.pullRequests.length}{' '}
+                        {developer.pullRequests.length === 1 ? 'PR' : 'PRs'}
+                      </small>
+                    </div>
+                    <span>
+                      {developer.pullRequests.map((pullNumber) => (
+                        <a
+                          href={`https://github.com/${developerModal.repository}/pull/${pullNumber}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          key={pullNumber}
+                        >
+                          #{pullNumber}
+                        </a>
+                      ))}
+                    </span>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="operation-empty">
+                No developers were found on this service&apos;s release PRs.
+              </div>
+            )}
+          </section>
+        </div>
+      )}
 
       {deployTarget && (
         <ProductionDeployDialog

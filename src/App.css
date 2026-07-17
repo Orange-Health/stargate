@@ -2709,6 +2709,121 @@ label {
   line-height: 1.35;
 }
 
+.release-day-developers-cell {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.release-day-developer-avatars {
+  align-items: center;
+  display: flex;
+  min-height: 26px;
+}
+
+.release-day-developer-avatars img {
+  background: var(--paper-raised);
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  height: 26px;
+  margin-left: -7px;
+  object-fit: cover;
+  width: 26px;
+}
+
+.release-day-developer-avatars img:first-child {
+  margin-left: 0;
+}
+
+.release-day-developer-avatars > span {
+  align-items: center;
+  background: var(--paper-raised);
+  border: 2px solid var(--paper);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 8px;
+  height: 26px;
+  justify-content: center;
+  margin-left: -7px;
+  min-width: 26px;
+  padding: 0 5px;
+}
+
+.release-day-developer-avatars small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.release-day-view-developers {
+  background: transparent;
+  border: 0;
+  color: var(--green-pale);
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 0;
+}
+
+.release-day-view-developers:hover {
+  color: var(--green);
+  text-decoration: underline;
+}
+
+.release-developers-dialog {
+  max-width: 620px;
+}
+
+.release-developer-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
+}
+
+.release-developer-list article {
+  align-items: center;
+  background: var(--paper-warm);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  padding: 9px 10px;
+}
+
+.release-developer-list img {
+  border-radius: 50%;
+  height: 38px;
+  object-fit: cover;
+  width: 38px;
+}
+
+.release-developer-list strong,
+.release-developer-list small {
+  display: block;
+}
+
+.release-developer-list small {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
+}
+
+.release-developer-list article > span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+}
+
+.release-developer-list a {
+  color: var(--green-pale);
+  font-size: 9px;
+}
+
 .release-day-cell-operation {
   align-items: center;
   color: var(--green-pale);
