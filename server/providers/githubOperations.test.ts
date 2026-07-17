@@ -10,6 +10,7 @@ import {
   getReleaseBuildStatuses,
   getRepositoryReleaseState,
   hasActualMergeConflict,
+  mergeBackMergePullRequest,
   promotionBranches,
   releaseTimestamp,
   sortReleasesNewestFirst,
@@ -114,6 +115,68 @@ describe('merge conflict classification', () => {
 
   it('detects actual Git merge conflicts', () => {
     expect(hasActualMergeConflict(false, 'dirty')).toBe(true)
+  })
+})
+
+describe('back-merge PR merging', () => {
+  it('always requests a merge commit instead of a squash merge', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(JSON.stringify({ default_branch: 'main' }), {
+          status: 200,
+        })
+      }
+      if (url.endsWith('/pulls/42')) {
+        return new Response(
+          JSON.stringify({
+            number: 42,
+            title: 'Back-merge main to release',
+            body: null,
+            html_url: 'https://github.test/pull/42',
+            draft: false,
+            merged_at: null,
+            mergeable: true,
+            mergeable_state: 'clean',
+            base: { ref: 'release' },
+            head: { ref: 'main', sha: 'abc123' },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/reviews?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/check-runs?')) {
+        return new Response(JSON.stringify({ check_runs: [] }), { status: 200 })
+      }
+      if (url.endsWith('/pulls/42/merge')) {
+        expect(init?.method).toBe('PUT')
+        expect(JSON.parse(String(init?.body))).toEqual({
+          merge_method: 'merge',
+        })
+        return new Response(
+          JSON.stringify({ merged: true, message: 'Pull Request successfully merged' }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    await expect(
+      mergeBackMergePullRequest(config, 'Orange-Health/service-api', 42),
+    ).resolves.toMatchObject({ merged: true })
   })
 })
 
