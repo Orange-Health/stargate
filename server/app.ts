@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import express from 'express'
 import { z } from 'zod'
 import type {
@@ -181,6 +184,19 @@ async function currentDeployments(
     ),
     failed: results.some((result) => result.status === 'rejected'),
   }
+}
+
+function resolveDistDir(): string | null {
+  const candidates = [
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist'),
+    path.resolve(process.cwd(), 'dist'),
+  ]
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, 'index.html'))) {
+      return dir
+    }
+  }
+  return null
 }
 
 export function createApp() {
@@ -739,6 +755,18 @@ export function createApp() {
       )
     },
   )
+
+  const distDir = resolveDistDir()
+  if (distDir) {
+    app.use(express.static(distDir, { index: false }))
+    app.use((request, response, next) => {
+      if (request.path.startsWith('/api')) {
+        next()
+        return
+      }
+      response.sendFile(path.join(distDir, 'index.html'))
+    })
+  }
 
   app.use(
     (
