@@ -18,6 +18,8 @@
     "node": "22.x"
   },
   "dependencies": {
+    "@emnapi/core": "1.11.2",
+    "@emnapi/runtime": "1.11.2",
     "express": "^5.2.1",
     "jenkins": "^1.1.0",
     "react": "^19.2.7",

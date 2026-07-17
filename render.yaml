@@ -3,6 +3,9 @@ services:
     runtime: node
     name: lease-again
     plan: free
+    # NOTE: If this service was created earlier, update Build Command in the
+    # Render Dashboard (Settings → Build & Deploy). Blueprint edits do not
+    # always overwrite an existing service's build command.
     buildCommand: npm install --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
