@@ -210,6 +210,7 @@ export type TrackedProductionRelease = {
   tag: string
   url: string
   createdAt: string
+  description?: string
   buildStatus: BuildStatus
   runs: WorkflowRun[]
 }

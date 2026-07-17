@@ -117,6 +117,42 @@ export function latestProductionReleaseOnOrBeforeDate(
     )[0]
 }
 
+export function releaseNotesForDashboard(
+  dashboard: ReleaseDashboard,
+  releasesByRepository: Record<string, TrackedProductionRelease[]>,
+  releaseDate: string,
+) {
+  const sections = dashboard.services.map((service) => {
+    const release = latestProductionReleaseOnOrBeforeDate(
+      releasesByRepository[service.repository] ?? [],
+      releaseDate,
+    )
+    if (!release) {
+      return `## ${service.repository}\n\n**Release tag:** Not created\n\n_No production release found on or before ${releaseDate}._`
+    }
+    const description = release.description
+      ?.replace(/<!--\s*release-desk-operation:[^>]+-->\s*/gi, '')
+      .trim()
+    return `## ${service.repository}\n\n**Release tag:** [${release.tag}](${release.url})\n\n${description || '_No release description provided._'}`
+  })
+  return `# ${dashboard.version.name} Release Notes\n\n**Release date:** ${releaseDate}\n\n${sections.join('\n\n')}`
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
+}
+
 function sessionKey(versionId: string) {
   return `release-day-operations:${versionId}`
 }
@@ -376,6 +412,9 @@ export function ReleaseDayOperations({
   )
   const [developerModal, setDeveloperModal] =
     useState<DeveloperModalState>()
+  const [copyNotesStatus, setCopyNotesStatus] = useState<
+    'idle' | 'copying' | 'copied' | 'error'
+  >('idle')
   const [cellOperation, setCellOperation] = useState<CellOperation>()
   const [repositorySync, setRepositorySync] = useState<
     Record<string, RepositorySyncStatus>
@@ -1217,6 +1256,58 @@ export function ReleaseDayOperations({
     })
   }
 
+  async function copyReleaseNotes() {
+    if (copyNotesStatus === 'copying') return
+    setCopyNotesStatus('copying')
+    const releasesByRepository: Record<string, TrackedProductionRelease[]> = {}
+    const failures: string[] = []
+    try {
+      await mapConcurrent(
+        dashboard.services,
+        async (service) => {
+          try {
+            const history = await api.releaseHistory(service.repository)
+            releasesByRepository[service.repository] =
+              history.productionReleases
+          } catch {
+            const cached = states[service.repository]?.productionReleases
+            if (cached) {
+              releasesByRepository[service.repository] = cached
+            } else {
+              failures.push(service.repository)
+            }
+          }
+        },
+        REPOSITORY_SYNC_CONCURRENCY,
+      )
+      if (failures.length > 0) {
+        throw new Error(
+          `Could not load release notes for: ${failures.join(', ')}.`,
+        )
+      }
+      await copyText(
+        releaseNotesForDashboard(
+          dashboard,
+          releasesByRepository,
+          sessionRef.current.releaseDate,
+        ),
+      )
+      setCopyNotesStatus('copied')
+      log(
+        'success',
+        `Copied release notes for ${dashboard.services.length} repositories.`,
+      )
+    } catch (reason) {
+      setCopyNotesStatus('error')
+      log(
+        'error',
+        reason instanceof Error
+          ? reason.message
+          : 'Could not copy release notes.',
+      )
+    }
+  }
+
   function resetSession() {
     if (
       hasSavedProgress &&
@@ -1268,21 +1359,6 @@ export function ReleaseDayOperations({
                   className="text-button"
                   type="button"
                   disabled={refreshing || Boolean(busyAction)}
-                  onClick={() =>
-                    setSession((current) => ({
-                      ...current,
-                      selectedRepositories: dashboard.services.map(
-                        (service) => service.repository,
-                      ),
-                    }))
-                  }
-                >
-                  Select all
-                </button>
-                <button
-                  className="text-button"
-                  type="button"
-                  disabled={refreshing || Boolean(busyAction)}
                   onClick={resetSession}
                 >
                   New run
@@ -1296,6 +1372,24 @@ export function ReleaseDayOperations({
                   {refreshing
                     ? `Syncing ${syncCompleted}/${selected.length}`
                     : '↻ Refresh status'}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void copyReleaseNotes()}
+                  disabled={
+                    refreshing ||
+                    Boolean(busyAction) ||
+                    copyNotesStatus === 'copying'
+                  }
+                >
+                  {copyNotesStatus === 'copying'
+                    ? 'Copying…'
+                    : copyNotesStatus === 'copied'
+                      ? '✓ Copied!'
+                      : copyNotesStatus === 'error'
+                        ? 'Retry Copy Release Notes'
+                        : 'Copy Release Notes'}
                 </button>
                 <button
                   className="secondary-button"
@@ -1426,7 +1520,31 @@ export function ReleaseDayOperations({
                 <thead>
                   <tr>
                     <th scope="col">
-                      <span className="sr-only">Selected</span>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all services"
+                        checked={
+                          selected.length === dashboard.services.length
+                        }
+                        ref={(input) => {
+                          if (input) {
+                            input.indeterminate =
+                              selected.length > 0 &&
+                              selected.length < dashboard.services.length
+                          }
+                        }}
+                        disabled={refreshing || Boolean(busyAction)}
+                        onChange={(event) =>
+                          setSession((current) => ({
+                            ...current,
+                            selectedRepositories: event.target.checked
+                              ? dashboard.services.map(
+                                  (service) => service.repository,
+                                )
+                              : [],
+                          }))
+                        }
+                      />
                     </th>
                     <th scope="col">Service</th>
                     <th scope="col">Developers</th>

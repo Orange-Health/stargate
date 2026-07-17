@@ -12,6 +12,7 @@ import {
   developersForReleaseService,
   latestProductionReleaseOnOrBeforeDate,
   releaseCreatedOnOrBeforeDate,
+  releaseNotesForDashboard,
 } from './ReleaseDayOperations'
 
 const repository = 'Orange-Health/service-api'
@@ -100,6 +101,29 @@ describe('ReleaseDayOperations', () => {
   })
 
   afterEach(() => vi.restoreAllMocks())
+
+  it('selects all services from the table header checkbox', async () => {
+    const user = userEvent.setup()
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    const selectAll = screen.getByRole('checkbox', {
+      name: 'Select all services',
+    })
+    const serviceCheckbox = screen.getByRole('checkbox', {
+      name: `Include ${repository}`,
+    })
+
+    expect(selectAll).toBeChecked()
+    await user.click(serviceCheckbox)
+    expect(selectAll).not.toBeChecked()
+    await user.click(selectAll)
+    expect(serviceCheckbox).toBeChecked()
+  })
 
   it('shows included avatars immediately and caches the detailed modal', async () => {
     const user = userEvent.setup()
@@ -226,6 +250,58 @@ describe('ReleaseDayOperations', () => {
         '2026-07-16',
       )?.tag,
     ).toBe('v-prod-26.0716.6')
+  })
+
+  it('copies every repository release tag and description', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+    const productionRelease = {
+      id: 96,
+      tag: 'v-prod-26.0716.6',
+      url: 'https://github.test/releases/96',
+      createdAt: '2026-07-16T13:30:45Z',
+      description:
+        '<!-- release-desk-operation:operation-id -->\n\n## What changed\n\n- Added checkout improvements',
+      buildStatus: 'succeeded' as const,
+      runs: [],
+    }
+    vi.spyOn(api, 'releaseHistory').mockResolvedValue({
+      repository,
+      stagingReleases: [],
+      productionReleases: [productionRelease],
+    })
+
+    const notes = releaseNotesForDashboard(
+      dashboard,
+      { [repository]: [productionRelease] },
+      '2026-07-16',
+    )
+    expect(notes).toContain(`## ${repository}`)
+    expect(notes).toContain(
+      `**Release tag:** [${productionRelease.tag}](${productionRelease.url})`,
+    )
+    expect(notes).toContain('Added checkout improvements')
+    expect(notes).not.toContain('release-desk-operation')
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Copy Release Notes' }),
+    )
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(notes))
+    expect(
+      screen.getByRole('button', { name: '✓ Copied!' }),
+    ).toBeVisible()
   })
 
   it('waits for manual synchronization and then shows progress', async () => {

@@ -40,6 +40,7 @@ type GitHubRelease = {
   prerelease: boolean
   created_at: string
   published_at?: string | null
+  body?: string | null
 }
 
 type GitHubWorkflowRun = {
@@ -326,6 +327,7 @@ async function listTrackedReleases(
         tag: release.tag_name,
         url: release.html_url,
         createdAt: releaseTimestamp(release),
+        description: release.body?.trim() || undefined,
         buildStatus: aggregateBuildStatus(runs),
         runs,
       }
