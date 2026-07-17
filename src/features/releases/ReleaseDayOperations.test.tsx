@@ -7,7 +7,11 @@ import type {
   ReleaseDashboard,
   RepositoryReleaseState,
 } from '../../shared/types'
-import { ReleaseDayOperations } from './ReleaseDayOperations'
+import {
+  ReleaseDayOperations,
+  latestProductionReleaseOnOrBeforeDate,
+  releaseCreatedOnOrBeforeDate,
+} from './ReleaseDayOperations'
 
 const repository = 'Orange-Health/service-api'
 const dashboard: ReleaseDashboard = {
@@ -95,6 +99,52 @@ describe('ReleaseDayOperations', () => {
   })
 
   afterEach(() => vi.restoreAllMocks())
+
+  it('allows build refresh only for tags created by the release date', () => {
+    expect(
+      releaseCreatedOnOrBeforeDate(
+        '2026-07-16T23:59:59Z',
+        '2026-07-16',
+      ),
+    ).toBe(true)
+    expect(
+      releaseCreatedOnOrBeforeDate(
+        '2026-07-17T00:00:00Z',
+        '2026-07-16',
+      ),
+    ).toBe(false)
+    expect(
+      latestProductionReleaseOnOrBeforeDate(
+        [
+          {
+            id: 3,
+            tag: 'v-prod-26.0716.3',
+            url: 'https://github.test/releases/3',
+            createdAt: '2026-07-16T11:26:05Z',
+            buildStatus: 'succeeded',
+            runs: [],
+          },
+          {
+            id: 6,
+            tag: 'v-prod-26.0716.6',
+            url: 'https://github.test/releases/6',
+            createdAt: '2026-07-16T13:30:45Z',
+            buildStatus: 'succeeded',
+            runs: [],
+          },
+          {
+            id: 7,
+            tag: 'v-prod-26.0717.1',
+            url: 'https://github.test/releases/7',
+            createdAt: '2026-07-17T06:00:00Z',
+            buildStatus: 'succeeded',
+            runs: [],
+          },
+        ],
+        '2026-07-16',
+      )?.tag,
+    ).toBe('v-prod-26.0716.6')
+  })
 
   it('waits for manual synchronization and then shows progress', async () => {
     const user = userEvent.setup()
@@ -399,7 +449,7 @@ describe('ReleaseDayOperations', () => {
     expect(repositoryStateRequest).toHaveBeenCalledTimes(2)
   })
 
-  it('creates a production release without requiring identical branches', async () => {
+  it('refreshes the newest eligible production tag instead of the saved tag', async () => {
     const user = userEvent.setup()
     let state = {
       ...repositoryState('up_to_date', 'up_to_date'),
@@ -432,6 +482,15 @@ describe('ReleaseDayOperations', () => {
         }
         return created
       })
+    const refreshBuild = vi
+      .spyOn(api, 'releaseBuildStatuses')
+      .mockImplementation(async (releases) =>
+        releases.map((release) => ({
+          ...release,
+          buildStatus: 'succeeded',
+          runs: [],
+        })),
+      )
 
     render(
       <ReleaseDayOperations
@@ -460,6 +519,53 @@ describe('ReleaseDayOperations', () => {
     )
     expect(
       screen.getByRole('link', { name: new RegExp(created.tag) }),
+    ).toBeVisible()
+    const latest = {
+      id: 96,
+      tag: 'v-prod-26.0716.6',
+      url: 'https://github.test/releases/96',
+      createdAt: '2026-07-16T13:30:45Z',
+      buildStatus: 'succeeded' as const,
+      runs: [],
+    }
+    state = {
+      ...state,
+      productionReleases: [latest, ...state.productionReleases],
+      deployedTags: [
+        {
+          service: 'service-api',
+          tag: latest.tag,
+          environment: 'production',
+          buildNumber: 2201,
+          buildUrl:
+            'https://jenkins.test/job/Prod-new-cluster-deployment/2201/',
+          deployedAt: '2026-07-16T14:00:00Z',
+        },
+      ],
+    }
+    await user.click(
+      screen.getByRole('button', { name: '↻ Check latest build' }),
+    )
+    await waitFor(() =>
+      expect(refreshBuild).toHaveBeenCalledWith(
+        [
+          {
+            repository,
+            tag: latest.tag,
+            createdAt: latest.createdAt,
+          },
+        ],
+        true,
+      ),
+    )
+    expect(
+      await screen.findByRole('link', { name: `${latest.tag} ↗` }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Already deployed' }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('link', { name: `Live: ${latest.tag} ↗` }),
     ).toBeVisible()
   })
 

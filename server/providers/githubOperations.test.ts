@@ -288,7 +288,7 @@ describe('repository state cache', () => {
 
 describe('release build status polling', () => {
   it('fetches only workflow runs for the requested active tag', async () => {
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () =>
       new Response(
         JSON.stringify({
           workflow_runs: [
@@ -343,6 +343,19 @@ describe('release build status polling', () => {
     ])
     expect(cached).toEqual(result)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [refreshed] = await getReleaseBuildStatuses(
+      config,
+      [
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-26.0715.1',
+          createdAt: '2026-07-15T08:59:00Z',
+        },
+      ],
+      true,
+    )
+    expect(refreshed).toEqual(result)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     clearRepositoryCaches(
       config,
       'Orange-Health/service-api',

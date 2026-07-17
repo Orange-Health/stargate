@@ -36,6 +36,7 @@ import {
 } from './providers/jira.js'
 import {
   getCurrentDeployments,
+  getCurrentProductionDeployments,
   getDeploymentQueueStatus,
   getProductionDeploymentQueueStatus,
   testJenkinsConnection,
@@ -155,6 +156,7 @@ const releaseBuildStatusesSchema = z.object({
       }),
     )
     .max(100),
+  forceRefresh: z.boolean().optional().default(false),
 })
 const serviceRefreshSchema = z.object({
   repository: repositorySchema,
@@ -164,6 +166,22 @@ const serviceRefreshSchema = z.object({
     .max(200),
   includeRepositoryState: z.boolean().optional().default(true),
 })
+
+async function currentDeployments(
+  config: ConnectionConfig,
+  repository: string,
+) {
+  const results = await Promise.allSettled([
+    getCurrentDeployments(config, repository),
+    getCurrentProductionDeployments(config, repository),
+  ])
+  return {
+    deployedTags: results.flatMap((result) =>
+      result.status === 'fulfilled' ? result.value : [],
+    ),
+    failed: results.some((result) => result.status === 'rejected'),
+  }
+}
 
 export function createApp() {
   const app = express()
@@ -352,10 +370,7 @@ export function createApp() {
           parsed.data.issueKeys,
         ),
         getRepositoryReleaseState(config, parsed.data.repository),
-        getCurrentDeployments(config, parsed.data.repository).then(
-          (deployedTags) => ({ deployedTags, failed: false }),
-          () => ({ deployedTags: [], failed: true }),
-        ),
+        currentDeployments(config, parsed.data.repository),
       ])
       response.json({
         service,
@@ -430,10 +445,7 @@ export function createApp() {
     const config = requireConnection()
     const [state, deploymentResult] = await Promise.all([
       getRepositoryReleaseState(config, parsed.data),
-      getCurrentDeployments(config, parsed.data).then(
-        (deployedTags) => ({ deployedTags, failed: false }),
-        () => ({ deployedTags: [], failed: true }),
-      ),
+      currentDeployments(config, parsed.data),
     ])
     response.json({
       ...state,
@@ -473,6 +485,7 @@ export function createApp() {
       await getReleaseBuildStatuses(
         requireConnection(),
         parsed.data.releases,
+        parsed.data.forceRefresh,
       ),
     )
   })

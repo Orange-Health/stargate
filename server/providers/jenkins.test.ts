@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   deployedTagsFromBuilds,
   deploymentSpec,
+  productionDeployedTagsFromBuilds,
   productionDeploymentSpec,
   servicesForRepository,
 } from './jenkins.js'
@@ -125,6 +126,41 @@ describe('deployedTagsFromBuilds', () => {
         environment: 's1',
         tag: 'v-s1-v26.0714.1',
         buildNumber: 299,
+      }),
+    ])
+  })
+
+  it('finds the latest successful production tag for each service', () => {
+    const parameters = (service: string, tag: string) => ({
+      parameters: [
+        { name: 'SERVICE', value: service },
+        { name: 'IMAGE_TAG', value: tag },
+      ],
+    })
+    expect(
+      productionDeployedTagsFromBuilds(
+        [
+          {
+            number: 2201,
+            result: 'SUCCESS',
+            url: 'https://jenkins.test/job/Prod-new-cluster-deployment/2201/',
+            timestamp: 1_721_141_200_000,
+            actions: [parameters('sapphire-web', 'v-prod-26.0716.6')],
+          },
+          {
+            number: 2200,
+            result: 'SUCCESS',
+            actions: [parameters('sapphire-web', 'v-prod-26.0716.3')],
+          },
+        ],
+        ['sapphire-web'],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        service: 'sapphire-web',
+        tag: 'v-prod-26.0716.6',
+        environment: 'production',
+        buildNumber: 2201,
       }),
     ])
   })

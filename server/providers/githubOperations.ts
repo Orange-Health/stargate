@@ -197,11 +197,12 @@ async function listReleaseRuns(
   config: ConnectionConfig,
   repository: string,
   release: GitHubRelease,
+  forceRefresh = false,
 ): Promise<WorkflowRun[]> {
   const cacheKey =
     `${config.githubOrg}:${repository}:${release.tag_name}`.toLowerCase()
   const cached = terminalBuildCache.get(cacheKey)
-  if (cached) return cached
+  if (cached && !forceRefresh) return cached
   const query = new URLSearchParams({
     branch: release.tag_name,
     per_page: '100',
@@ -238,6 +239,7 @@ async function listReleaseRuns(
 export async function getReleaseBuildStatuses(
   config: ConnectionConfig,
   releases: ReleaseBuildStatusInput[],
+  forceRefresh = false,
 ): Promise<ReleaseBuildStatusResult[]> {
   const results: ReleaseBuildStatusResult[] = new Array(releases.length)
   let cursor = 0
@@ -246,13 +248,18 @@ export async function getReleaseBuildStatuses(
       const index = cursor++
       const release = releases[index]
       assertConnectedRepository(config, release.repository)
-      const runs = await listReleaseRuns(config, release.repository, {
-        id: 0,
-        tag_name: release.tag,
-        html_url: '',
-        prerelease: false,
-        created_at: release.createdAt,
-      })
+      const runs = await listReleaseRuns(
+        config,
+        release.repository,
+        {
+          id: 0,
+          tag_name: release.tag,
+          html_url: '',
+          prerelease: false,
+          created_at: release.createdAt,
+        },
+        forceRefresh,
+      )
       results[index] = {
         ...release,
         buildStatus: aggregateBuildStatus(runs),

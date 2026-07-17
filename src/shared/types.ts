@@ -336,11 +336,14 @@ export type MergeFeaturePullRequestInput = {
 }
 
 export type DeploymentEnvironment = 'qa' | 's1' | 's2' | 's3' | 's4' | 's5'
+export type JenkinsDeploymentEnvironment =
+  | DeploymentEnvironment
+  | 'production'
 
 export type JenkinsDeployedTag = {
   service: string
   tag: string
-  environment: DeploymentEnvironment
+  environment: JenkinsDeploymentEnvironment
   buildNumber: number
   buildUrl: string
   deployedAt: string

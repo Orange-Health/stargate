@@ -118,12 +118,15 @@ export const api = {
     request<RepositoryReleaseHistory>(
       `/api/github/release-history?repository=${encodeURIComponent(repository)}`,
     ),
-  releaseBuildStatuses: (releases: ReleaseBuildStatusInput[]) =>
+  releaseBuildStatuses: (
+    releases: ReleaseBuildStatusInput[],
+    forceRefresh = false,
+  ) =>
     request<ReleaseBuildStatusResult[]>(
       '/api/github/release-build-statuses',
       {
         method: 'POST',
-        body: JSON.stringify({ releases }),
+        body: JSON.stringify({ releases, forceRefresh }),
       },
     ),
   repositoryRisks: (repositories: string[]) =>

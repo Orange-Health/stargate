@@ -176,6 +176,36 @@ export function deployedTagsFromBuilds(
   return [...deployments.values()]
 }
 
+export function productionDeployedTagsFromBuilds(
+  builds: JenkinsBuild[],
+  services: string[],
+): JenkinsDeployedTag[] {
+  const serviceSet = new Set(services.map((service) => service.toLowerCase()))
+  const deployments = new Map<string, JenkinsDeployedTag>()
+  for (const build of [...builds].sort(
+    (left, right) => right.number - left.number,
+  )) {
+    if (build.result !== 'SUCCESS') continue
+    const parameters = buildParameters(build)
+    const service = (
+      parameters.SERVICE ?? parameters.SERVICE_NAME
+    )?.toLowerCase()
+    const tag = parameters.IMAGE_TAG
+    if (!service || !serviceSet.has(service) || !tag || deployments.has(service)) {
+      continue
+    }
+    deployments.set(service, {
+      service,
+      tag,
+      environment: 'production',
+      buildNumber: build.number,
+      buildUrl: build.url ?? '',
+      deployedAt: new Date(build.timestamp ?? 0).toISOString(),
+    })
+  }
+  return [...deployments.values()]
+}
+
 async function recentJobBuilds(
   client: Jenkins,
   jobName: string,
@@ -231,6 +261,46 @@ export async function getCurrentDeployments(
           ? `Could not read current Jenkins deployments: ${error.message}`
           : 'Could not read current Jenkins deployments.',
         'JENKINS_DEPLOYMENT_LOOKUP_FAILED',
+        'jenkins',
+        502,
+        true,
+      )
+    }
+  })()
+  deploymentCache.set(cacheKey, {
+    expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
+    value,
+  })
+  value.catch(() => deploymentCache.delete(cacheKey))
+  return value
+}
+
+export async function getCurrentProductionDeployments(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<JenkinsDeployedTag[]> {
+  if (!config.productionJenkins) return []
+  const services = servicesForRepository(repository)
+  if (services.length === 0) return []
+  const prodConfig = productionConfig(config)
+  const cacheKey =
+    `production:${prodConfig.jenkinsUrl}:${repository}`.toLowerCase()
+  const cached = deploymentCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+
+  const value = (async () => {
+    try {
+      const builds = await recentJobBuilds(
+        jenkinsClient(prodConfig),
+        'Prod-new-cluster-deployment',
+      )
+      return productionDeployedTagsFromBuilds(builds, services)
+    } catch (error) {
+      throw new ProviderError(
+        error instanceof Error
+          ? `Could not read current production deployments: ${error.message}`
+          : 'Could not read current production deployments.',
+        'JENKINS_PRODUCTION_DEPLOYMENT_LOOKUP_FAILED',
         'jenkins',
         502,
         true,

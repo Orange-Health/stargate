@@ -7,6 +7,7 @@ import type {
   PromotionRoute,
   ReleaseDashboard,
   RepositoryReleaseState,
+  TrackedProductionRelease,
 } from '../../shared/types'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
 
@@ -72,6 +73,30 @@ type LegacyCachedRepositoryStates = Record<
 function localDate() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+export function releaseCreatedOnOrBeforeDate(
+  createdAt: string,
+  releaseDate: string,
+) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(releaseDate)
+    ? createdAt.slice(0, 10) <= releaseDate
+    : false
+}
+
+export function latestProductionReleaseOnOrBeforeDate(
+  releases: TrackedProductionRelease[],
+  releaseDate: string,
+) {
+  return releases
+    .filter((release) =>
+      releaseCreatedOnOrBeforeDate(release.createdAt, releaseDate),
+    )
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    )[0]
 }
 
 function sessionKey(versionId: string) {
@@ -263,6 +288,7 @@ export function ReleaseDayOperations({
   const [busyAction, setBusyAction] = useState('')
   const [activeProductionRelease, setActiveProductionRelease] =
     useState('')
+  const [checkingBuildRepository, setCheckingBuildRepository] = useState('')
   const [cellOperation, setCellOperation] = useState<CellOperation>()
   const [repositorySync, setRepositorySync] = useState<
     Record<string, RepositorySyncStatus>
@@ -899,6 +925,106 @@ export function ReleaseDayOperations({
     await runAction('Create production releases', createProductionRelease)
   }
 
+  async function checkLatestBuild(repository: string) {
+    if (checkingBuildRepository) return
+    setCheckingBuildRepository(repository)
+    log('info', 'Finding the latest eligible production tag.', repository)
+    try {
+      await api.refreshRepository(repository)
+      const repositoryState = await api.repositoryState(repository)
+      const latest = latestProductionReleaseOnOrBeforeDate(
+        repositoryState.productionReleases,
+        sessionRef.current.releaseDate,
+      )
+      if (!latest) {
+        log(
+          'warning',
+          `No production tag was created on or before ${sessionRef.current.releaseDate}.`,
+          repository,
+        )
+        return
+      }
+      const release: CreatedProductionRelease = {
+        id: latest.id,
+        repository,
+        tag: latest.tag,
+        sourceBranch: repositoryState.defaultBranch,
+        url: latest.url,
+        createdAt: latest.createdAt,
+      }
+      repositoryCacheTimestamp.current = Date.now()
+      setStates((current) => ({
+        ...current,
+        [repository]: repositoryState,
+      }))
+      setSession((current) => ({
+        ...current,
+        repositories: {
+          ...current.repositories,
+          [repository]: {
+            ...current.repositories[repository],
+            productionRelease: release,
+            productionReleaseError: undefined,
+          },
+        },
+      }))
+      log('info', `Checking the latest build for ${release.tag}.`, repository)
+      const [result] = await api.releaseBuildStatuses(
+        [
+          {
+            repository,
+            tag: release.tag,
+            createdAt: release.createdAt,
+          },
+        ],
+        true,
+      )
+      if (!result) return
+      setStates((current) => {
+        const repositoryState = current[repository]
+        if (!repositoryState) return current
+        const tracked = repositoryState.productionReleases.find(
+          (item) => item.tag === result.tag,
+        )
+        const updated = {
+          id: tracked?.id ?? release.id,
+          tag: result.tag,
+          url: tracked?.url ?? release.url,
+          createdAt: result.createdAt,
+          buildStatus: result.buildStatus,
+          runs: result.runs,
+        }
+        return {
+          ...current,
+          [repository]: {
+            ...repositoryState,
+            productionReleases: tracked
+              ? repositoryState.productionReleases.map((item) =>
+                  item.tag === result.tag ? updated : item,
+                )
+              : [updated, ...repositoryState.productionReleases],
+            fetchedAt: new Date().toISOString(),
+          },
+        }
+      })
+      log(
+        'success',
+        `${release.tag}: ${buildLabels[result.buildStatus]}.`,
+        repository,
+      )
+    } catch (reason) {
+      log(
+        'error',
+        reason instanceof Error
+          ? reason.message
+          : 'Could not refresh the latest production build.',
+        repository,
+      )
+    } finally {
+      setCheckingBuildRepository('')
+    }
+  }
+
   async function createSingleProductionRelease(repository: string) {
     if (busyAction || refreshing || activeProductionRelease) return
     const retrying = Boolean(
@@ -1164,6 +1290,7 @@ export function ReleaseDayOperations({
                     const repository = service.repository
                     const progress = session.repositories[repository]
                     const syncStatus = repositorySync[repository]
+                    const repositoryState = states[repository]
                     const release = progress?.productionRelease
                     const releaseCreationError =
                       progress?.productionReleaseError
@@ -1172,6 +1299,21 @@ export function ReleaseDayOperations({
                           (item) => item.tag === release.tag,
                         )
                       : undefined
+                    const productionDeployments =
+                      repositoryState?.deployedTags.filter(
+                        (deployment) =>
+                          deployment.environment === 'production',
+                      ) ?? []
+                    const latestTagAlreadyDeployed =
+                      Boolean(release) &&
+                      Boolean(repositoryState?.jenkinsServices.length) &&
+                      repositoryState?.jenkinsServices.every((jenkinsService) =>
+                        productionDeployments.some(
+                          (deployment) =>
+                            deployment.service === jenkinsService &&
+                            deployment.tag === release?.tag,
+                        ),
+                      )
                     const dev = phaseState(
                       states[repository],
                       'dev-to-release',
@@ -1303,7 +1445,7 @@ export function ReleaseDayOperations({
                         </td>
                         <td>
                           {release ? (
-                            <>
+                            <div className="release-day-production-build">
                               <a href={release.url} target="_blank" rel="noreferrer">
                                 {release.tag} ↗
                               </a>
@@ -1316,7 +1458,28 @@ export function ReleaseDayOperations({
                                   ? buildLabels[trackedRelease.buildStatus]
                                   : 'Waiting for workflow'}
                               </span>
-                            </>
+                              <button
+                                className="release-day-check-build"
+                                type="button"
+                                disabled={
+                                  refreshing ||
+                                  Boolean(busyAction) ||
+                                  Boolean(checkingBuildRepository)
+                                }
+                                title={`Find the newest production tag created on or before ${session.releaseDate} and refresh its workflow status`}
+                                onClick={() =>
+                                  void checkLatestBuild(repository)
+                                }
+                              >
+                                {checkingBuildRepository === repository ? (
+                                  <>
+                                    <span className="spinner" /> Checking…
+                                  </>
+                                ) : (
+                                  '↻ Check latest build'
+                                )}
+                              </button>
+                            </div>
                           ) : releaseCreationError ? (
                             <div className="release-day-release-failure">
                               <span className="batch-status error">
@@ -1373,26 +1536,60 @@ export function ReleaseDayOperations({
                           )}
                         </td>
                         <td>
-                          <button
-                            className="production-deploy-button"
-                            type="button"
-                            disabled={
-                              !productionEnabled ||
-                              trackedRelease?.buildStatus !== 'succeeded' ||
-                              !states[repository]?.jenkinsServices.length
-                            }
-                            onClick={() =>
-                              release &&
-                              setDeployTarget({
-                                repository,
-                                release,
-                                services:
-                                  states[repository]?.jenkinsServices ?? [],
-                              })
-                            }
-                          >
-                            Deploy
-                          </button>
+                          <div className="release-day-production-deployment">
+                            <button
+                              className="production-deploy-button"
+                              type="button"
+                              disabled={
+                                !productionEnabled ||
+                                trackedRelease?.buildStatus !== 'succeeded' ||
+                                !repositoryState?.jenkinsServices.length ||
+                                latestTagAlreadyDeployed
+                              }
+                              title={
+                                latestTagAlreadyDeployed
+                                  ? `${release?.tag} is already deployed to production`
+                                  : 'Deploy the latest production build'
+                              }
+                              onClick={() =>
+                                release &&
+                                setDeployTarget({
+                                  repository,
+                                  release,
+                                  services:
+                                    repositoryState?.jenkinsServices ?? [],
+                                })
+                              }
+                            >
+                              {latestTagAlreadyDeployed
+                                ? 'Already deployed'
+                                : 'Deploy'}
+                            </button>
+                            {productionDeployments.length > 0 ? (
+                              productionDeployments.map((deployment) => (
+                                <a
+                                  className="release-day-production-live"
+                                  href={deployment.buildUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  key={deployment.service}
+                                  title={`Jenkins build #${deployment.buildNumber}`}
+                                >
+                                  Live: {deployment.tag}
+                                  {productionDeployments.length > 1
+                                    ? ` · ${deployment.service}`
+                                    : ''}{' '}
+                                  ↗
+                                </a>
+                              ))
+                            ) : (
+                              <small className="release-day-production-unknown">
+                                {repositoryState?.deploymentLookupFailed
+                                  ? 'Production status unavailable'
+                                  : 'Production deployment unknown'}
+                              </small>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     )

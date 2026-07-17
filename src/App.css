@@ -2634,7 +2634,8 @@ label {
 }
 
 .release-day-release-failure,
-.release-day-release-empty {
+.release-day-release-empty,
+.release-day-production-build {
   align-items: flex-start;
   display: flex;
   flex-direction: column;
@@ -2647,7 +2648,8 @@ label {
   line-height: 1.35;
 }
 
-.release-day-tag-button {
+.release-day-tag-button,
+.release-day-check-build {
   align-items: center;
   background: transparent;
   border: 1px solid var(--green);
@@ -2661,7 +2663,8 @@ label {
   padding: 0 8px;
 }
 
-.release-day-tag-button:hover:not(:disabled) {
+.release-day-tag-button:hover:not(:disabled),
+.release-day-check-build:hover:not(:disabled) {
   background: var(--green-faint);
 }
 
@@ -2674,14 +2677,36 @@ label {
   background: rgb(239 68 68 / 10%);
 }
 
-.release-day-tag-button:disabled {
-  cursor: wait;
+.release-day-tag-button:disabled,
+.release-day-check-build:disabled {
+  cursor: not-allowed;
   opacity: 0.65;
 }
 
-.release-day-tag-button .spinner {
+.release-day-tag-button .spinner,
+.release-day-check-build .spinner {
   height: 11px;
   width: 11px;
+}
+
+.release-day-production-deployment {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.release-day-production-live {
+  color: var(--green-pale);
+  font-size: 9px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.release-day-production-unknown {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
 }
 
 .release-day-cell-operation {
