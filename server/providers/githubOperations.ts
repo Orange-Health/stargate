@@ -462,6 +462,29 @@ async function findPulls(
   )
 }
 
+type GitHubBranchComparison = {
+  ahead_by: number
+  behind_by: number
+  files?: unknown[]
+}
+
+export function comparisonHasSourceFileChanges(
+  comparison: GitHubBranchComparison,
+) {
+  return (
+    comparison.ahead_by > 0 &&
+    (!Array.isArray(comparison.files) || comparison.files.length > 0)
+  )
+}
+
+export function comparisonHasAnyFileChanges(
+  comparison: GitHubBranchComparison,
+) {
+  return Array.isArray(comparison.files)
+    ? comparison.files.length > 0
+    : comparison.ahead_by > 0 || comparison.behind_by > 0
+}
+
 async function promotionStep(
   config: ConnectionConfig,
   repository: string,
@@ -470,7 +493,7 @@ async function promotionStep(
 ): Promise<PromotionStep> {
   const { fromBranch, toBranch } = promotionBranches(route, defaultBranch)
   const [comparison, openPulls, closedPulls] = await Promise.all([
-    githubApi<{ ahead_by: number; behind_by: number }>(
+    githubApi<GitHubBranchComparison>(
       config,
       `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
     ),
@@ -479,18 +502,20 @@ async function promotionStep(
   ])
   const openPull = openPulls[0]
   const previous = closedPulls.find((pull) => pull.merged_at)
+  const hasFileChanges = comparisonHasSourceFileChanges(comparison)
   return {
     route,
     fromBranch,
     toBranch,
     commitsAhead: comparison.ahead_by,
     commitsBehind: comparison.behind_by,
-    state: openPull
+    filesChanged: comparison.files?.length,
+    state: !hasFileChanges
+      ? 'up_to_date'
+      : openPull
       ? 'pr_open'
-      : comparison.ahead_by > 0
-        ? 'needs_pr'
-        : 'up_to_date',
-    pullRequest: openPull
+      : 'needs_pr',
+    pullRequest: hasFileChanges && openPull
       ? await promotionPullDetails(config, repository, openPull)
       : undefined,
     previousTemplate: previous
@@ -508,25 +533,42 @@ async function pendingBackMerges(
   repository: string,
   defaultBranch: string,
 ): Promise<PendingBackMerge[]> {
-  const [defaultToRelease, releaseToDev] = await Promise.all([
+  const [
+    defaultToRelease,
+    releaseToDev,
+    defaultToReleaseComparison,
+    releaseToDevComparison,
+  ] = await Promise.all([
     findPulls(config, repository, 'open', defaultBranch, 'release'),
     findPulls(config, repository, 'open', 'release', 'dev'),
+    githubApi<GitHubBranchComparison>(
+      config,
+      `/repos/${repositoryPath(repository)}/compare/release...${encodeURIComponent(defaultBranch)}`,
+    ),
+    githubApi<GitHubBranchComparison>(
+      config,
+      `/repos/${repositoryPath(repository)}/compare/dev...release`,
+    ),
   ])
   return [
-    ...defaultToRelease.map((pull) => ({
-      number: pull.number,
-      title: pull.title,
-      url: pull.html_url,
-      fromBranch: defaultBranch,
-      toBranch: 'release',
-    })),
-    ...releaseToDev.map((pull) => ({
-      number: pull.number,
-      title: pull.title,
-      url: pull.html_url,
-      fromBranch: 'release',
-      toBranch: 'dev',
-    })),
+    ...(comparisonHasSourceFileChanges(defaultToReleaseComparison)
+      ? defaultToRelease.map((pull) => ({
+          number: pull.number,
+          title: pull.title,
+          url: pull.html_url,
+          fromBranch: defaultBranch,
+          toBranch: 'release',
+        }))
+      : []),
+    ...(comparisonHasSourceFileChanges(releaseToDevComparison)
+      ? releaseToDev.map((pull) => ({
+          number: pull.number,
+          title: pull.title,
+          url: pull.html_url,
+          fromBranch: 'release',
+          toBranch: 'dev',
+        }))
+      : []),
   ]
 }
 
@@ -547,25 +589,27 @@ async function backMergeStep(
 ): Promise<BackMergeStep> {
   const { fromBranch, toBranch } = backMergeBranches(route, defaultBranch)
   const [comparison, openPulls] = await Promise.all([
-    githubApi<{ ahead_by: number; behind_by: number }>(
+    githubApi<GitHubBranchComparison>(
       config,
       `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
     ),
     findPulls(config, repository, 'open', fromBranch, toBranch),
   ])
   const openPull = openPulls[0]
+  const hasFileChanges = comparisonHasSourceFileChanges(comparison)
   return {
     route,
     fromBranch,
     toBranch,
     commitsAhead: comparison.ahead_by,
     commitsBehind: comparison.behind_by,
-    state: openPull
+    filesChanged: comparison.files?.length,
+    state: !hasFileChanges
+      ? 'up_to_date'
+      : openPull
       ? 'pr_open'
-      : comparison.ahead_by > 0
-        ? 'needs_pr'
-        : 'up_to_date',
-    pullRequest: openPull
+      : 'needs_pr',
+    pullRequest: hasFileChanges && openPull
       ? await promotionPullDetails(config, repository, openPull)
       : undefined,
   }
@@ -634,8 +678,10 @@ async function loadRepositoryReleaseState(
     productionReady: promotionSteps.some(
       (step) =>
         step.route === 'release-to-default' &&
-        step.commitsAhead === 0 &&
-        step.commitsBehind === 0,
+        (step.filesChanged === 0 ||
+          (step.filesChanged === undefined &&
+            step.commitsAhead === 0 &&
+            step.commitsBehind === 0)),
     ),
     promotionSteps,
     backMergeSteps,
@@ -672,11 +718,11 @@ export async function assertProductionBranchesIdentical(
     config,
     `/repos/${repositoryPath(repository)}`,
   )
-  const comparison = await githubApi<{ ahead_by: number; behind_by: number }>(
+  const comparison = await githubApi<GitHubBranchComparison>(
     config,
     `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(metadata.default_branch)}...release`,
   )
-  if (comparison.ahead_by !== 0 || comparison.behind_by !== 0) {
+  if (comparisonHasAnyFileChanges(comparison)) {
     throw new ProviderError(
       `Production deployment is blocked: release and ${metadata.default_branch} are not identical.`,
       'PRODUCTION_BRANCHES_DIFFER',
@@ -700,21 +746,36 @@ export async function getRepositoryBackMergeStatus(
       config,
       `/repos/${repositoryPath(repository)}`,
     )
-    const [pendingPulls, defaultToRelease, releaseToDev] = await Promise.all([
-      pendingBackMerges(config, repository, metadata.default_branch),
-      githubApi<{ ahead_by: number }>(
+    const steps = await Promise.all([
+      backMergeStep(
         config,
-        `/repos/${repositoryPath(repository)}/compare/release...${encodeURIComponent(metadata.default_branch)}`,
+        repository,
+        'default-to-release',
+        metadata.default_branch,
       ),
-      githubApi<{ ahead_by: number }>(
+      backMergeStep(
         config,
-        `/repos/${repositoryPath(repository)}/compare/dev...release`,
+        repository,
+        'release-to-dev',
+        metadata.default_branch,
       ),
     ])
+    const pendingPulls = steps.flatMap((step) =>
+      step.state === 'pr_open' && step.pullRequest
+        ? [
+            {
+              number: step.pullRequest.number,
+              title: step.pullRequest.title,
+              url: step.pullRequest.url,
+              fromBranch: step.fromBranch,
+              toBranch: step.toBranch,
+            },
+          ]
+        : [],
+    )
     return {
       pendingPulls,
-      outdated:
-        defaultToRelease.ahead_by > 0 || releaseToDev.ahead_by > 0,
+      outdated: steps.some((step) => step.state !== 'up_to_date'),
     }
   })()
   riskCache.set(key, { expiresAt: Date.now() + RISK_CACHE_MS, value })

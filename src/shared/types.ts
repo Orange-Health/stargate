@@ -237,6 +237,7 @@ export type PromotionStep = {
   toBranch: string
   commitsAhead: number
   commitsBehind: number
+  filesChanged?: number
   state: 'up_to_date' | 'needs_pr' | 'pr_open'
   pullRequest?: PromotionPullRequest
   previousTemplate?: {
@@ -262,6 +263,7 @@ export type BackMergeStep = {
   toBranch: string
   commitsAhead: number
   commitsBehind: number
+  filesChanged?: number
   state: 'up_to_date' | 'needs_pr' | 'pr_open'
   pullRequest?: PromotionPullRequest
 }

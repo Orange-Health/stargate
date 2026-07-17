@@ -382,7 +382,9 @@ export function ReleaseDayOperations({
           } else if (step.state === 'up_to_date') {
             log(
               'success',
-              `Discovered ${step.fromBranch} → ${step.toBranch} is already up to date.`,
+              step.filesChanged === 0 && step.commitsAhead > 0
+                ? `Discovered ${step.fromBranch} → ${step.toBranch} has different merge history but identical content.`
+                : `Discovered ${step.fromBranch} → ${step.toBranch} is already up to date.`,
               repository,
             )
           } else {
@@ -792,6 +794,7 @@ export function ReleaseDayOperations({
                   return {
                     ...item,
                     commitsAhead: 0,
+                    filesChanged: 0,
                     state: 'up_to_date',
                     pullRequest: undefined,
                   }

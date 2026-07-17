@@ -7,6 +7,8 @@ import {
   aggregateBuildStatus,
   backMergeBranches,
   clearRepositoryCaches,
+  comparisonHasAnyFileChanges,
+  comparisonHasSourceFileChanges,
   getReleaseBuildStatuses,
   getRepositoryReleaseState,
   hasActualMergeConflict,
@@ -105,6 +107,26 @@ describe('backMergeBranches', () => {
       fromBranch: 'release',
       toBranch: 'dev',
     })
+  })
+})
+
+describe('branch comparison content checks', () => {
+  it('ignores commits that produce no file changes', () => {
+    const comparison = { ahead_by: 1, behind_by: 0, files: [] }
+
+    expect(comparisonHasSourceFileChanges(comparison)).toBe(false)
+    expect(comparisonHasAnyFileChanges(comparison)).toBe(false)
+  })
+
+  it('detects file changes even when merge history has also diverged', () => {
+    const comparison = {
+      ahead_by: 2,
+      behind_by: 1,
+      files: [{ filename: 'src/index.ts' }],
+    }
+
+    expect(comparisonHasSourceFileChanges(comparison)).toBe(true)
+    expect(comparisonHasAnyFileChanges(comparison)).toBe(true)
   })
 })
 
@@ -208,7 +230,7 @@ describe('release ordering', () => {
 })
 
 describe('repository state cache', () => {
-  it('coalesces concurrent reads for the same repository', async () => {
+  it('coalesces reads and treats history-only differences as up to date', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input)
       if (url.endsWith('/repos/Orange-Health/service-api')) {
@@ -225,7 +247,7 @@ describe('repository state cache', () => {
       }
       if (url.includes('/compare/')) {
         return new Response(
-          JSON.stringify({ ahead_by: 0, behind_by: 0 }),
+          JSON.stringify({ ahead_by: 1, behind_by: 0, files: [] }),
           { status: 200 },
         )
       }
@@ -253,6 +275,12 @@ describe('repository state cache', () => {
     ])
 
     expect(first).toBe(second)
+    expect(first.productionReady).toBe(true)
+    expect(
+      [...first.promotionSteps, ...first.backMergeSteps].every(
+        (step) => step.state === 'up_to_date' && step.filesChanged === 0,
+      ),
+    ).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(12)
     clearRepositoryCaches(config, 'Orange-Health/service-api')
   })

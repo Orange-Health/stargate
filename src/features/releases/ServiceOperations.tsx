@@ -755,7 +755,9 @@ export function ServiceOperations({
                   <div className="branch-sync-status current">
                     <strong>✓ Up to date</strong>
                     <small>
-                      {step.toBranch} contains all commits from {step.fromBranch}
+                      {step.filesChanged === 0 && step.commitsAhead > 0
+                        ? 'Content is aligned; only merge history differs'
+                        : `${step.toBranch} contains all commits from ${step.fromBranch}`}
                     </small>
                   </div>
                 )}
@@ -857,7 +859,12 @@ export function ServiceOperations({
                 <div className="journey-branches">
                   <span className="branch-node">{step.fromBranch}</span>
                   <span className="branch-arrow">
-                    <small>{step.commitsAhead} commits</small>→
+                    <small>
+                      {step.filesChanged === 0 && step.commitsAhead > 0
+                        ? 'content aligned'
+                        : `${step.commitsAhead} commits`}
+                    </small>
+                    →
                   </span>
                   <span className="branch-node">{step.toBranch}</span>
                 </div>
@@ -867,7 +874,11 @@ export function ServiceOperations({
                     <span>✓</span>
                     <div>
                       <strong>Up to date</strong>
-                      <small>No changes waiting to promote</small>
+                      <small>
+                        {step.filesChanged === 0 && step.commitsAhead > 0
+                          ? 'No file changes; only merge history differs'
+                          : 'No changes waiting to promote'}
+                      </small>
                     </div>
                   </div>
                 )}
