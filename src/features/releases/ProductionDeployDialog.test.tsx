@@ -32,6 +32,26 @@ describe('ProductionDeployDialog', () => {
     expect(tag).toBeDisabled()
   })
 
+  it('defaults to frontend formatting from the repository configuration', () => {
+    render(
+      <ProductionDeployDialog
+        repository="Orange-Health/asbru"
+        services={['asbru-web']}
+        sourceTag="v-26.0714.2"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByRole('checkbox', {
+        name: /use frontend tag format/i,
+      }),
+    ).toBeChecked()
+    expect(screen.getByLabelText('Image tag')).toHaveValue(
+      'v-prod-26.0714.2',
+    )
+  })
+
   it('updates the read-only tag when frontend format is toggled', async () => {
     const user = userEvent.setup()
     render(

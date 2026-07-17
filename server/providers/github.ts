@@ -10,6 +10,7 @@ import type {
   StagingEnvironment,
 } from '../../src/shared/types.js'
 import { isClosedWithoutMerge } from '../../src/shared/pullRequests.js'
+import { usesFrontendProductionTag } from '../../src/shared/productionRepositories.js'
 import { ProviderError, providerResponseError } from '../errors.js'
 
 type GitHubSearchItem = {
@@ -428,13 +429,6 @@ export function nextStagingTag(
   return `${prefix}${highest + 1}`
 }
 
-const frontendProductionRepositories = new Set([
-  'asbru',
-  'bifrost',
-  'occ-web',
-  'sapphire-web',
-])
-
 export function productionTagPrefix(repository: string, date: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
   if (!match) throw new Error('Release date must use YYYY-MM-DD.')
@@ -448,8 +442,7 @@ export function productionTagPrefix(repository: string, date: string) {
   ) {
     throw new Error('Release date is invalid.')
   }
-  const name = repository.split('/').at(-1)?.toLowerCase()
-  const prefix = frontendProductionRepositories.has(name ?? '')
+  const prefix = usesFrontendProductionTag(repository)
     ? 'v-prod-'
     : 'v-'
   return `${prefix}${year.slice(-2)}.${month}${day}.`

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { api } from '../../shared/api'
+import { usesFrontendProductionTag } from '../../shared/productionRepositories'
 import type { CreatedProductionRelease } from '../../shared/types'
 
 type Props = {
@@ -15,12 +16,7 @@ function localDate() {
 function tagPreview(repository: string, date: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
   if (!match) return 'Select a valid date'
-  const name = repository.split('/').at(-1)?.toLowerCase()
-  const prefix = ['asbru', 'bifrost', 'occ-web', 'sapphire-web'].includes(
-    name ?? '',
-  )
-    ? 'v-prod-'
-    : 'v-'
+  const prefix = usesFrontendProductionTag(repository) ? 'v-prod-' : 'v-'
   return `${prefix}${match[1].slice(-2)}.${match[2]}${match[3]}.N`
 }
 

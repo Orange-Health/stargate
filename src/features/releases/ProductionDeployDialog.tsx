@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api } from '../../shared/api'
+import { usesFrontendProductionTag } from '../../shared/productionRepositories'
 import type { TriggeredProductionDeployment } from '../../shared/types'
 import { productionTagForFormat } from './productionTags'
 
@@ -10,12 +11,6 @@ type Props = {
   onClose: () => void
 }
 
-function usesSpecialProductionTag(service: string) {
-  return ['asbru-web', 'bifrost-web', 'occ-web', 'sapphire-web'].includes(
-    service,
-  )
-}
-
 export function ProductionDeployDialog({
   repository,
   services,
@@ -24,7 +19,7 @@ export function ProductionDeployDialog({
 }: Props) {
   const [service, setService] = useState(services[0] ?? '')
   const [frontendTag, setFrontendTag] = useState(() =>
-    usesSpecialProductionTag(service),
+    usesFrontendProductionTag(repository),
   )
   const [imageTag, setImageTag] = useState(() =>
     productionTagForFormat(sourceTag, frontendTag),
@@ -86,7 +81,6 @@ export function ProductionDeployDialog({
 
   function changeService(nextService: string) {
     setService(nextService)
-    changeTagFormat(usesSpecialProductionTag(nextService))
   }
 
   async function submit(event: FormEvent) {
