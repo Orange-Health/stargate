@@ -9,9 +9,9 @@ import type {
 } from '../../shared/types'
 import {
   ReleaseDayOperations,
+  cleanGitHubReleaseDescription,
   developersForReleaseService,
   latestProductionReleaseOnDate,
-  markdownToSlack,
   releaseCreatedOnDate,
   releaseNotesForDashboard,
 } from './ReleaseDayOperations'
@@ -396,27 +396,44 @@ describe('ReleaseDayOperations', () => {
     ).toBeVisible()
   })
 
-  it('copies Slack-ready notes with GitHub descriptions or ticket fallbacks', async () => {
+  it('copies rich Slack notes and ignores back-merge bot PRs', async () => {
     const user = userEvent.setup()
-    const writeText = vi.fn().mockResolvedValue(undefined)
+    const write = vi.fn().mockResolvedValue(undefined)
+    class TestClipboardItem {
+      readonly types: string[]
+      private readonly items: Record<string, Blob>
+      constructor(items: Record<string, Blob>) {
+        this.items = items
+        this.types = Object.keys(items)
+      }
+      async getType(type: string) {
+        return this.items[type]
+      }
+    }
+    vi.stubGlobal('ClipboardItem', TestClipboardItem)
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
-      value: { writeText },
+      value: { write, writeText: vi.fn() },
     })
     expect(
-      markdownToSlack(
-        '<!-- release-desk-operation:operation-id -->\n\n## What changed\n\n- Added checkout improvements\n\nSee [docs](https://example.test)',
-      ),
-    ).toBe(
-      '*What changed*\n• Added checkout improvements\n\nSee <https://example.test|docs>',
-    )
+      cleanGitHubReleaseDescription(`<!-- release-desk-operation:operation-id -->
+
+## What's Changed
+* Upgrade to Django 5.2 by @rdvs in https://github.com/Orange-Health/accounts/pull/1090
+* Backport master -> release (backmerging through bot) by @devopsautomation-oh in https://github.com/Orange-Health/accounts/pull/1103
+* OH-3978 enhance feedback by @pi-prakhar in https://github.com/Orange-Health/accounts/pull/1105`),
+    ).toBe(`## What's Changed
+* Upgrade to Django 5.2 by @rdvs in https://github.com/Orange-Health/accounts/pull/1090
+* OH-3978 enhance feedback by @pi-prakhar in https://github.com/Orange-Health/accounts/pull/1105`)
 
     const productionRelease = {
       id: 96,
-      tag: 'v-prod-26.0716.6',
+      tag: 'v-26.0716.1',
       url: 'https://github.test/releases/96',
       createdAt: '2026-07-16T13:30:45Z',
-      description: '<!-- release-desk-operation:operation-id -->',
+      description: `## What's Changed
+* Real feature by @alice in https://github.com/Orange-Health/service-api/pull/101
+* Backport release -> dev (backmerging through bot) by @devopsautomation-oh in https://github.com/Orange-Health/service-api/pull/102`,
       buildStatus: 'succeeded' as const,
       runs: [],
     }
@@ -456,6 +473,36 @@ describe('ReleaseDayOperations', () => {
               blockingReasons: [],
               warningReasons: [],
             },
+            {
+              issue: {
+                key: 'OH-102',
+                summary: 'Bot back-merge',
+                status: 'Done',
+                url: 'https://jira.test/OH-102',
+              },
+              pullRequest: {
+                id: 102,
+                repository,
+                number: 102,
+                title: 'Backport release -> dev',
+                url: 'https://github.test/pull/102',
+                state: 'closed' as const,
+                draft: false,
+                merged: true,
+                baseBranch: 'dev',
+                headBranch: 'release',
+                author: 'devopsautomation-oh',
+                assignees: [],
+                reviewDecision: 'approved' as const,
+                mergeable: true,
+                mergeableState: 'clean',
+                checks: 'success' as const,
+                updatedAt: '2026-07-16T08:00:00Z',
+              },
+              eligible: false,
+              blockingReasons: [],
+              warningReasons: [],
+            },
           ],
         },
       ],
@@ -471,17 +518,17 @@ describe('ReleaseDayOperations', () => {
       { [repository]: [productionRelease] },
       '2026-07-16',
     )
-    expect(notes).toContain('*service-api*')
-    expect(notes).toContain(
-      `Tag: <${productionRelease.url}|${productionRelease.tag}>`,
+    expect(notes.html).toContain('<b>service-api</b>')
+    expect(notes.html).toContain(
+      `<a href="${productionRelease.url}">${productionRelease.tag}</a>`,
     )
-    expect(notes).toContain('• OH-101: Improve checkout')
-    expect(notes).toContain(
-      '<https://github.test/pull/101|PR #101> — OH-101: Improve checkout',
+    expect(notes.html).toContain('Real feature by @alice')
+    expect(notes.html).toContain(
+      '<a href="https://github.com/Orange-Health/service-api/pull/101">https://github.com/Orange-Health/service-api/pull/101</a>',
     )
-    expect(notes).not.toContain('##')
-    expect(notes).not.toContain('**')
-    expect(notes).not.toContain('release-desk-operation')
+    expect(notes.html).not.toContain('devopsautomation-oh')
+    expect(notes.plain).not.toContain('devopsautomation-oh')
+    expect(notes.plain).not.toContain('release-desk-operation')
 
     render(
       <ReleaseDayOperations
@@ -494,7 +541,11 @@ describe('ReleaseDayOperations', () => {
       screen.getByRole('button', { name: 'Copy Release Notes' }),
     )
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(notes))
+    await waitFor(() => expect(write).toHaveBeenCalled())
+    const item = write.mock.calls[0][0][0] as ClipboardItem
+    expect(item.types).toEqual(
+      expect.arrayContaining(['text/plain', 'text/html']),
+    )
     expect(
       screen.getByRole('button', { name: '✓ Copied!' }),
     ).toBeVisible()

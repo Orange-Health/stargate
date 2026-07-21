@@ -115,13 +115,102 @@ export function latestProductionReleaseOnDate(
     )[0]
 }
 
-export function markdownToSlack(text: string) {
-  return text
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<$2|$1>')
-    .replace(/\*\*([^*]+)\*\*/g, '*$1*')
-    .replace(/__([^_]+)__/g, '*$1*')
+export const RELEASE_NOTES_BOT_AUTHORS = [
+  'devopsautomation-oh',
+] as const
+
+export function isReleaseNotesBotAuthor(value: string) {
+  const login = value.replace(/^@/, '').toLowerCase()
+  return RELEASE_NOTES_BOT_AUTHORS.some((bot) => bot === login)
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+export function cleanGitHubReleaseDescription(text: string) {
+  const withoutComments = text.replace(/<!--[\s\S]*?-->/g, '').trim()
+  if (!withoutComments) return ''
+
+  const keptLines: string[] = []
+  for (const line of withoutComments.split('\n')) {
+    const authors = [...line.matchAll(/@([A-Za-z0-9-]+)/g)].map(
+      (match) => match[1],
+    )
+    if (
+      authors.some((author) => isReleaseNotesBotAuthor(author)) ||
+      (/back(?:port|merg)/i.test(line) &&
+        /devopsautomation-oh/i.test(line))
+    ) {
+      continue
+    }
+    keptLines.push(line)
+  }
+
+  return keptLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function markdownInlineToHtml(text: string) {
+  return escapeHtml(text)
+    .replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+      '<a href="$2">$1</a>',
+    )
+    .replace(
+      /(https?:\/\/github\.com\/[^\s<]+)/g,
+      '<a href="$1">$1</a>',
+    )
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/__([^_]+)__/g, '<b>$1</b>')
+}
+
+export function githubDescriptionToHtml(text: string) {
+  const cleaned = cleanGitHubReleaseDescription(text)
+  if (!cleaned) return ''
+
+  const blocks: string[] = []
+  let listItems: string[] = []
+
+  const flushList = () => {
+    if (listItems.length === 0) return
+    blocks.push(`<ul>${listItems.join('')}</ul>`)
+    listItems = []
+  }
+
+  for (const line of cleaned.split('\n')) {
+    const heading = /^#{1,6}\s+(.+)$/.exec(line)
+    const bullet = /^\s*[-*]\s+(.+)$/.exec(line)
+    if (heading) {
+      flushList()
+      blocks.push(`<p><b>${markdownInlineToHtml(heading[1])}</b></p>`)
+      continue
+    }
+    if (bullet) {
+      listItems.push(`<li>${markdownInlineToHtml(bullet[1])}</li>`)
+      continue
+    }
+    if (!line.trim()) {
+      flushList()
+      continue
+    }
+    flushList()
+    blocks.push(`<p>${markdownInlineToHtml(line)}</p>`)
+  }
+  flushList()
+  return blocks.join('')
+}
+
+export function githubDescriptionToPlain(text: string) {
+  return cleanGitHubReleaseDescription(text)
+    .replace(/^#{1,6}\s+(.+)$/gm, '$1')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '$1 ($2)')
     .replace(/^\s*[-*]\s+/gm, '• ')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
@@ -129,15 +218,30 @@ export function markdownToSlack(text: string) {
 
 function serviceChangeSummary(
   service: ReleaseDashboard['services'][number],
-) {
-  const lines = service.items.flatMap((item) => {
-    const issue = `• ${item.issue.key}: ${item.issue.summary}`
-    if (!item.pullRequest) return [issue]
-    return [
-      `${issue}\n  <${item.pullRequest.url}|PR #${item.pullRequest.number}> — ${item.pullRequest.title}`,
-    ]
+): { plain: string; html: string } {
+  const items = service.items.filter((item) => {
+    const author = item.pullRequest?.author
+    return !author || !isReleaseNotesBotAuthor(author)
   })
-  return lines.join('\n')
+  if (items.length === 0) return { plain: '', html: '' }
+
+  const plain = items
+    .map((item) => {
+      const issue = `• ${item.issue.key}: ${item.issue.summary}`
+      if (!item.pullRequest) return issue
+      return `${issue}\n  PR #${item.pullRequest.number}: ${item.pullRequest.title}\n  ${item.pullRequest.url}`
+    })
+    .join('\n')
+
+  const html = `<ul>${items
+    .map((item) => {
+      const issue = `${escapeHtml(item.issue.key)}: ${escapeHtml(item.issue.summary)}`
+      if (!item.pullRequest) return `<li>${issue}</li>`
+      return `<li>${issue}<br><a href="${escapeHtml(item.pullRequest.url)}">PR #${item.pullRequest.number}</a> — ${escapeHtml(item.pullRequest.title)}</li>`
+    })
+    .join('')}</ul>`
+
+  return { plain, html }
 }
 
 export function releaseNotesForDashboard(
@@ -145,35 +249,72 @@ export function releaseNotesForDashboard(
   releasesByRepository: Record<string, TrackedProductionRelease[]>,
   releaseDate: string,
 ) {
-  const sections = dashboard.services.map((service) => {
+  const plainSections: string[] = []
+  const htmlSections: string[] = []
+
+  for (const service of dashboard.services) {
     const release = latestProductionReleaseOnDate(
       releasesByRepository[service.repository] ?? [],
       releaseDate,
     )
     const serviceName =
       service.repository.split('/').at(-1) ?? service.repository
-    if (!release) {
-      const fallback = serviceChangeSummary(service)
-      return `*${serviceName}*\nTag: _Not created_\n${fallback || '_No tickets linked to this service._'}`
-    }
-    const githubDescription = markdownToSlack(release.description ?? '')
     const fallback = serviceChangeSummary(service)
-    const description =
-      githubDescription ||
-      fallback ||
-      '_No changes listed for this service._'
-    return `*${serviceName}*\nTag: <${release.url}|${release.tag}>\n${description}`
-  })
-  return `*${dashboard.version.name}*\nRelease date: ${releaseDate}\n\n${sections.join('\n\n')}`
+
+    if (!release) {
+      plainSections.push(
+        `${serviceName}\nTag: Not created\n${fallback.plain || 'No tickets linked to this service.'}`,
+      )
+      htmlSections.push(
+        `<p><b>${escapeHtml(serviceName)}</b><br>Tag: <i>Not created</i></p>${fallback.html || '<p><i>No tickets linked to this service.</i></p>'}`,
+      )
+      continue
+    }
+
+    const githubHtml = githubDescriptionToHtml(release.description ?? '')
+    const githubPlain = githubDescriptionToPlain(release.description ?? '')
+    const descriptionPlain =
+      githubPlain ||
+      fallback.plain ||
+      'No changes listed for this service.'
+    const descriptionHtml =
+      githubHtml ||
+      fallback.html ||
+      '<p><i>No changes listed for this service.</i></p>'
+
+    plainSections.push(
+      `${serviceName}\nTag: ${release.tag}\n${release.url}\n${descriptionPlain}`,
+    )
+    htmlSections.push(
+      `<p><b>${escapeHtml(serviceName)}</b><br>Tag: <a href="${escapeHtml(release.url)}">${escapeHtml(release.tag)}</a></p>${descriptionHtml}`,
+    )
+  }
+
+  return {
+    plain: `${dashboard.version.name}\nRelease date: ${releaseDate}\n\n${plainSections.join('\n\n')}`,
+    html: `<p><b>${escapeHtml(dashboard.version.name)}</b><br>Release date: ${escapeHtml(releaseDate)}</p>${htmlSections.join('<hr>')}`,
+  }
 }
 
-async function copyText(text: string) {
+async function copyReleaseNotesContent(notes: {
+  plain: string
+  html: string
+}) {
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/plain': new Blob([notes.plain], { type: 'text/plain' }),
+        'text/html': new Blob([notes.html], { type: 'text/html' }),
+      }),
+    ])
+    return
+  }
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
+    await navigator.clipboard.writeText(notes.plain)
     return
   }
   const textarea = document.createElement('textarea')
-  textarea.value = text
+  textarea.value = notes.plain
   textarea.style.position = 'fixed'
   textarea.style.opacity = '0'
   document.body.appendChild(textarea)
@@ -1354,7 +1495,7 @@ export function ReleaseDayOperations({
           `Could not load release notes for: ${failures.join(', ')}.`,
         )
       }
-      await copyText(
+      await copyReleaseNotesContent(
         releaseNotesForDashboard(
           dashboard,
           releasesByRepository,
