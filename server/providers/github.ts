@@ -564,17 +564,32 @@ export async function createProductionRelease(
         body: string | null
       }>
     >(config, `/repos/${path}/releases?per_page=100`)
-    const existing = releases.find((release) =>
-      release.body?.includes(operationMarker),
+    const existing = releases.find(
+      (release) =>
+        release.tag_name.startsWith(prefix) &&
+        release.body?.includes(operationMarker),
     )
     if (existing) {
-      return {
-        id: existing.id,
-        repository,
-        tag: existing.tag_name,
-        sourceBranch: existing.target_commitish || sourceBranch,
-        url: existing.html_url,
-        createdAt: existing.created_at,
+      const runs = await githubFetch<{
+        workflow_runs: Array<{
+          conclusion: string | null
+        }>
+      }>(
+        config,
+        `/repos/${path}/actions/runs?branch=${encodeURIComponent(existing.tag_name)}&per_page=100`,
+      )
+      const canceled = runs.workflow_runs.some(
+        (run) => run.conclusion === 'cancelled',
+      )
+      if (!canceled) {
+        return {
+          id: existing.id,
+          repository,
+          tag: existing.tag_name,
+          sourceBranch: existing.target_commitish || sourceBranch,
+          url: existing.html_url,
+          createdAt: existing.created_at,
+        }
       }
     }
   }

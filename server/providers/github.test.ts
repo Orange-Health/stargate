@@ -547,6 +547,11 @@ describe('production release tags', () => {
           { status: 200 },
         ),
       )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ workflow_runs: [] }), {
+          status: 200,
+        }),
+      )
     vi.stubGlobal('fetch', fetchMock)
     const config: ConnectionConfig = {
       jiraSite: 'https://jira.test',
@@ -568,6 +573,145 @@ describe('production release tags', () => {
 
     expect(result.tag).toBe('v-26.0714.3')
     expect(result.sourceBranch).toBe('master')
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not reuse an interrupted operation release from another date', async () => {
+    const operationId = '5ce8a585-87f7-4c58-8e4f-8a3dd49b16df'
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ default_branch: 'master' }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: 101,
+              tag_name: 'v-26.0716.1',
+              target_commitish: 'master',
+              html_url: 'https://github.test/releases/101',
+              created_at: '2026-07-16T12:05:00Z',
+              body: `<!-- release-desk-operation:${operationId} -->`,
+            },
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify([]), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 102,
+            html_url: 'https://github.test/releases/102',
+            created_at: '2026-06-23T12:10:00Z',
+          }),
+          { status: 201 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await createProductionRelease(
+      config,
+      'orange/service-api',
+      '2026-06-23',
+      operationId,
+    )
+
+    expect(result.tag).toBe('v-26.0623.1')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(String(fetchMock.mock.calls[2][0])).toContain(
+      '/git/matching-refs/tags/v-26.0623.',
+    )
+  })
+
+  it('creates a new release when the interrupted operation build was canceled', async () => {
+    const operationId = '5ce8a585-87f7-4c58-8e4f-8a3dd49b16df'
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ default_branch: 'master' }), {
+          status: 200,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: 101,
+              tag_name: 'v-26.0714.3',
+              target_commitish: 'master',
+              html_url: 'https://github.test/releases/101',
+              created_at: '2026-07-14T12:05:00Z',
+              body: `<!-- release-desk-operation:${operationId} -->`,
+            },
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            workflow_runs: [
+              {
+                head_branch: 'v-26.0714.3',
+                conclusion: 'cancelled',
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ ref: 'refs/tags/v-26.0714.3' }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 102,
+            html_url: 'https://github.test/releases/102',
+            created_at: '2026-07-14T12:10:00Z',
+          }),
+          { status: 201 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await createProductionRelease(
+      config,
+      'orange/service-api',
+      '2026-07-14',
+      operationId,
+    )
+
+    expect(result.tag).toBe('v-26.0714.4')
+    expect(fetchMock).toHaveBeenCalledTimes(5)
   })
 })

@@ -93,28 +93,51 @@ function localDate() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-export function releaseCreatedOnOrBeforeDate(
+export function releaseCreatedOnDate(
   createdAt: string,
   releaseDate: string,
 ) {
   return /^\d{4}-\d{2}-\d{2}$/.test(releaseDate)
-    ? createdAt.slice(0, 10) <= releaseDate
+    ? createdAt.slice(0, 10) === releaseDate
     : false
 }
 
-export function latestProductionReleaseOnOrBeforeDate(
+export function latestProductionReleaseOnDate(
   releases: TrackedProductionRelease[],
   releaseDate: string,
 ) {
   return releases
-    .filter((release) =>
-      releaseCreatedOnOrBeforeDate(release.createdAt, releaseDate),
-    )
+    .filter((release) => releaseCreatedOnDate(release.createdAt, releaseDate))
     .sort(
       (left, right) =>
         new Date(right.createdAt).getTime() -
         new Date(left.createdAt).getTime(),
     )[0]
+}
+
+export function markdownToSlack(text: string) {
+  return text
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<$2|$1>')
+    .replace(/\*\*([^*]+)\*\*/g, '*$1*')
+    .replace(/__([^_]+)__/g, '*$1*')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function serviceChangeSummary(
+  service: ReleaseDashboard['services'][number],
+) {
+  const lines = service.items.flatMap((item) => {
+    const issue = `• ${item.issue.key}: ${item.issue.summary}`
+    if (!item.pullRequest) return [issue]
+    return [
+      `${issue}\n  <${item.pullRequest.url}|PR #${item.pullRequest.number}> — ${item.pullRequest.title}`,
+    ]
+  })
+  return lines.join('\n')
 }
 
 export function releaseNotesForDashboard(
@@ -123,19 +146,25 @@ export function releaseNotesForDashboard(
   releaseDate: string,
 ) {
   const sections = dashboard.services.map((service) => {
-    const release = latestProductionReleaseOnOrBeforeDate(
+    const release = latestProductionReleaseOnDate(
       releasesByRepository[service.repository] ?? [],
       releaseDate,
     )
+    const serviceName =
+      service.repository.split('/').at(-1) ?? service.repository
     if (!release) {
-      return `## ${service.repository}\n\n**Release tag:** Not created\n\n_No production release found on or before ${releaseDate}._`
+      const fallback = serviceChangeSummary(service)
+      return `*${serviceName}*\nTag: _Not created_\n${fallback || '_No tickets linked to this service._'}`
     }
-    const description = release.description
-      ?.replace(/<!--\s*release-desk-operation:[^>]+-->\s*/gi, '')
-      .trim()
-    return `## ${service.repository}\n\n**Release tag:** [${release.tag}](${release.url})\n\n${description || '_No release description provided._'}`
+    const githubDescription = markdownToSlack(release.description ?? '')
+    const fallback = serviceChangeSummary(service)
+    const description =
+      githubDescription ||
+      fallback ||
+      '_No changes listed for this service._'
+    return `*${serviceName}*\nTag: <${release.url}|${release.tag}>\n${description}`
   })
-  return `# ${dashboard.version.name} Release Notes\n\n**Release date:** ${releaseDate}\n\n${sections.join('\n\n')}`
+  return `*${dashboard.version.name}*\nRelease date: ${releaseDate}\n\n${sections.join('\n\n')}`
 }
 
 async function copyText(text: string) {
@@ -354,9 +383,18 @@ function phaseState(
   state: RepositoryReleaseState | undefined,
   route: PromotionRoute,
   mode: 'create' | 'merge',
+  syncStatus?: RepositorySyncStatus,
 ) {
   const step = routeStep(state, route)
-  if (!step) return { label: 'Checking', tone: 'pending' }
+  if (!step) {
+    return {
+      label:
+        syncStatus === 'queued' || syncStatus === 'syncing'
+          ? 'Checking'
+          : 'Refresh pending',
+      tone: 'pending',
+    }
+  }
   if (step.state === 'up_to_date') {
     return { label: mode === 'merge' ? 'Merged' : 'Ready', tone: 'success' }
   }
@@ -663,7 +701,12 @@ export function ReleaseDayOperations({
   useEffect(() => {
     const activeReleases = selected.flatMap((repository) => {
       const release = session.repositories[repository]?.productionRelease
-      if (!release) return []
+      if (
+        !release ||
+        !releaseCreatedOnDate(release.createdAt, session.releaseDate)
+      ) {
+        return []
+      }
       const status = states[repository]?.productionReleases.find(
         (item) => item.tag === release.tag,
       )?.buildStatus
@@ -768,12 +811,29 @@ export function ReleaseDayOperations({
       'up_to_date',
   )
   const releasesCreated = everySelected(
-    (repository) =>
-      Boolean(session.repositories[repository]?.productionRelease),
+    (repository) => {
+      const release = session.repositories[repository]?.productionRelease
+      if (
+        !release ||
+        !releaseCreatedOnDate(release.createdAt, session.releaseDate)
+      ) {
+        return false
+      }
+      return (
+        states[repository]?.productionReleases.find(
+          (item) => item.tag === release.tag,
+        )?.buildStatus !== 'canceled'
+      )
+    },
   )
   const buildsSucceeded = everySelected((repository) => {
     const release = session.repositories[repository]?.productionRelease
-    if (!release) return false
+    if (
+      !release ||
+      !releaseCreatedOnDate(release.createdAt, session.releaseDate)
+    ) {
+      return false
+    }
     return states[repository]?.productionReleases.find(
       (item) => item.tag === release.tag,
     )?.buildStatus === 'succeeded'
@@ -1049,7 +1109,16 @@ export function ReleaseDayOperations({
 
   async function createProductionRelease(repository: string) {
     const saved = sessionRef.current.repositories[repository]?.productionRelease
-    if (saved) {
+    const savedBuildStatus = saved
+      ? states[repository]?.productionReleases.find(
+          (release) => release.tag === saved.tag,
+        )?.buildStatus
+      : undefined
+    if (
+      saved &&
+      releaseCreatedOnDate(saved.createdAt, sessionRef.current.releaseDate) &&
+      savedBuildStatus !== 'canceled'
+    ) {
       log('success', `${saved.tag} was already created for this run.`, repository)
       return
     }
@@ -1121,14 +1190,14 @@ export function ReleaseDayOperations({
     try {
       await api.refreshRepository(repository)
       const repositoryState = await api.repositoryState(repository)
-      const latest = latestProductionReleaseOnOrBeforeDate(
+      const latest = latestProductionReleaseOnDate(
         repositoryState.productionReleases,
         sessionRef.current.releaseDate,
       )
       if (!latest) {
         log(
           'warning',
-          `No production tag was created on or before ${sessionRef.current.releaseDate}.`,
+          `No production tag was created on ${sessionRef.current.releaseDate}.`,
           repository,
         )
         return
@@ -1559,6 +1628,8 @@ export function ReleaseDayOperations({
                     const repository = service.repository
                     const progress = session.repositories[repository]
                     const syncStatus = repositorySync[repository]
+                    const rowSyncing =
+                      syncStatus === 'queued' || syncStatus === 'syncing'
                     const repositoryState = states[repository]
                     const release = progress?.productionRelease
                     const releaseCreationError =
@@ -1568,30 +1639,41 @@ export function ReleaseDayOperations({
                           (item) => item.tag === release.tag,
                         )
                       : undefined
+                    const existingRelease =
+                      trackedRelease?.buildStatus === 'canceled' ||
+                      !release ||
+                      !releaseCreatedOnDate(
+                        release.createdAt,
+                        session.releaseDate,
+                      )
+                        ? undefined
+                        : release
                     const productionDeployments =
                       repositoryState?.deployedTags.filter(
                         (deployment) =>
                           deployment.environment === 'production',
                       ) ?? []
                     const latestTagAlreadyDeployed =
-                      Boolean(release) &&
+                      Boolean(existingRelease) &&
                       Boolean(repositoryState?.jenkinsServices.length) &&
                       repositoryState?.jenkinsServices.every((jenkinsService) =>
                         productionDeployments.some(
                           (deployment) =>
                             deployment.service === jenkinsService &&
-                            deployment.tag === release?.tag,
+                            deployment.tag === existingRelease?.tag,
                         ),
                       )
                     const dev = phaseState(
                       states[repository],
                       'dev-to-release',
                       devPrsReady ? 'merge' : 'create',
+                      syncStatus,
                     )
                     const main = phaseState(
                       states[repository],
                       'release-to-default',
                       defaultPrsReady ? 'merge' : 'create',
+                      syncStatus,
                     )
                     const devOperation =
                       cellOperation?.repository === repository &&
@@ -1606,7 +1688,14 @@ export function ReleaseDayOperations({
                     return (
                       <tr
                         key={repository}
-                        className={!selectedSet.has(repository) ? 'unselected' : ''}
+                        aria-busy={rowSyncing}
+                        inert={rowSyncing ? true : undefined}
+                        className={[
+                          !selectedSet.has(repository) ? 'unselected' : '',
+                          rowSyncing ? 'sync-in-progress' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                       >
                         <td>
                           <input
@@ -1749,10 +1838,14 @@ export function ReleaseDayOperations({
                           )}
                         </td>
                         <td>
-                          {release ? (
+                          {existingRelease ? (
                             <div className="release-day-production-build">
-                              <a href={release.url} target="_blank" rel="noreferrer">
-                                {release.tag} ↗
+                              <a
+                                href={existingRelease.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {existingRelease.tag} ↗
                               </a>
                               <span
                                 className={`batch-status ${
@@ -1771,7 +1864,7 @@ export function ReleaseDayOperations({
                                   Boolean(busyAction) ||
                                   Boolean(checkingBuildRepository)
                                 }
-                                title={`Find the newest production tag created on or before ${session.releaseDate} and refresh its workflow status`}
+                                title={`Find the newest production tag created on ${session.releaseDate} and refresh its workflow status`}
                                 onClick={() =>
                                   void checkLatestBuild(repository)
                                 }
@@ -1847,20 +1940,21 @@ export function ReleaseDayOperations({
                               type="button"
                               disabled={
                                 !productionEnabled ||
+                                !existingRelease ||
                                 trackedRelease?.buildStatus !== 'succeeded' ||
                                 !repositoryState?.jenkinsServices.length ||
                                 latestTagAlreadyDeployed
                               }
                               title={
                                 latestTagAlreadyDeployed
-                                  ? `${release?.tag} is already deployed to production`
+                                  ? `${existingRelease?.tag} is already deployed to production`
                                   : 'Deploy the latest production build'
                               }
                               onClick={() =>
-                                release &&
+                                existingRelease &&
                                 setDeployTarget({
                                   repository,
-                                  release,
+                                  release: existingRelease,
                                   services:
                                     repositoryState?.jenkinsServices ?? [],
                                 })
