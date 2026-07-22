@@ -6,6 +6,8 @@ import {
   createProductionRelease,
   developmentPullRequests,
   discoverPullRequests,
+  buildIssueSearchQuery,
+  countSearchBooleanOperators,
   githubApi,
   nextProductionTag,
   nextStagingTag,
@@ -446,6 +448,16 @@ describe('Jira development links', () => {
 })
 
 describe('targeted search invalidation', () => {
+  it('keeps OR batches within GitHub boolean operator limits', () => {
+    const keys = ['OH-1', 'OH-2', 'OH-3', 'OH-4', 'OH-5', 'OH-6']
+    const query = buildIssueSearchQuery('Orange-Health', keys)
+    expect(countSearchBooleanOperators(query)).toBe(5)
+    expect(countSearchBooleanOperators(query)).toBeLessThanOrEqual(5)
+    expect(() =>
+      buildIssueSearchQuery('Orange-Health', [...keys, 'OH-7']),
+    ).toThrow(/OR operators/)
+  })
+
   it('keeps unrelated issue searches cached during service refresh', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input)
@@ -474,7 +486,7 @@ describe('targeted search invalidation', () => {
     clearGitHubProviderCache('Orange-Health/service-api', ['OH-123'])
     await discoverPullRequests(config, issues)
 
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(
       fetchMock.mock.calls.filter(([input]) =>
         decodeURIComponent(String(input)).includes('OH-123'),
@@ -485,6 +497,242 @@ describe('targeted search invalidation', () => {
         decodeURIComponent(String(input)).includes('OH-456'),
       ),
     ).toHaveLength(1)
+  })
+
+  it('batches multiple issue keys into one OR search query', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = decodeURIComponent(String(input))
+      if (url.includes('/search/issues')) {
+        expect(url).toContain('"OH-123" OR "OH-456"')
+        expect(url).toContain('is:pr (')
+        expect(url).not.toContain('in:title')
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: 1,
+                number: 10,
+                title: 'OH-123 fix',
+                repository_url:
+                  'https://api.github.com/repos/Orange-Health/service-api',
+                state: 'open',
+                pull_request: {},
+              },
+              {
+                id: 2,
+                number: 20,
+                title: 'OH-456 feature',
+                repository_url:
+                  'https://api.github.com/repos/Orange-Health/service-api',
+                state: 'open',
+                pull_request: {},
+              },
+            ],
+            incomplete_results: false,
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === 'https://api.github.com/graphql') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              p0: {
+                pullRequest: {
+                  databaseId: 10,
+                  number: 10,
+                  title: 'OH-123 fix',
+                  url: 'https://github.com/Orange-Health/service-api/pull/10',
+                  state: 'OPEN',
+                  isDraft: false,
+                  merged: false,
+                  mergeable: 'MERGEABLE',
+                  mergeStateStatus: 'CLEAN',
+                  baseRefName: 'dev',
+                  headRefName: 'feature/OH-123',
+                  updatedAt: '2026-07-15T08:00:00Z',
+                  reviewDecision: 'APPROVED',
+                  author: { login: 'dev', avatarUrl: '' },
+                  assignees: { nodes: [] },
+                  latestReviews: { nodes: [] },
+                  commits: { nodes: [] },
+                },
+              },
+              p1: {
+                pullRequest: {
+                  databaseId: 20,
+                  number: 20,
+                  title: 'OH-456 feature',
+                  url: 'https://github.com/Orange-Health/service-api/pull/20',
+                  state: 'OPEN',
+                  isDraft: false,
+                  merged: false,
+                  mergeable: 'MERGEABLE',
+                  mergeStateStatus: 'CLEAN',
+                  baseRefName: 'dev',
+                  headRefName: 'feature/OH-456',
+                  updatedAt: '2026-07-15T08:00:00Z',
+                  reviewDecision: 'APPROVED',
+                  author: { login: 'dev', avatarUrl: '' },
+                  assignees: { nodes: [] },
+                  latestReviews: { nodes: [] },
+                  commits: { nodes: [] },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await discoverPullRequests(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'Orange-Health',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      [{ key: 'OH-123' }, { key: 'OH-456' }],
+    )
+
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        String(input).includes('/search/'),
+      ),
+    ).toHaveLength(1)
+    expect(result.byIssue.get('OH-123')?.[0].number).toBe(10)
+    expect(result.byIssue.get('OH-456')?.[0].number).toBe(20)
+  })
+
+  it('falls back to per-ticket search when an OR batch fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let searchCalls = 0
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = decodeURIComponent(String(input))
+      if (url.includes('/search/issues')) {
+        searchCalls += 1
+        if (url.includes('OR')) {
+          return new Response(
+            JSON.stringify({ message: 'Validation Failed', errors: [] }),
+            { status: 422 },
+          )
+        }
+        const issueKey = url.includes('OH-123') ? 'OH-123' : 'OH-456'
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: issueKey === 'OH-123' ? 1 : 2,
+                number: issueKey === 'OH-123' ? 10 : 20,
+                title: `${issueKey} fix`,
+                repository_url:
+                  'https://api.github.com/repos/Orange-Health/service-api',
+                state: 'open',
+                pull_request: {},
+              },
+            ],
+            incomplete_results: false,
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === 'https://api.github.com/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          variables: Record<string, string | number>
+        }
+        const data: Record<string, unknown> = {}
+        for (const [key, value] of Object.entries(body.variables)) {
+          const match = /^number(\d+)$/.exec(key)
+          if (!match) continue
+          const index = match[1]
+          const pullNumber = Number(value)
+          data[`p${index}`] = {
+            pullRequest: {
+              databaseId: pullNumber,
+              number: pullNumber,
+              title: `PR ${pullNumber}`,
+              url: `https://github.com/Orange-Health/service-api/pull/${pullNumber}`,
+              state: 'OPEN',
+              isDraft: false,
+              merged: false,
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+              baseRefName: 'dev',
+              headRefName: `feature/${pullNumber}`,
+              updatedAt: '2026-07-15T08:00:00Z',
+              reviewDecision: 'APPROVED',
+              author: { login: 'dev', avatarUrl: '' },
+              assignees: { nodes: [] },
+              latestReviews: { nodes: [] },
+              commits: { nodes: [] },
+            },
+          }
+        }
+        return new Response(JSON.stringify({ data }), { status: 200 })
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await discoverPullRequests(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'Orange-Health',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      [{ key: 'OH-123' }, { key: 'OH-456' }],
+    )
+
+    expect(searchCalls).toBeGreaterThanOrEqual(3)
+    expect(result.warnings).toEqual([])
+    expect(result.byIssue.get('OH-123')?.[0].number).toBe(10)
+    expect(result.byIssue.get('OH-456')?.[0].number).toBe(20)
+    expect(errorSpy).toHaveBeenCalled()
+    errorSpy.mockRestore()
+  })
+
+  it('logs search failures and keeps UI warnings short', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      return new Response(JSON.stringify({ message: 'API rate limit exceeded' }), {
+        status: 403,
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await discoverPullRequests(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'Orange-Health',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      [{ key: 'OH-4009' }],
+    )
+
+    expect(result.warnings).toEqual(['Could not search GitHub for OH-4009.'])
+    expect(errorSpy).toHaveBeenCalled()
+    expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain('OH-4009')
+    expect(String(errorSpy.mock.calls.at(-1)?.[1])).toMatch(
+      /rate limit|403|Authentication/i,
+    )
+    errorSpy.mockRestore()
   })
 })
 

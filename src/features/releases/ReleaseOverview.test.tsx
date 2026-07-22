@@ -93,7 +93,10 @@ describe('ReleaseOverview', () => {
     )
   })
 
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
 
   it('shows the current Jira or GitHub operation while loading', () => {
     render(
@@ -127,6 +130,35 @@ describe('ReleaseOverview', () => {
       'aria-valuenow',
       '3',
     )
+  })
+
+  it('ticks Last synced from the dashboard fetchedAt timestamp', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T12:00:13Z'))
+
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={{
+          ...dashboard,
+          fetchedAt: '2026-07-15T12:00:00Z',
+        }}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('13s ago')).toBeVisible()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(screen.getByText('15s ago')).toBeVisible()
   })
 
   it('uses the themed release picker to change releases', async () => {

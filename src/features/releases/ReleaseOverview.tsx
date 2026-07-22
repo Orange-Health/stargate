@@ -90,10 +90,10 @@ function formatDate(value?: string) {
   }).format(new Date(`${value}T00:00:00`))
 }
 
-function relativeTime(value: string) {
+function relativeTime(value: string, now = Date.now()) {
   const seconds = Math.max(
     0,
-    Math.round((Date.now() - new Date(value).getTime()) / 1000),
+    Math.round((now - new Date(value).getTime()) / 1000),
   )
   if (seconds < 60) return `${seconds}s ago`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
@@ -527,6 +527,7 @@ export function ReleaseOverview({
     'all' | 'pending' | 'issues' | 'backmerges' | 'outdated'
   >('all')
   const [serviceSearch, setServiceSearch] = useState('')
+  const [syncedClock, setSyncedClock] = useState(() => Date.now())
   const [releaseDayOpen, setReleaseDayOpen] = useState(
     () =>
       new URLSearchParams(window.location.search).get('view') ===
@@ -578,6 +579,13 @@ export function ReleaseOverview({
     window.addEventListener('popstate', syncView)
     return () => window.removeEventListener('popstate', syncView)
   }, [])
+
+  useEffect(() => {
+    if (!dashboard?.fetchedAt) return
+    setSyncedClock(Date.now())
+    const timer = window.setInterval(() => setSyncedClock(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [dashboard?.fetchedAt])
 
   function showReleaseDay(open: boolean) {
     const url = new URL(window.location.href)
@@ -869,7 +877,9 @@ export function ReleaseOverview({
             {dashboard && (
               <span>
                 Last synced
-                <strong>{relativeTime(dashboard.fetchedAt)}</strong>
+                <strong>
+                  {relativeTime(dashboard.fetchedAt, syncedClock)}
+                </strong>
               </span>
             )}
             <button
