@@ -456,10 +456,10 @@ describe('production release tags', () => {
       'v-prod-26.0714.',
     )
     expect(productionTagPrefix('Orange-Health/sapphire', '2026-07-14')).toBe(
-      'v-26.0714.',
+      'v26.0714.',
     )
     expect(productionTagPrefix('Orange-Health/accounts', '2026-07-14')).toBe(
-      'v-26.0714.',
+      'v26.0714.',
     )
   })
 
@@ -471,6 +471,12 @@ describe('production release tags', () => {
         'v-26.0714.9',
       ]),
     ).toBe('v-prod-26.0714.4')
+    expect(
+      nextProductionTag('Orange-Health/accounts', '2026-07-14', [
+        'v-26.0714.1',
+        'v26.0714.3',
+      ]),
+    ).toBe('v26.0714.4')
   })
 
   it('creates a production release from the default branch using generated notes', async () => {
@@ -481,7 +487,7 @@ describe('production release tags', () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ ref: 'refs/tags/v-26.0714.1' }]),
+          JSON.stringify([{ ref: 'refs/tags/v26.0714.1' }]),
           { status: 200 },
         ),
       )
@@ -513,10 +519,10 @@ describe('production release tags', () => {
       '2026-07-14',
     )
 
-    expect(result.tag).toBe('v-26.0714.2')
+    expect(result.tag).toBe('v26.0714.2')
     expect(result.sourceBranch).toBe('main')
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({
-      tag_name: 'v-26.0714.2',
+      tag_name: 'v26.0714.2',
       target_commitish: 'main',
       prerelease: false,
       generate_release_notes: true,

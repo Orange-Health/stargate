@@ -45,16 +45,51 @@ const reasonLabels: Record<EligibilityReason, string> = {
   ALREADY_MERGED: 'Merged',
 }
 
-function hasDevPullRequestIssues(service: ServiceRelease) {
+function hasPullRequestIssues(service: ServiceRelease) {
   return service.items.some((item) => {
     const pull = item.pullRequest
+    if (!pull || pull.merged) return false
+    if (
+      service.defaultBranch &&
+      pull.baseBranch === service.defaultBranch
+    ) {
+      return true
+    }
     return (
-      pull?.baseBranch === 'dev' &&
-      !pull.merged &&
+      pull.baseBranch === 'dev' &&
       (pull.reviewDecision !== 'approved' ||
         item.blockingReasons.includes('HAS_CONFLICTS'))
     )
   })
+}
+
+function reasonLabel(
+  reason: EligibilityReason,
+  item: ReleaseItem,
+  defaultBranch?: string,
+) {
+  if (
+    reason === 'WRONG_BASE_BRANCH' &&
+    item.pullRequest?.baseBranch === defaultBranch
+  ) {
+    return 'Targets default branch'
+  }
+  return reasonLabels[reason]
+}
+
+function canRetargetToDev(item: ReleaseItem, service: ServiceRelease) {
+  const pull = item.pullRequest
+  if (!pull || pull.merged || pull.draft) return false
+  if (!service.defaultBranch || pull.baseBranch !== service.defaultBranch) {
+    return false
+  }
+  const otherBlockers = item.blockingReasons.filter(
+    (reason) => reason !== 'WRONG_BASE_BRANCH',
+  )
+  return (
+    otherBlockers.length === 0 &&
+    !item.warningReasons.includes('CHECKS_PENDING')
+  )
 }
 
 function isClearedMerge(item: ReleaseItem) {
@@ -255,14 +290,18 @@ function ServiceDetail({
     setService(initialService)
   }, [initialService])
 
-  async function mergePullRequest(pullNumber: number) {
-    if (!window.confirm(`Merge feature PR #${pullNumber} into dev?`)) return
+  async function mergePullRequest(pullNumber: number, retargetToDev = false) {
+    const message = retargetToDev
+      ? `Retarget feature PR #${pullNumber} to dev and merge it?`
+      : `Merge feature PR #${pullNumber} into dev?`
+    if (!window.confirm(message)) return
     setMerging(pullNumber)
     setMergeError('')
     try {
       await api.mergeFeaturePullRequest({
         repository: service.repository,
         pullNumber,
+        retargetToDev,
       })
       setOptimisticallyMerged((current) => new Set(current).add(pullNumber))
       await onDataChanged()
@@ -379,6 +418,10 @@ function ServiceDetail({
             !service.backMergePending &&
             !item.pullRequest?.merged &&
             !optimisticallyMerged.has(item.pullRequest?.number ?? -1)
+          const retargetReady =
+            canRetargetToDev(item, service) &&
+            !service.backMergePending &&
+            !optimisticallyMerged.has(item.pullRequest?.number ?? -1)
           return (
             <article
               className="pr-row"
@@ -449,12 +492,26 @@ function ServiceDetail({
                     className={`reason ${item.warningReasons.includes(reason) ? 'warning' : ''}`}
                     key={reason}
                   >
-                    {reasonLabels[reason]}
+                    {reasonLabel(reason, item, service.defaultBranch)}
                   </span>
                 ),
               )}
               {item.eligible && item.warningReasons.length === 0 && (
                 <span className="reason success">All criteria met</span>
+              )}
+              {retargetReady && item.pullRequest && (
+                <button
+                  className="merge-feature-button"
+                  type="button"
+                  disabled={merging === item.pullRequest.number}
+                  onClick={() =>
+                    void mergePullRequest(item.pullRequest!.number, true)
+                  }
+                >
+                  {merging === item.pullRequest.number
+                    ? 'Retargeting…'
+                    : 'Retarget to dev and merge'}
+                </button>
               )}
               {mergeReady && item.pullRequest && (
                 <button
@@ -690,7 +747,7 @@ export function ReleaseOverview({
       )
     }
     if (serviceFilter === 'issues') {
-      services = services.filter(hasDevPullRequestIssues)
+      services = services.filter(hasPullRequestIssues)
     }
     if (serviceFilter === 'backmerges') {
       services = services.filter(
@@ -741,7 +798,7 @@ export function ReleaseOverview({
       ),
     ).length
   const issueServiceCount =
-    visibleServices.filter(hasDevPullRequestIssues).length
+    visibleServices.filter(hasPullRequestIssues).length
   const backMergeServiceCount =
     visibleServices.filter(
       (service) =>
@@ -1029,7 +1086,7 @@ export function ReleaseOverview({
                   <button
                     className={serviceFilter === 'issues' ? 'active' : ''}
                     type="button"
-                    data-tooltip="Shows services with an open PR into dev that is not reviewer-approved or has Git merge conflicts."
+                    data-tooltip="Shows services with an open PR targeting the default branch instead of dev, or an open PR into dev that is not reviewer-approved or has Git merge conflicts."
                     onClick={() => {
                       setServiceFilter('issues')
                       onSelectRepository('')

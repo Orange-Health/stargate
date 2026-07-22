@@ -16,6 +16,7 @@ const dashboard: ReleaseDashboard = {
   services: [
     {
       repository: 'orange/service-api',
+      defaultBranch: 'main',
       eligibleCount: 0,
       blockedCount: 1,
       mergedCount: 0,
@@ -185,7 +186,7 @@ describe('ReleaseOverview', () => {
     )
 
     expect(screen.getAllByText('service-api')).toHaveLength(2)
-    expect(screen.getByText('Not targeting dev')).toBeInTheDocument()
+    expect(screen.getByText('Targets default branch')).toBeInTheDocument()
     expect(screen.getByText('Review required')).toBeInTheDocument()
     expect(screen.getByText('Checks pending')).toBeInTheDocument()
     expect(screen.getByText('OH-999')).toBeInTheDocument()
@@ -532,7 +533,7 @@ describe('ReleaseOverview', () => {
     expect(screen.getAllByText('service-api')).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Issues 1' })).toHaveAttribute(
       'data-tooltip',
-      'Shows services with an open PR into dev that is not reviewer-approved or has Git merge conflicts.',
+      'Shows services with an open PR targeting the default branch instead of dev, or an open PR into dev that is not reviewer-approved or has Git merge conflicts.',
     )
   })
 
@@ -636,10 +637,64 @@ describe('ReleaseOverview', () => {
     expect(merge).toHaveBeenCalledWith({
       repository: 'orange/service-api',
       pullNumber: 8,
+      retargetToDev: false,
     })
     expect(onRefresh).toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Merge to dev' })).not.toBeInTheDocument()
     expect(screen.getByText('Merged')).toBeInTheDocument()
+  })
+
+  it('retargets a default-branch PR to dev and merges it', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const merge = vi
+      .spyOn(api, 'mergeFeaturePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Merged' })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const retargetItem = {
+      ...dashboard.services[0].items[0],
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        baseBranch: 'main',
+        reviewDecision: 'approved' as const,
+        checks: 'success' as const,
+      },
+      eligible: false,
+      blockingReasons: ['WRONG_BASE_BRANCH' as const],
+      warningReasons: [],
+    }
+    const retargetDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        {
+          ...dashboard.services[0],
+          items: [retargetItem],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[retargetDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={retargetDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Targets default branch')).toBeInTheDocument()
+    await user.click(
+      screen.getByRole('button', { name: 'Retarget to dev and merge' }),
+    )
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'orange/service-api',
+      pullNumber: 8,
+      retargetToDev: true,
+    })
+    expect(onRefresh).toHaveBeenCalled()
   })
 
   it('does not reload enrichment when only dashboard freshness changes', async () => {

@@ -118,6 +118,10 @@ const mergePromotionSchema = z.object({
   pullNumber: z.number().int().positive(),
 })
 
+const mergeFeatureSchema = mergePromotionSchema.extend({
+  retargetToDev: z.boolean().optional(),
+})
+
 const deploymentSchema = z.object({
   repository: repositorySchema,
   service: z.string().regex(/^[A-Za-z0-9_.-]+$/),
@@ -153,7 +157,7 @@ const releaseBuildStatusesSchema = z.object({
         tag: z
           .string()
           .regex(
-            /^(?:v(?:-prod)?-\d{2}\.\d{4}\.\d+|v-(?:qa|s[1-6])-v\d{2}\.\d{4}\.\d+)$/,
+            /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+|v-(?:qa|s[1-6])-v\d{2}\.\d{4}\.\d+$/,
           ),
         createdAt: z.iso.datetime(),
       }),
@@ -653,7 +657,7 @@ export function createApp() {
   app.post(
     '/api/github/feature-pull-requests/merge',
     async (request, response) => {
-      const parsed = mergePromotionSchema.safeParse(request.body)
+      const parsed = mergeFeatureSchema.safeParse(request.body)
       if (!parsed.success) {
         response.status(400).json({
           error: {
@@ -668,6 +672,7 @@ export function createApp() {
           requireConnection(),
           parsed.data.repository,
           parsed.data.pullNumber,
+          parsed.data.retargetToDev,
         ),
       )
     },
