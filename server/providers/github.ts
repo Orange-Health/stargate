@@ -45,31 +45,57 @@ type GitHubReview = {
   submitted_at?: string
 }
 
-type GitHubChecks = {
-  check_runs: Array<{
-    status: 'queued' | 'in_progress' | 'completed'
-    conclusion:
-      | 'success'
-      | 'failure'
-      | 'neutral'
-      | 'cancelled'
-      | 'skipped'
-      | 'timed_out'
-      | 'action_required'
-      | 'stale'
-      | null
-  }>
-}
-
 export type GitHubDiscovery = {
   byIssue: Map<string, PullRequest[]>
   rateLimit?: RateLimit
   warnings: string[]
 }
 
+type GraphqlActor = {
+  login?: string
+  avatarUrl?: string
+}
+
+type GraphqlPullRequest = {
+  databaseId: number | null
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED'
+  isDraft: boolean
+  merged: boolean
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null
+  mergeStateStatus: string
+  baseRefName: string
+  headRefName: string
+  updatedAt: string
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+  author: GraphqlActor | null
+  assignees: { nodes: GraphqlActor[] }
+  latestReviews: {
+    nodes: Array<{
+      author: GraphqlActor | null
+      state: string
+    }>
+  }
+  commits: {
+    nodes: Array<{
+      commit: {
+        statusCheckRollup: { state: string } | null
+      }
+    }>
+  }
+}
+
+type GraphqlRepositoryPull = {
+  pullRequest: GraphqlPullRequest | null
+} | null
+
 let latestRateLimit: RateLimit | undefined
 const PROVIDER_CACHE_MS = 30_000
 const CONDITIONAL_CACHE_MAX_ENTRIES = 2_000
+// ponytail: 10 keeps GraphQL complexity under GitHub's per-query budget; raise if point cost stays low
+const GRAPHQL_PULL_BATCH_SIZE = 10
 type ConditionalCacheEntry = {
   etag: string
   body: unknown
@@ -346,16 +372,7 @@ async function githubFetch<T>(
     }),
   )
 
-  const remaining = response.headers.get('x-ratelimit-remaining')
-  const limit = response.headers.get('x-ratelimit-limit')
-  const reset = response.headers.get('x-ratelimit-reset')
-  if (remaining && limit && reset) {
-    latestRateLimit = {
-      remaining: Number(remaining),
-      limit: Number(limit),
-      resetsAt: new Date(Number(reset) * 1000).toISOString(),
-    }
-  }
+  recordGitHubRateLimit(response)
 
   if (response.status === 304 && cached) {
     cache.delete(cacheKey!)
@@ -372,6 +389,63 @@ async function githubFetch<T>(
     cacheConditionalResponse(cache, cacheKey, { etag, body })
   }
   return body
+}
+
+function recordGitHubRateLimit(response: Response) {
+  const remaining = response.headers.get('x-ratelimit-remaining')
+  const limit = response.headers.get('x-ratelimit-limit')
+  const reset = response.headers.get('x-ratelimit-reset')
+  if (remaining && limit && reset) {
+    latestRateLimit = {
+      remaining: Number(remaining),
+      limit: Number(limit),
+      resetsAt: new Date(Number(reset) * 1000).toISOString(),
+    }
+  }
+}
+
+async function githubGraphql<T extends Record<string, unknown>>(
+  config: ConnectionConfig,
+  query: string,
+  variables: Record<string, string | number>,
+): Promise<T> {
+  // ponytail: GraphQL is always POST; schedule as GET so read concurrency applies
+  const response = await githubRequestScheduler.schedule('GET', () =>
+    fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        ...githubHeaders(config),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(20_000),
+    }),
+  )
+
+  recordGitHubRateLimit(response)
+  if (!response.ok) {
+    throw await providerResponseError(response, 'github')
+  }
+
+  const body = (await response.json()) as {
+    data?: T
+    errors?: Array<{ message?: string }>
+  }
+  // Partial success is common (missing repo/PR aliases); prefer data when present
+  if (body.data) return body.data
+  const detail = body.errors
+    ?.map((error) => error.message)
+    .filter(Boolean)
+    .join('; ')
+  throw new ProviderError(
+    detail
+      ? `GitHub GraphQL request failed. ${detail}`
+      : 'GitHub GraphQL request failed.',
+    'PROVIDER_REQUEST_FAILED',
+    'github',
+    502,
+    false,
+  )
 }
 
 export function repositoryPath(repository: string) {
@@ -683,27 +757,6 @@ function reviewDecision(reviews: GitHubReview[]): ReviewDecision {
   return 'review_required'
 }
 
-function checkStatus(checks: GitHubChecks): CheckStatus {
-  if (checks.check_runs.length === 0) return 'none'
-  if (checks.check_runs.some((check) => check.status !== 'completed')) {
-    return 'pending'
-  }
-  if (
-    checks.check_runs.some((check) =>
-      [
-        'failure',
-        'cancelled',
-        'timed_out',
-        'action_required',
-        'stale',
-      ].includes(check.conclusion ?? ''),
-    )
-  ) {
-    return 'failure'
-  }
-  return 'success'
-}
-
 function pullParticipants(pull: GitHubPull, reviews: GitHubReview[]) {
   const participants = new Map<
     string,
@@ -739,62 +792,178 @@ function pullParticipants(pull: GitHubPull, reviews: GitHubReview[]) {
   return [...participants.values()]
 }
 
-async function getPullRequest(
-  config: ConnectionConfig,
+function graphqlCheckStatus(
+  rollupState: string | undefined,
+): CheckStatus {
+  if (!rollupState) return 'none'
+  switch (rollupState) {
+    case 'SUCCESS':
+      return 'success'
+    case 'FAILURE':
+    case 'ERROR':
+      return 'failure'
+    case 'PENDING':
+    case 'EXPECTED':
+      return 'pending'
+    default:
+      return 'none'
+  }
+}
+
+function graphqlReviewDecision(
+  decision: GraphqlPullRequest['reviewDecision'],
+  reviews: GitHubReview[],
+): ReviewDecision {
+  if (decision === 'APPROVED') return 'approved'
+  if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
+  if (decision === 'REVIEW_REQUIRED') return 'review_required'
+  return reviewDecision(reviews)
+}
+
+function mapGraphqlPullRequest(
   repository: string,
-  number: number,
-): Promise<PullRequest> {
-  const cacheKey = `${repository.toLowerCase()}#${number}`
-  const cached = pullCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) return cached.value
+  pull: GraphqlPullRequest,
+): PullRequest {
+  const reviews: GitHubReview[] = pull.latestReviews.nodes
+    .filter((review) => review.author?.login)
+    .map((review) => ({
+      user: {
+        login: review.author!.login!,
+        avatar_url: review.author!.avatarUrl ?? '',
+      },
+      state: review.state as GitHubReview['state'],
+    }))
+  const authorLogin = pull.author?.login ?? 'unknown'
+  const authorAvatar = pull.author?.avatarUrl ?? ''
+  let mergeable: boolean | null = null
+  if (pull.mergeable === 'MERGEABLE') mergeable = true
+  else if (pull.mergeable === 'CONFLICTING') mergeable = false
+  const restShape: GitHubPull = {
+    id: pull.databaseId ?? pull.number,
+    number: pull.number,
+    title: pull.title,
+    html_url: pull.url,
+    state: pull.state === 'OPEN' ? 'open' : 'closed',
+    draft: pull.isDraft,
+    merged: pull.merged,
+    mergeable,
+    mergeable_state: pull.mergeStateStatus.toLowerCase(),
+    base: { ref: pull.baseRefName, repo: { full_name: repository } },
+    head: { ref: pull.headRefName, sha: '' },
+    user: { login: authorLogin, avatar_url: authorAvatar },
+    assignees: pull.assignees.nodes
+      .filter((assignee) => assignee.login)
+      .map((assignee) => ({
+        login: assignee.login!,
+        avatar_url: assignee.avatarUrl ?? '',
+      })),
+    updated_at: pull.updatedAt,
+  }
 
-  const value = (async () => {
-    const base = `/repos/${repository}`
-    const pull = await githubFetch<GitHubPull>(
-      config,
-      `${base}/pulls/${number}`,
+  return {
+    id: restShape.id,
+    number: restShape.number,
+    repository,
+    title: restShape.title,
+    url: restShape.html_url,
+    state: restShape.state,
+    draft: restShape.draft,
+    merged: restShape.merged,
+    baseBranch: restShape.base.ref,
+    headBranch: restShape.head.ref,
+    author: authorLogin,
+    assignees: restShape.assignees.map((assignee) => assignee.login),
+    reviewDecision: graphqlReviewDecision(pull.reviewDecision, reviews),
+    mergeable: restShape.mergeable,
+    mergeableState: restShape.mergeable_state,
+    checks: graphqlCheckStatus(
+      pull.commits.nodes[0]?.commit.statusCheckRollup?.state,
+    ),
+    updatedAt: restShape.updated_at,
+    participants: pullParticipants(restShape, reviews),
+  }
+}
+
+function chunkArray<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size))
+  }
+  return chunks
+}
+
+const GRAPHQL_PULL_FIELDS = `
+  databaseId
+  number
+  title
+  url
+  state
+  isDraft
+  merged
+  mergeable
+  mergeStateStatus
+  baseRefName
+  headRefName
+  updatedAt
+  reviewDecision
+  author { login avatarUrl }
+  assignees(first: 20) { nodes { login avatarUrl } }
+  latestReviews(first: 50) {
+    nodes { author { login avatarUrl } state }
+  }
+  commits(last: 1) {
+    nodes { commit { statusCheckRollup { state } } }
+  }
+`
+
+async function fetchPullRequestBatch(
+  config: ConnectionConfig,
+  pulls: Array<{ id: string; repository: string; number: number }>,
+): Promise<Map<string, PullRequest>> {
+  const byId = new Map<string, PullRequest>()
+  if (pulls.length === 0) return byId
+
+  const variableDeclarations: string[] = []
+  const selections: string[] = []
+  const variables: Record<string, string | number> = {}
+
+  pulls.forEach((pull, index) => {
+    const [owner, name] = pull.repository.split('/')
+    variableDeclarations.push(
+      `$owner${index}: String!`,
+      `$name${index}: String!`,
+      `$number${index}: Int!`,
     )
-    const [reviews, checks] =
-      pull.state === 'closed' && !pull.merged
-        ? [[], { check_runs: [] }]
-        : await Promise.all([
-            githubFetch<GitHubReview[]>(
-              config,
-              `${base}/pulls/${number}/reviews?per_page=100`,
-            ),
-            githubFetch<GitHubChecks>(
-              config,
-              `${base}/commits/${pull.head.sha}/check-runs?per_page=100`,
-            ),
-          ])
-
-    return {
-      id: pull.id,
-      number: pull.number,
-      repository: pull.base.repo.full_name,
-      title: pull.title,
-      url: pull.html_url,
-      state: pull.state,
-      draft: pull.draft,
-      merged: pull.merged,
-      baseBranch: pull.base.ref,
-      headBranch: pull.head.ref,
-      author: pull.user.login,
-      assignees: pull.assignees.map((assignee) => assignee.login),
-      reviewDecision: reviewDecision(reviews),
-      mergeable: pull.mergeable,
-      mergeableState: pull.mergeable_state,
-      checks: checkStatus(checks),
-      updatedAt: pull.updated_at,
-      participants: pullParticipants(pull, reviews),
-    }
-  })()
-  pullCache.set(cacheKey, {
-    expiresAt: Date.now() + PROVIDER_CACHE_MS,
-    value,
+    selections.push(`
+      p${index}: repository(owner: $owner${index}, name: $name${index}) {
+        pullRequest(number: $number${index}) { ${GRAPHQL_PULL_FIELDS} }
+      }
+    `)
+    variables[`owner${index}`] = owner
+    variables[`name${index}`] = name
+    variables[`number${index}`] = pull.number
   })
-  value.catch(() => pullCache.delete(cacheKey))
-  return value
+
+  const query = `query (${variableDeclarations.join(', ')}) { ${selections.join('\n')} }`
+  const data = await githubGraphql<Record<string, GraphqlRepositoryPull>>(
+    config,
+    query,
+    variables,
+  )
+
+  pulls.forEach((pull, index) => {
+    const node = data[`p${index}`]?.pullRequest
+    if (!node) return
+    const mapped = mapGraphqlPullRequest(pull.repository, node)
+    byId.set(pull.id, mapped)
+    const cacheKey = `${pull.repository.toLowerCase()}#${pull.number}`
+    pullCache.set(cacheKey, {
+      expiresAt: Date.now() + PROVIDER_CACHE_MS,
+      value: Promise.resolve(mapped),
+    })
+  })
+
+  return byId
 }
 
 async function mapConcurrent<T, R>(
@@ -921,30 +1090,67 @@ export async function discoverPullRequests(
     }
   })
 
-  const entries = [...uniquePulls.entries()]
-  let detailsStarted = 0
-  const pulls = await mapConcurrent(entries, 6, async ([id, item]) => {
-    const repository = item.repository_url.split('/').slice(-2).join('/')
-    detailsStarted += 1
+  const entries = [...uniquePulls.entries()].map(([id, item]) => ({
+    id,
+    repository: item.repository_url.split('/').slice(-2).join('/'),
+    number: item.number,
+  }))
+  const uncached: typeof entries = []
+  const resolved = new Map<string, PullRequest>()
+  for (const entry of entries) {
+    const cacheKey = `${entry.repository.toLowerCase()}#${entry.number}`
+    const cached = pullCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      try {
+        resolved.set(entry.id, await cached.value)
+        continue
+      } catch {
+        pullCache.delete(cacheKey)
+      }
+    }
+    uncached.push(entry)
+  }
+
+  const batches = chunkArray(uncached, GRAPHQL_PULL_BATCH_SIZE)
+  let batchesCompleted = 0
+  const batchResults = await mapConcurrent(batches, 3, async (batch) => {
+    batchesCompleted += 1
     reportProgress?.({
       phase: 'github-details',
-      message: `Loading ${repository} pull request #${item.number}…`,
-      current: detailsStarted,
+      message: `Loading pull request details (batch ${batchesCompleted} of ${batches.length})…`,
+      current: Math.min(
+        batchesCompleted * GRAPHQL_PULL_BATCH_SIZE,
+        uncached.length,
+      ),
       total: entries.length,
     })
-    return { id, pull: await getPullRequest(config, repository, item.number) }
+    return fetchPullRequestBatch(config, batch)
   })
 
-  pulls.forEach((result, index) => {
+  batchResults.forEach((result, index) => {
     if (result.status === 'rejected') {
-      warnings.push(`Could not load details for ${entries[index][0]}.`)
+      for (const entry of batches[index]) {
+        warnings.push(`Could not load details for ${entry.id}.`)
+      }
       return
     }
-    if (isClosedWithoutMerge(result.value.pull)) return
-    for (const issueKey of pullToIssues.get(result.value.id) ?? []) {
-      byIssue.get(issueKey)?.push(result.value.pull)
+    for (const [id, pull] of result.value) {
+      resolved.set(id, pull)
+    }
+    for (const entry of batches[index]) {
+      if (!result.value.has(entry.id)) {
+        warnings.push(`Could not load details for ${entry.id}.`)
+      }
     }
   })
+
+  for (const entry of entries) {
+    const pull = resolved.get(entry.id)
+    if (!pull || isClosedWithoutMerge(pull)) continue
+    for (const issueKey of pullToIssues.get(entry.id) ?? []) {
+      byIssue.get(issueKey)?.push(pull)
+    }
+  }
 
   return { byIssue, rateLimit: latestRateLimit, warnings }
 }
