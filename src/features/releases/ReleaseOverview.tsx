@@ -125,10 +125,10 @@ function formatDate(value?: string) {
   }).format(new Date(`${value}T00:00:00`))
 }
 
-function relativeTime(value: string) {
+function relativeTime(value: string, now = Date.now()) {
   const seconds = Math.max(
     0,
-    Math.round((Date.now() - new Date(value).getTime()) / 1000),
+    Math.round((now - new Date(value).getTime()) / 1000),
   )
   if (seconds < 60) return `${seconds}s ago`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
@@ -290,11 +290,18 @@ function ServiceDetail({
     setService(initialService)
   }, [initialService])
 
-  async function mergePullRequest(pullNumber: number, retargetToDev = false) {
-    const message = retargetToDev
-      ? `Retarget feature PR #${pullNumber} to dev and merge it?`
-      : `Merge feature PR #${pullNumber} into dev?`
-    if (!window.confirm(message)) return
+  async function mergePullRequest(
+    pullNumber: number,
+    options: { retargetToDev?: boolean; bypassBranchProtection?: boolean } = {},
+  ) {
+    const retargetToDev = options.retargetToDev ?? false
+    const bypassBranchProtection = options.bypassBranchProtection ?? false
+    const confirmMessage = bypassBranchProtection
+      ? `Force merge feature PR #${pullNumber} into dev?\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`
+      : retargetToDev
+        ? `Retarget feature PR #${pullNumber} to dev and merge it?`
+        : `Merge feature PR #${pullNumber} into dev?`
+    if (!window.confirm(confirmMessage)) return
     setMerging(pullNumber)
     setMergeError('')
     try {
@@ -302,6 +309,7 @@ function ServiceDetail({
         repository: service.repository,
         pullNumber,
         retargetToDev,
+        ...(bypassBranchProtection ? { bypassBranchProtection: true } : {}),
       })
       setOptimisticallyMerged((current) => new Set(current).add(pullNumber))
       await onDataChanged()
@@ -422,6 +430,19 @@ function ServiceDetail({
             canRetargetToDev(item, service) &&
             !service.backMergePending &&
             !optimisticallyMerged.has(item.pullRequest?.number ?? -1)
+          const forceMergeReady =
+            Boolean(item.pullRequest) &&
+            item.pullRequest!.baseBranch === 'dev' &&
+            !item.pullRequest!.merged &&
+            !item.pullRequest!.draft &&
+            !mergeReady &&
+            !service.backMergePending &&
+            !optimisticallyMerged.has(item.pullRequest!.number) &&
+            !item.blockingReasons.includes('NO_MATCHING_PR') &&
+            !item.blockingReasons.includes('HAS_CONFLICTS') &&
+            !item.blockingReasons.includes('MERGEABILITY_PENDING') &&
+            !item.blockingReasons.includes('DRAFT') &&
+            !item.blockingReasons.includes('ALREADY_MERGED')
           return (
             <article
               className="pr-row"
@@ -505,7 +526,9 @@ function ServiceDetail({
                   type="button"
                   disabled={merging === item.pullRequest.number}
                   onClick={() =>
-                    void mergePullRequest(item.pullRequest!.number, true)
+                    void mergePullRequest(item.pullRequest!.number, {
+                      retargetToDev: true,
+                    })
                   }
                 >
                   {merging === item.pullRequest.number
@@ -525,6 +548,22 @@ function ServiceDetail({
                   {merging === item.pullRequest.number
                     ? 'Merging…'
                     : 'Merge to dev'}
+                </button>
+              )}
+              {forceMergeReady && item.pullRequest && (
+                <button
+                  className="merge-feature-button"
+                  type="button"
+                  disabled={merging === item.pullRequest.number}
+                  onClick={() =>
+                    void mergePullRequest(item.pullRequest!.number, {
+                      bypassBranchProtection: true,
+                    })
+                  }
+                >
+                  {merging === item.pullRequest.number
+                    ? 'Force merging…'
+                    : 'Force merge to dev'}
                 </button>
               )}
             </div>
@@ -584,6 +623,7 @@ export function ReleaseOverview({
     'all' | 'pending' | 'issues' | 'backmerges' | 'outdated'
   >('all')
   const [serviceSearch, setServiceSearch] = useState('')
+  const [syncedClock, setSyncedClock] = useState(() => Date.now())
   const [releaseDayOpen, setReleaseDayOpen] = useState(
     () =>
       new URLSearchParams(window.location.search).get('view') ===
@@ -635,6 +675,13 @@ export function ReleaseOverview({
     window.addEventListener('popstate', syncView)
     return () => window.removeEventListener('popstate', syncView)
   }, [])
+
+  useEffect(() => {
+    if (!dashboard?.fetchedAt) return
+    setSyncedClock(Date.now())
+    const timer = window.setInterval(() => setSyncedClock(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [dashboard?.fetchedAt])
 
   function showReleaseDay(open: boolean) {
     const url = new URL(window.location.href)
@@ -926,7 +973,9 @@ export function ReleaseOverview({
             {dashboard && (
               <span>
                 Last synced
-                <strong>{relativeTime(dashboard.fetchedAt)}</strong>
+                <strong>
+                  {relativeTime(dashboard.fetchedAt, syncedClock)}
+                </strong>
               </span>
             )}
             <button
@@ -1234,6 +1283,7 @@ export function ReleaseOverview({
       {releaseRepository && (
         <StagingReleaseDialog
           repository={releaseRepository}
+          releaseDate={dashboard?.version.releaseDate ?? ''}
           onClose={() => setReleaseRepository('')}
         />
       )}

@@ -2536,8 +2536,27 @@ label {
   border-bottom: 0;
 }
 
+.release-day-table tbody tr {
+  transition: opacity 160ms ease;
+}
+
 .release-day-table tr.unselected {
   opacity: 0.42;
+}
+
+.release-day-table tr.sync-in-progress {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.release-day-table tr.sync-in-progress td {
+  background: rgb(245 158 11 / 4%);
+  cursor: wait;
+}
+
+.release-day-table tr.sync-in-progress td * {
+  cursor: wait;
+  pointer-events: none;
 }
 
 .release-day-table td {

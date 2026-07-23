@@ -93,23 +93,21 @@ function localDate() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-export function releaseCreatedOnOrBeforeDate(
+export function releaseCreatedOnDate(
   createdAt: string,
   releaseDate: string,
 ) {
   return /^\d{4}-\d{2}-\d{2}$/.test(releaseDate)
-    ? createdAt.slice(0, 10) <= releaseDate
+    ? createdAt.slice(0, 10) === releaseDate
     : false
 }
 
-export function latestProductionReleaseOnOrBeforeDate(
+export function latestProductionReleaseOnDate(
   releases: TrackedProductionRelease[],
   releaseDate: string,
 ) {
   return releases
-    .filter((release) =>
-      releaseCreatedOnOrBeforeDate(release.createdAt, releaseDate),
-    )
+    .filter((release) => releaseCreatedOnDate(release.createdAt, releaseDate))
     .sort(
       (left, right) =>
         new Date(right.createdAt).getTime() -
@@ -117,34 +115,206 @@ export function latestProductionReleaseOnOrBeforeDate(
     )[0]
 }
 
+export const RELEASE_NOTES_BOT_AUTHORS = [
+  'devopsautomation-oh',
+] as const
+
+export function isReleaseNotesBotAuthor(value: string) {
+  const login = value.replace(/^@/, '').toLowerCase()
+  return RELEASE_NOTES_BOT_AUTHORS.some((bot) => bot === login)
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+export function cleanGitHubReleaseDescription(text: string) {
+  const withoutComments = text.replace(/<!--[\s\S]*?-->/g, '').trim()
+  if (!withoutComments) return ''
+
+  const keptLines: string[] = []
+  for (const line of withoutComments.split('\n')) {
+    const authors = [...line.matchAll(/@([A-Za-z0-9-]+)/g)].map(
+      (match) => match[1],
+    )
+    if (
+      authors.some((author) => isReleaseNotesBotAuthor(author)) ||
+      (/back(?:port|merg)/i.test(line) &&
+        /devopsautomation-oh/i.test(line))
+    ) {
+      continue
+    }
+    keptLines.push(line)
+  }
+
+  return keptLines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function markdownInlineToHtml(text: string) {
+  return escapeHtml(text)
+    .replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+      '<a href="$2">$1</a>',
+    )
+    .replace(
+      /(https?:\/\/github\.com\/[^\s<]+)/g,
+      '<a href="$1">$1</a>',
+    )
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/__([^_]+)__/g, '<b>$1</b>')
+}
+
+export function githubDescriptionToHtml(text: string) {
+  const cleaned = cleanGitHubReleaseDescription(text)
+  if (!cleaned) return ''
+
+  const blocks: string[] = []
+  let listItems: string[] = []
+
+  const flushList = () => {
+    if (listItems.length === 0) return
+    blocks.push(`<ul>${listItems.join('')}</ul>`)
+    listItems = []
+  }
+
+  for (const line of cleaned.split('\n')) {
+    const heading = /^#{1,6}\s+(.+)$/.exec(line)
+    const bullet = /^\s*[-*]\s+(.+)$/.exec(line)
+    if (heading) {
+      flushList()
+      blocks.push(`<p><b>${markdownInlineToHtml(heading[1])}</b></p>`)
+      continue
+    }
+    if (bullet) {
+      listItems.push(`<li>${markdownInlineToHtml(bullet[1])}</li>`)
+      continue
+    }
+    if (!line.trim()) {
+      flushList()
+      continue
+    }
+    flushList()
+    blocks.push(`<p>${markdownInlineToHtml(line)}</p>`)
+  }
+  flushList()
+  return blocks.join('')
+}
+
+export function githubDescriptionToPlain(text: string) {
+  return cleanGitHubReleaseDescription(text)
+    .replace(/^#{1,6}\s+(.+)$/gm, '$1')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '$1 ($2)')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function serviceChangeSummary(
+  service: ReleaseDashboard['services'][number],
+): { plain: string; html: string } {
+  const items = service.items.filter((item) => {
+    const author = item.pullRequest?.author
+    return !author || !isReleaseNotesBotAuthor(author)
+  })
+  if (items.length === 0) return { plain: '', html: '' }
+
+  const plain = items
+    .map((item) => {
+      const issue = `• ${item.issue.key}: ${item.issue.summary}`
+      if (!item.pullRequest) return issue
+      return `${issue}\n  PR #${item.pullRequest.number}: ${item.pullRequest.title}\n  ${item.pullRequest.url}`
+    })
+    .join('\n')
+
+  const html = `<ul>${items
+    .map((item) => {
+      const issue = `${escapeHtml(item.issue.key)}: ${escapeHtml(item.issue.summary)}`
+      if (!item.pullRequest) return `<li>${issue}</li>`
+      return `<li>${issue}<br><a href="${escapeHtml(item.pullRequest.url)}">PR #${item.pullRequest.number}</a> — ${escapeHtml(item.pullRequest.title)}</li>`
+    })
+    .join('')}</ul>`
+
+  return { plain, html }
+}
+
 export function releaseNotesForDashboard(
   dashboard: ReleaseDashboard,
   releasesByRepository: Record<string, TrackedProductionRelease[]>,
   releaseDate: string,
 ) {
-  const sections = dashboard.services.map((service) => {
-    const release = latestProductionReleaseOnOrBeforeDate(
+  const plainSections: string[] = []
+  const htmlSections: string[] = []
+
+  for (const service of dashboard.services) {
+    const release = latestProductionReleaseOnDate(
       releasesByRepository[service.repository] ?? [],
       releaseDate,
     )
+    const serviceName =
+      service.repository.split('/').at(-1) ?? service.repository
+    const fallback = serviceChangeSummary(service)
+
     if (!release) {
-      return `## ${service.repository}\n\n**Release tag:** Not created\n\n_No production release found on or before ${releaseDate}._`
+      plainSections.push(
+        `${serviceName}\nTag: Not created\n${fallback.plain || 'No tickets linked to this service.'}`,
+      )
+      htmlSections.push(
+        `<p><b>${escapeHtml(serviceName)}</b><br>Tag: <i>Not created</i></p>${fallback.html || '<p><i>No tickets linked to this service.</i></p>'}`,
+      )
+      continue
     }
-    const description = release.description
-      ?.replace(/<!--\s*release-desk-operation:[^>]+-->\s*/gi, '')
-      .trim()
-    return `## ${service.repository}\n\n**Release tag:** [${release.tag}](${release.url})\n\n${description || '_No release description provided._'}`
-  })
-  return `# ${dashboard.version.name} Release Notes\n\n**Release date:** ${releaseDate}\n\n${sections.join('\n\n')}`
+
+    const githubHtml = githubDescriptionToHtml(release.description ?? '')
+    const githubPlain = githubDescriptionToPlain(release.description ?? '')
+    const descriptionPlain =
+      githubPlain ||
+      fallback.plain ||
+      'No changes listed for this service.'
+    const descriptionHtml =
+      githubHtml ||
+      fallback.html ||
+      '<p><i>No changes listed for this service.</i></p>'
+
+    plainSections.push(
+      `${serviceName}\nTag: ${release.tag}\n${release.url}\n${descriptionPlain}`,
+    )
+    htmlSections.push(
+      `<p><b>${escapeHtml(serviceName)}</b><br>Tag: <a href="${escapeHtml(release.url)}">${escapeHtml(release.tag)}</a></p>${descriptionHtml}`,
+    )
+  }
+
+  return {
+    plain: `${dashboard.version.name}\nRelease date: ${releaseDate}\n\n${plainSections.join('\n\n')}`,
+    html: `<p><b>${escapeHtml(dashboard.version.name)}</b><br>Release date: ${escapeHtml(releaseDate)}</p>${htmlSections.join('<hr>')}`,
+  }
 }
 
-async function copyText(text: string) {
+async function copyReleaseNotesContent(notes: {
+  plain: string
+  html: string
+}) {
+  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'text/plain': new Blob([notes.plain], { type: 'text/plain' }),
+        'text/html': new Blob([notes.html], { type: 'text/html' }),
+      }),
+    ])
+    return
+  }
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text)
+    await navigator.clipboard.writeText(notes.plain)
     return
   }
   const textarea = document.createElement('textarea')
-  textarea.value = text
+  textarea.value = notes.plain
   textarea.style.position = 'fixed'
   textarea.style.opacity = '0'
   document.body.appendChild(textarea)
@@ -354,9 +524,18 @@ function phaseState(
   state: RepositoryReleaseState | undefined,
   route: PromotionRoute,
   mode: 'create' | 'merge',
+  syncStatus?: RepositorySyncStatus,
 ) {
   const step = routeStep(state, route)
-  if (!step) return { label: 'Checking', tone: 'pending' }
+  if (!step) {
+    return {
+      label:
+        syncStatus === 'queued' || syncStatus === 'syncing'
+          ? 'Checking'
+          : 'Refresh pending',
+      tone: 'pending',
+    }
+  }
   if (step.state === 'up_to_date') {
     return { label: mode === 'merge' ? 'Merged' : 'Ready', tone: 'success' }
   }
@@ -663,7 +842,12 @@ export function ReleaseDayOperations({
   useEffect(() => {
     const activeReleases = selected.flatMap((repository) => {
       const release = session.repositories[repository]?.productionRelease
-      if (!release) return []
+      if (
+        !release ||
+        !releaseCreatedOnDate(release.createdAt, session.releaseDate)
+      ) {
+        return []
+      }
       const status = states[repository]?.productionReleases.find(
         (item) => item.tag === release.tag,
       )?.buildStatus
@@ -768,12 +952,29 @@ export function ReleaseDayOperations({
       'up_to_date',
   )
   const releasesCreated = everySelected(
-    (repository) =>
-      Boolean(session.repositories[repository]?.productionRelease),
+    (repository) => {
+      const release = session.repositories[repository]?.productionRelease
+      if (
+        !release ||
+        !releaseCreatedOnDate(release.createdAt, session.releaseDate)
+      ) {
+        return false
+      }
+      return (
+        states[repository]?.productionReleases.find(
+          (item) => item.tag === release.tag,
+        )?.buildStatus !== 'canceled'
+      )
+    },
   )
   const buildsSucceeded = everySelected((repository) => {
     const release = session.repositories[repository]?.productionRelease
-    if (!release) return false
+    if (
+      !release ||
+      !releaseCreatedOnDate(release.createdAt, session.releaseDate)
+    ) {
+      return false
+    }
     return states[repository]?.productionReleases.find(
       (item) => item.tag === release.tag,
     )?.buildStatus === 'succeeded'
@@ -1049,7 +1250,16 @@ export function ReleaseDayOperations({
 
   async function createProductionRelease(repository: string) {
     const saved = sessionRef.current.repositories[repository]?.productionRelease
-    if (saved) {
+    const savedBuildStatus = saved
+      ? states[repository]?.productionReleases.find(
+          (release) => release.tag === saved.tag,
+        )?.buildStatus
+      : undefined
+    if (
+      saved &&
+      releaseCreatedOnDate(saved.createdAt, sessionRef.current.releaseDate) &&
+      savedBuildStatus !== 'canceled'
+    ) {
       log('success', `${saved.tag} was already created for this run.`, repository)
       return
     }
@@ -1121,14 +1331,14 @@ export function ReleaseDayOperations({
     try {
       await api.refreshRepository(repository)
       const repositoryState = await api.repositoryState(repository)
-      const latest = latestProductionReleaseOnOrBeforeDate(
+      const latest = latestProductionReleaseOnDate(
         repositoryState.productionReleases,
         sessionRef.current.releaseDate,
       )
       if (!latest) {
         log(
           'warning',
-          `No production tag was created on or before ${sessionRef.current.releaseDate}.`,
+          `No production tag was created on ${sessionRef.current.releaseDate}.`,
           repository,
         )
         return
@@ -1285,7 +1495,7 @@ export function ReleaseDayOperations({
           `Could not load release notes for: ${failures.join(', ')}.`,
         )
       }
-      await copyText(
+      await copyReleaseNotesContent(
         releaseNotesForDashboard(
           dashboard,
           releasesByRepository,
@@ -1559,6 +1769,8 @@ export function ReleaseDayOperations({
                     const repository = service.repository
                     const progress = session.repositories[repository]
                     const syncStatus = repositorySync[repository]
+                    const rowSyncing =
+                      syncStatus === 'queued' || syncStatus === 'syncing'
                     const repositoryState = states[repository]
                     const release = progress?.productionRelease
                     const releaseCreationError =
@@ -1568,30 +1780,41 @@ export function ReleaseDayOperations({
                           (item) => item.tag === release.tag,
                         )
                       : undefined
+                    const existingRelease =
+                      trackedRelease?.buildStatus === 'canceled' ||
+                      !release ||
+                      !releaseCreatedOnDate(
+                        release.createdAt,
+                        session.releaseDate,
+                      )
+                        ? undefined
+                        : release
                     const productionDeployments =
                       repositoryState?.deployedTags.filter(
                         (deployment) =>
                           deployment.environment === 'production',
                       ) ?? []
                     const latestTagAlreadyDeployed =
-                      Boolean(release) &&
+                      Boolean(existingRelease) &&
                       Boolean(repositoryState?.jenkinsServices.length) &&
                       repositoryState?.jenkinsServices.every((jenkinsService) =>
                         productionDeployments.some(
                           (deployment) =>
                             deployment.service === jenkinsService &&
-                            deployment.tag === release?.tag,
+                            deployment.tag === existingRelease?.tag,
                         ),
                       )
                     const dev = phaseState(
                       states[repository],
                       'dev-to-release',
                       devPrsReady ? 'merge' : 'create',
+                      syncStatus,
                     )
                     const main = phaseState(
                       states[repository],
                       'release-to-default',
                       defaultPrsReady ? 'merge' : 'create',
+                      syncStatus,
                     )
                     const devOperation =
                       cellOperation?.repository === repository &&
@@ -1606,7 +1829,14 @@ export function ReleaseDayOperations({
                     return (
                       <tr
                         key={repository}
-                        className={!selectedSet.has(repository) ? 'unselected' : ''}
+                        aria-busy={rowSyncing}
+                        inert={rowSyncing ? true : undefined}
+                        className={[
+                          !selectedSet.has(repository) ? 'unselected' : '',
+                          rowSyncing ? 'sync-in-progress' : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                       >
                         <td>
                           <input
@@ -1749,10 +1979,14 @@ export function ReleaseDayOperations({
                           )}
                         </td>
                         <td>
-                          {release ? (
+                          {existingRelease ? (
                             <div className="release-day-production-build">
-                              <a href={release.url} target="_blank" rel="noreferrer">
-                                {release.tag} ↗
+                              <a
+                                href={existingRelease.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {existingRelease.tag} ↗
                               </a>
                               <span
                                 className={`batch-status ${
@@ -1771,7 +2005,7 @@ export function ReleaseDayOperations({
                                   Boolean(busyAction) ||
                                   Boolean(checkingBuildRepository)
                                 }
-                                title={`Find the newest production tag created on or before ${session.releaseDate} and refresh its workflow status`}
+                                title={`Find the newest production tag created on ${session.releaseDate} and refresh its workflow status`}
                                 onClick={() =>
                                   void checkLatestBuild(repository)
                                 }
@@ -1847,20 +2081,21 @@ export function ReleaseDayOperations({
                               type="button"
                               disabled={
                                 !productionEnabled ||
+                                !existingRelease ||
                                 trackedRelease?.buildStatus !== 'succeeded' ||
                                 !repositoryState?.jenkinsServices.length ||
                                 latestTagAlreadyDeployed
                               }
                               title={
                                 latestTagAlreadyDeployed
-                                  ? `${release?.tag} is already deployed to production`
+                                  ? `${existingRelease?.tag} is already deployed to production`
                                   : 'Deploy the latest production build'
                               }
                               onClick={() =>
-                                release &&
+                                existingRelease &&
                                 setDeployTarget({
                                   repository,
-                                  release,
+                                  release: existingRelease,
                                   services:
                                     repositoryState?.jenkinsServices ?? [],
                                 })

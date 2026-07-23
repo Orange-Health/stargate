@@ -24,6 +24,7 @@ import { ProviderError } from '../errors.js'
 import {
   clearGitHubProviderCache,
   githubApi,
+  mergePullRequestViaGraphql,
   repositoryPath,
 } from './github.js'
 import { servicesForRepository } from './jenkins.js'
@@ -57,6 +58,7 @@ type GitHubWorkflowRun = {
 
 type GitHubPull = {
   number: number
+  node_id: string
   title: string
   body: string | null
   html_url: string
@@ -1056,6 +1058,7 @@ export async function mergeFeaturePullRequest(
   repository: string,
   pullNumber: number,
   retargetToDev = false,
+  bypassBranchProtection = false,
 ): Promise<MergePromotionPullRequestResult> {
   assertConnectedRepository(config, repository)
   const metadata = await githubApi<GitHubRepository>(
@@ -1118,7 +1121,7 @@ export async function mergeFeaturePullRequest(
     )
   }
   const details = await promotionPullDetails(config, repository, pull)
-  if (details.reviewDecision !== 'approved') {
+  if (!bypassBranchProtection && details.reviewDecision !== 'approved') {
     throw new ProviderError(
       details.reviewDecision === 'changes_requested'
         ? 'The PR has requested changes.'
@@ -1144,13 +1147,31 @@ export async function mergeFeaturePullRequest(
       409,
     )
   }
-  if (details.checks === 'pending') {
+  if (!bypassBranchProtection && details.checks === 'pending') {
     throw new ProviderError(
       'Required checks are still pending.',
       'FEATURE_PR_CHECKS_BLOCKING',
       'github',
       409,
     )
+  }
+
+  if (bypassBranchProtection) {
+    if (!pull.node_id) {
+      throw new ProviderError(
+        'Pull request node_id is required for force merge.',
+        'FEATURE_PR_MISSING_NODE_ID',
+        'github',
+        502,
+      )
+    }
+    const merged = await mergePullRequestViaGraphql(config, pull.node_id, 'MERGE')
+    clearRepositoryCaches(config, repository)
+    return {
+      merged: merged.merged,
+      message: 'Force-merged with branch protection bypass.',
+      sha: merged.sha,
+    }
   }
 
   const result = await githubApi<MergePromotionPullRequestResult>(

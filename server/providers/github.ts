@@ -45,31 +45,57 @@ type GitHubReview = {
   submitted_at?: string
 }
 
-type GitHubChecks = {
-  check_runs: Array<{
-    status: 'queued' | 'in_progress' | 'completed'
-    conclusion:
-      | 'success'
-      | 'failure'
-      | 'neutral'
-      | 'cancelled'
-      | 'skipped'
-      | 'timed_out'
-      | 'action_required'
-      | 'stale'
-      | null
-  }>
-}
-
 export type GitHubDiscovery = {
   byIssue: Map<string, PullRequest[]>
   rateLimit?: RateLimit
   warnings: string[]
 }
 
+type GraphqlActor = {
+  login?: string
+  avatarUrl?: string
+}
+
+type GraphqlPullRequest = {
+  databaseId: number | null
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED'
+  isDraft: boolean
+  merged: boolean
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null
+  mergeStateStatus: string
+  baseRefName: string
+  headRefName: string
+  updatedAt: string
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+  author: GraphqlActor | null
+  assignees: { nodes: GraphqlActor[] }
+  latestReviews: {
+    nodes: Array<{
+      author: GraphqlActor | null
+      state: string
+    }>
+  }
+  commits: {
+    nodes: Array<{
+      commit: {
+        statusCheckRollup: { state: string } | null
+      }
+    }>
+  }
+}
+
+type GraphqlRepositoryPull = {
+  pullRequest: GraphqlPullRequest | null
+} | null
+
 let latestRateLimit: RateLimit | undefined
 const PROVIDER_CACHE_MS = 30_000
 const CONDITIONAL_CACHE_MAX_ENTRIES = 2_000
+// 15 keeps GraphQL complexity under GitHub's per-query budget; raise if point cost stays low
+const GRAPHQL_PULL_BATCH_SIZE = 15
 type ConditionalCacheEntry = {
   etag: string
   body: unknown
@@ -123,6 +149,7 @@ export function clearGitHubProviderCache(
   if (!repository) {
     pullCache.clear()
     searchCache.clear()
+    latestRateLimit = undefined
     for (const cache of knownConditionalCaches) cache.clear()
     knownConditionalCaches.clear()
     githubRequestScheduler.reset()
@@ -173,11 +200,18 @@ type ScheduledGitHubRequest = {
   task: () => Promise<Response>
   resolve: (response: Response) => void
   reject: (error: unknown) => void
+  maxRetries: number
 }
 
-const MAX_CONCURRENT_GITHUB_READS = 3
+const MAX_CONCURRENT_GITHUB_READS = 5
 const MUTATION_PAUSE_MS = 1_000
 const MAX_GITHUB_RETRIES = 2
+const MAX_GITHUB_SEARCH_RETRIES = 5
+const SEARCH_CONCURRENCY = 2
+const SEARCH_SPACING_MS = 1_000
+// GitHub Search allows at most 5 AND/OR/NOT operators → max 6 keys per OR batch
+const SEARCH_ISSUE_BATCH_SIZE = 6
+const MAX_SEARCH_BOOLEAN_OPERATORS = 5
 
 function retryAfterMs(response: Response) {
   const value = response.headers.get('retry-after')
@@ -216,7 +250,11 @@ class GitHubRequestScheduler {
   private pumpTimer?: ReturnType<typeof setTimeout>
   private nextId = 0
 
-  schedule(method: string, task: () => Promise<Response>) {
+  schedule(
+    method: string,
+    task: () => Promise<Response>,
+    maxRetries = MAX_GITHUB_RETRIES,
+  ) {
     return new Promise<Response>((resolve, reject) => {
       this.queue.push({
         id: this.nextId++,
@@ -224,6 +262,7 @@ class GitHubRequestScheduler {
         task,
         resolve,
         reject,
+        maxRetries,
       })
       this.queue.sort(
         (left, right) =>
@@ -294,7 +333,7 @@ class GitHubRequestScheduler {
           ? 1_000 * 2 ** attempt
           : undefined
       const delay = rateDelay ?? transientDelay
-      if (delay === undefined || attempt >= MAX_GITHUB_RETRIES) {
+      if (delay === undefined || attempt >= item.maxRetries) {
         return response
       }
       this.blockedUntil = Math.max(this.blockedUntil, Date.now() + delay)
@@ -325,6 +364,7 @@ async function githubFetch<T>(
   config: ConnectionConfig,
   path: string,
   init?: RequestInit,
+  options?: { maxRetries?: number },
 ): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase()
   const cache = conditionalCache(config)
@@ -338,24 +378,18 @@ async function githubFetch<T>(
   if (cached && !headers.has('If-None-Match')) {
     headers.set('If-None-Match', cached.etag)
   }
-  const response = await githubRequestScheduler.schedule(method, () =>
-    fetch(`https://api.github.com${path}`, {
-      ...init,
-      headers,
-      signal: AbortSignal.timeout(20_000),
-    }),
+  const response = await githubRequestScheduler.schedule(
+    method,
+    () =>
+      fetch(`https://api.github.com${path}`, {
+        ...init,
+        headers,
+        signal: AbortSignal.timeout(20_000),
+      }),
+    options?.maxRetries,
   )
 
-  const remaining = response.headers.get('x-ratelimit-remaining')
-  const limit = response.headers.get('x-ratelimit-limit')
-  const reset = response.headers.get('x-ratelimit-reset')
-  if (remaining && limit && reset) {
-    latestRateLimit = {
-      remaining: Number(remaining),
-      limit: Number(limit),
-      resetsAt: new Date(Number(reset) * 1000).toISOString(),
-    }
-  }
+  recordGitHubRateLimit(response)
 
   if (response.status === 304 && cached) {
     cache.delete(cacheKey!)
@@ -372,6 +406,124 @@ async function githubFetch<T>(
     cacheConditionalResponse(cache, cacheKey, { etag, body })
   }
   return body
+}
+
+function recordGitHubRateLimit(response: Response) {
+  const remaining = response.headers.get('x-ratelimit-remaining')
+  const limit = response.headers.get('x-ratelimit-limit')
+  const reset = response.headers.get('x-ratelimit-reset')
+  if (remaining && limit && reset) {
+    latestRateLimit = {
+      remaining: Number(remaining),
+      limit: Number(limit),
+      resetsAt: new Date(Number(reset) * 1000).toISOString(),
+    }
+  }
+}
+
+type GraphqlVariables = Record<
+  string,
+  string | number | boolean | null | Record<string, string | number | boolean | null>
+>
+
+async function githubGraphql<T extends Record<string, unknown>>(
+  config: ConnectionConfig,
+  query: string,
+  variables: GraphqlVariables,
+  options?: { asMutation?: boolean },
+): Promise<T> {
+  // GraphQL is always POST; schedule reads as GET so read concurrency applies.
+  // Mutations use POST scheduling so they serialize with other writes.
+  const scheduleMethod = options?.asMutation ? 'POST' : 'GET'
+  const response = await githubRequestScheduler.schedule(scheduleMethod, () =>
+    fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        ...githubHeaders(config),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(20_000),
+    }),
+  )
+
+  recordGitHubRateLimit(response)
+  if (!response.ok) {
+    throw await providerResponseError(response, 'github')
+  }
+
+  const body = (await response.json()) as {
+    data?: T
+    errors?: Array<{ message?: string }>
+  }
+  // Partial success is common (missing repo/PR aliases); prefer data when present
+  if (body.data) return body.data
+  const detail = body.errors
+    ?.map((error) => error.message)
+    .filter(Boolean)
+    .join('; ')
+  throw new ProviderError(
+    detail
+      ? `GitHub GraphQL request failed. ${detail}`
+      : 'GitHub GraphQL request failed.',
+    'PROVIDER_REQUEST_FAILED',
+    'github',
+    502,
+    false,
+  )
+}
+
+export type GraphqlMergeMethod = 'MERGE' | 'SQUASH' | 'REBASE'
+
+export async function mergePullRequestViaGraphql(
+  config: ConnectionConfig,
+  pullRequestNodeId: string,
+  mergeMethod: GraphqlMergeMethod = 'MERGE',
+): Promise<{ merged: boolean; sha?: string }> {
+  const data = await githubGraphql<{
+    mergePullRequest: {
+      pullRequest: {
+        merged: boolean
+        mergeCommit: { oid: string } | null
+      } | null
+    } | null
+  }>(
+    config,
+    `
+    mutation MergePullRequest($input: MergePullRequestInput!) {
+      mergePullRequest(input: $input) {
+        pullRequest {
+          merged
+          mergeCommit {
+            oid
+          }
+        }
+      }
+    }
+    `,
+    {
+      input: {
+        pullRequestId: pullRequestNodeId,
+        mergeMethod,
+      },
+    },
+    { asMutation: true },
+  )
+
+  const pull = data.mergePullRequest?.pullRequest
+  if (!pull?.merged) {
+    throw new ProviderError(
+      'GitHub GraphQL merge did not report success.',
+      'PROVIDER_REQUEST_FAILED',
+      'github',
+      502,
+      false,
+    )
+  }
+  return {
+    merged: true,
+    sha: pull.mergeCommit?.oid,
+  }
 }
 
 export function repositoryPath(repository: string) {
@@ -583,17 +735,32 @@ export async function createProductionRelease(
         body: string | null
       }>
     >(config, `/repos/${path}/releases?per_page=100`)
-    const existing = releases.find((release) =>
-      release.body?.includes(operationMarker),
+    const existing = releases.find(
+      (release) =>
+        release.tag_name.startsWith(prefix) &&
+        release.body?.includes(operationMarker),
     )
     if (existing) {
-      return {
-        id: existing.id,
-        repository,
-        tag: existing.tag_name,
-        sourceBranch: existing.target_commitish || sourceBranch,
-        url: existing.html_url,
-        createdAt: existing.created_at,
+      const runs = await githubFetch<{
+        workflow_runs: Array<{
+          conclusion: string | null
+        }>
+      }>(
+        config,
+        `/repos/${path}/actions/runs?branch=${encodeURIComponent(existing.tag_name)}&per_page=100`,
+      )
+      const canceled = runs.workflow_runs.some(
+        (run) => run.conclusion === 'cancelled',
+      )
+      if (!canceled) {
+        return {
+          id: existing.id,
+          repository,
+          tag: existing.tag_name,
+          sourceBranch: existing.target_commitish || sourceBranch,
+          url: existing.html_url,
+          createdAt: existing.created_at,
+        }
       }
     }
   }
@@ -702,27 +869,6 @@ function reviewDecision(reviews: GitHubReview[]): ReviewDecision {
   return 'review_required'
 }
 
-function checkStatus(checks: GitHubChecks): CheckStatus {
-  if (checks.check_runs.length === 0) return 'none'
-  if (checks.check_runs.some((check) => check.status !== 'completed')) {
-    return 'pending'
-  }
-  if (
-    checks.check_runs.some((check) =>
-      [
-        'failure',
-        'cancelled',
-        'timed_out',
-        'action_required',
-        'stale',
-      ].includes(check.conclusion ?? ''),
-    )
-  ) {
-    return 'failure'
-  }
-  return 'success'
-}
-
 function pullParticipants(pull: GitHubPull, reviews: GitHubReview[]) {
   const participants = new Map<
     string,
@@ -758,62 +904,178 @@ function pullParticipants(pull: GitHubPull, reviews: GitHubReview[]) {
   return [...participants.values()]
 }
 
-async function getPullRequest(
-  config: ConnectionConfig,
+function graphqlCheckStatus(
+  rollupState: string | undefined,
+): CheckStatus {
+  if (!rollupState) return 'none'
+  switch (rollupState) {
+    case 'SUCCESS':
+      return 'success'
+    case 'FAILURE':
+    case 'ERROR':
+      return 'failure'
+    case 'PENDING':
+    case 'EXPECTED':
+      return 'pending'
+    default:
+      return 'none'
+  }
+}
+
+function graphqlReviewDecision(
+  decision: GraphqlPullRequest['reviewDecision'],
+  reviews: GitHubReview[],
+): ReviewDecision {
+  if (decision === 'APPROVED') return 'approved'
+  if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
+  if (decision === 'REVIEW_REQUIRED') return 'review_required'
+  return reviewDecision(reviews)
+}
+
+function mapGraphqlPullRequest(
   repository: string,
-  number: number,
-): Promise<PullRequest> {
-  const cacheKey = `${repository.toLowerCase()}#${number}`
-  const cached = pullCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) return cached.value
+  pull: GraphqlPullRequest,
+): PullRequest {
+  const reviews: GitHubReview[] = pull.latestReviews.nodes
+    .filter((review) => review.author?.login)
+    .map((review) => ({
+      user: {
+        login: review.author!.login!,
+        avatar_url: review.author!.avatarUrl ?? '',
+      },
+      state: review.state as GitHubReview['state'],
+    }))
+  const authorLogin = pull.author?.login ?? 'unknown'
+  const authorAvatar = pull.author?.avatarUrl ?? ''
+  let mergeable: boolean | null = null
+  if (pull.mergeable === 'MERGEABLE') mergeable = true
+  else if (pull.mergeable === 'CONFLICTING') mergeable = false
+  const restShape: GitHubPull = {
+    id: pull.databaseId ?? pull.number,
+    number: pull.number,
+    title: pull.title,
+    html_url: pull.url,
+    state: pull.state === 'OPEN' ? 'open' : 'closed',
+    draft: pull.isDraft,
+    merged: pull.merged,
+    mergeable,
+    mergeable_state: pull.mergeStateStatus.toLowerCase(),
+    base: { ref: pull.baseRefName, repo: { full_name: repository } },
+    head: { ref: pull.headRefName, sha: '' },
+    user: { login: authorLogin, avatar_url: authorAvatar },
+    assignees: pull.assignees.nodes
+      .filter((assignee) => assignee.login)
+      .map((assignee) => ({
+        login: assignee.login!,
+        avatar_url: assignee.avatarUrl ?? '',
+      })),
+    updated_at: pull.updatedAt,
+  }
 
-  const value = (async () => {
-    const base = `/repos/${repository}`
-    const pull = await githubFetch<GitHubPull>(
-      config,
-      `${base}/pulls/${number}`,
+  return {
+    id: restShape.id,
+    number: restShape.number,
+    repository,
+    title: restShape.title,
+    url: restShape.html_url,
+    state: restShape.state,
+    draft: restShape.draft,
+    merged: restShape.merged,
+    baseBranch: restShape.base.ref,
+    headBranch: restShape.head.ref,
+    author: authorLogin,
+    assignees: restShape.assignees.map((assignee) => assignee.login),
+    reviewDecision: graphqlReviewDecision(pull.reviewDecision, reviews),
+    mergeable: restShape.mergeable,
+    mergeableState: restShape.mergeable_state,
+    checks: graphqlCheckStatus(
+      pull.commits.nodes[0]?.commit.statusCheckRollup?.state,
+    ),
+    updatedAt: restShape.updated_at,
+    participants: pullParticipants(restShape, reviews),
+  }
+}
+
+function chunkArray<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size))
+  }
+  return chunks
+}
+
+const GRAPHQL_PULL_FIELDS = `
+  databaseId
+  number
+  title
+  url
+  state
+  isDraft
+  merged
+  mergeable
+  mergeStateStatus
+  baseRefName
+  headRefName
+  updatedAt
+  reviewDecision
+  author { login avatarUrl }
+  assignees(first: 20) { nodes { login avatarUrl } }
+  latestReviews(first: 50) {
+    nodes { author { login avatarUrl } state }
+  }
+  commits(last: 1) {
+    nodes { commit { statusCheckRollup { state } } }
+  }
+`
+
+async function fetchPullRequestBatch(
+  config: ConnectionConfig,
+  pulls: Array<{ id: string; repository: string; number: number }>,
+): Promise<Map<string, PullRequest>> {
+  const byId = new Map<string, PullRequest>()
+  if (pulls.length === 0) return byId
+
+  const variableDeclarations: string[] = []
+  const selections: string[] = []
+  const variables: Record<string, string | number> = {}
+
+  pulls.forEach((pull, index) => {
+    const [owner, name] = pull.repository.split('/')
+    variableDeclarations.push(
+      `$owner${index}: String!`,
+      `$name${index}: String!`,
+      `$number${index}: Int!`,
     )
-    const [reviews, checks] =
-      pull.state === 'closed' && !pull.merged
-        ? [[], { check_runs: [] }]
-        : await Promise.all([
-            githubFetch<GitHubReview[]>(
-              config,
-              `${base}/pulls/${number}/reviews?per_page=100`,
-            ),
-            githubFetch<GitHubChecks>(
-              config,
-              `${base}/commits/${pull.head.sha}/check-runs?per_page=100`,
-            ),
-          ])
-
-    return {
-      id: pull.id,
-      number: pull.number,
-      repository: pull.base.repo.full_name,
-      title: pull.title,
-      url: pull.html_url,
-      state: pull.state,
-      draft: pull.draft,
-      merged: pull.merged,
-      baseBranch: pull.base.ref,
-      headBranch: pull.head.ref,
-      author: pull.user.login,
-      assignees: pull.assignees.map((assignee) => assignee.login),
-      reviewDecision: reviewDecision(reviews),
-      mergeable: pull.mergeable,
-      mergeableState: pull.mergeable_state,
-      checks: checkStatus(checks),
-      updatedAt: pull.updated_at,
-      participants: pullParticipants(pull, reviews),
-    }
-  })()
-  pullCache.set(cacheKey, {
-    expiresAt: Date.now() + PROVIDER_CACHE_MS,
-    value,
+    selections.push(`
+      p${index}: repository(owner: $owner${index}, name: $name${index}) {
+        pullRequest(number: $number${index}) { ${GRAPHQL_PULL_FIELDS} }
+      }
+    `)
+    variables[`owner${index}`] = owner
+    variables[`name${index}`] = name
+    variables[`number${index}`] = pull.number
   })
-  value.catch(() => pullCache.delete(cacheKey))
-  return value
+
+  const query = `query (${variableDeclarations.join(', ')}) { ${selections.join('\n')} }`
+  const data = await githubGraphql<Record<string, GraphqlRepositoryPull>>(
+    config,
+    query,
+    variables,
+  )
+
+  pulls.forEach((pull, index) => {
+    const node = data[`p${index}`]?.pullRequest
+    if (!node) return
+    const mapped = mapGraphqlPullRequest(pull.repository, node)
+    byId.set(pull.id, mapped)
+    const cacheKey = `${pull.repository.toLowerCase()}#${pull.number}`
+    pullCache.set(cacheKey, {
+      expiresAt: Date.now() + PROVIDER_CACHE_MS,
+      value: Promise.resolve(mapped),
+    })
+  })
+
+  return byId
 }
 
 async function mapConcurrent<T, R>(
@@ -839,37 +1101,94 @@ async function mapConcurrent<T, R>(
   return results
 }
 
-async function searchIssueKey(
-  config: ConnectionConfig,
-  issueKey: string,
-): Promise<Array<{ issueKey: string; item: GitHubSearchItem }>> {
-  const cacheKey = `${config.githubOrg}:${issueKey}`.toLowerCase()
-  const cached = searchCache.get(cacheKey)
-  if (cached && cached.expiresAt > Date.now()) return cached.value
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
 
-  const value = (async () => {
-    const query = encodeURIComponent(
-      `org:${config.githubOrg} is:pr in:title "${issueKey}"`,
+function createSearchSlotScheduler(spacingMs: number) {
+  let nextSlotAt = 0
+  return async function acquireSearchSlot() {
+    const now = Date.now()
+    const startAt = Math.max(now, nextSlotAt)
+    nextSlotAt = startAt + spacingMs
+    if (startAt > now) await sleep(startAt - now)
+  }
+}
+
+function searchCacheKey(org: string, issueKey: string) {
+  return `${org}:${issueKey}`.toLowerCase()
+}
+
+export function buildIssueSearchQuery(org: string, issueKeys: string[]) {
+  // Avoid `in:title (...)` — GitHub often 422s that form for OR groups.
+  // Client-side titleContainsIssueKey still attributes matches correctly.
+  // Also: GitHub rejects queries with more than 5 AND/OR/NOT operators.
+  if (issueKeys.length === 0) {
+    throw new Error('Search batch requires at least one issue key.')
+  }
+  if (issueKeys.length - 1 > MAX_SEARCH_BOOLEAN_OPERATORS) {
+    throw new Error(
+      `Search batch size ${issueKeys.length} needs ${issueKeys.length - 1} OR operators; GitHub allows ${MAX_SEARCH_BOOLEAN_OPERATORS}.`,
     )
-    const response = await githubFetch<{
-      items: GitHubSearchItem[]
-      incomplete_results: boolean
-    }>(config, `/search/issues?q=${query}&per_page=100`)
+  }
+  const titleClause = issueKeys.map((key) => `"${key}"`).join(' OR ')
+  return `org:${org} is:pr (${titleClause})`
+}
 
-    return response.items
-      .filter(
-        (item) =>
-          titleContainsIssueKey(item.title, issueKey) &&
-          (item.state !== 'closed' || Boolean(item.pull_request?.merged_at)),
-      )
-      .map((item) => ({ issueKey, item }))
-  })()
-  searchCache.set(cacheKey, {
-    expiresAt: Date.now() + PROVIDER_CACHE_MS,
-    value,
-  })
-  value.catch(() => searchCache.delete(cacheKey))
-  return value
+/** Exported for tests — counts boolean operators that GitHub Search limits. */
+export function countSearchBooleanOperators(query: string) {
+  return (query.match(/\b(?:AND|OR|NOT)\b/gi) ?? []).length
+}
+
+function matchSearchItemsToIssues(
+  items: GitHubSearchItem[],
+  issueKeys: string[],
+): Array<{ issueKey: string; item: GitHubSearchItem }> {
+  const matches: Array<{ issueKey: string; item: GitHubSearchItem }> = []
+  for (const item of items) {
+    if (item.state === 'closed' && !item.pull_request?.merged_at) continue
+    for (const issueKey of issueKeys) {
+      if (titleContainsIssueKey(item.title, issueKey)) {
+        matches.push({ issueKey, item })
+      }
+    }
+  }
+  return matches
+}
+
+async function searchIssueKeyBatch(
+  config: ConnectionConfig,
+  issueKeys: string[],
+): Promise<Array<{ issueKey: string; item: GitHubSearchItem }>> {
+  if (issueKeys.length === 0) return []
+
+  const query = encodeURIComponent(
+    buildIssueSearchQuery(config.githubOrg, issueKeys),
+  )
+  const response = await githubFetch<{
+    items: GitHubSearchItem[]
+    incomplete_results: boolean
+  }>(
+    config,
+    `/search/issues?q=${query}&per_page=100`,
+    undefined,
+    { maxRetries: MAX_GITHUB_SEARCH_RETRIES },
+  )
+
+  const matches = matchSearchItemsToIssues(response.items, issueKeys)
+  for (const issueKey of issueKeys) {
+    const forKey = matches.filter((match) => match.issueKey === issueKey)
+    searchCache.set(searchCacheKey(config.githubOrg, issueKey), {
+      expiresAt: Date.now() + PROVIDER_CACHE_MS,
+      value: Promise.resolve(forKey),
+    })
+  }
+  return matches
+}
+
+function formatErrorDetail(reason: unknown) {
+  if (reason instanceof Error) return reason.message
+  return String(reason)
 }
 
 export async function discoverPullRequests(
@@ -877,7 +1196,8 @@ export async function discoverPullRequests(
   issues: Array<{ key: string; developmentSummary?: string }>,
   reportProgress?: (progress: DashboardProgress) => void,
 ): Promise<GitHubDiscovery> {
-  latestRateLimit = undefined
+  // Keep the last known rate limit when provider caches satisfy the request
+  // without new GitHub HTTP calls (otherwise the UI shows "—").
   const byIssue = new Map<string, PullRequest[]>(
     issues.map((issue) => [issue.key, []]),
   )
@@ -892,20 +1212,48 @@ export async function discoverPullRequests(
       ),
     ]),
   )
-  const issuesToSearch = issues.filter(
+  const issuesNeedingSearch = issues.filter(
     (issue) => linkedByIssue.get(issue.key)?.length === 0,
   )
+  const cachedSearchMatches: Array<{ issueKey: string; item: GitHubSearchItem }> =
+    []
+  const uncachedIssueKeys: string[] = []
+  for (const issue of issuesNeedingSearch) {
+    const cacheKey = searchCacheKey(config.githubOrg, issue.key)
+    const cached = searchCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      try {
+        cachedSearchMatches.push(...(await cached.value))
+        continue
+      } catch {
+        searchCache.delete(cacheKey)
+      }
+    }
+    uncachedIssueKeys.push(issue.key)
+  }
+
+  const searchBatches = chunkArray(uncachedIssueKeys, SEARCH_ISSUE_BATCH_SIZE)
+  const acquireSearchSlot = createSearchSlotScheduler(SEARCH_SPACING_MS)
   let searchesStarted = 0
-  const searches = await mapConcurrent(issuesToSearch, 6, (issue) => {
-    searchesStarted += 1
-    reportProgress?.({
-      phase: 'github-search',
-      message: `Searching GitHub for pull requests linked to ${issue.key}…`,
-      current: searchesStarted,
-      total: issuesToSearch.length,
-    })
-    return searchIssueKey(config, issue.key)
-  })
+  const searches = await mapConcurrent(
+    searchBatches,
+    SEARCH_CONCURRENCY,
+    async (batch) => {
+      await acquireSearchSlot()
+      searchesStarted += 1
+      reportProgress?.({
+        phase: 'github-search',
+        message: 'Searching GitHub for pull requests…',
+        current: Math.min(
+          searchesStarted * SEARCH_ISSUE_BATCH_SIZE,
+          uncachedIssueKeys.length,
+        ),
+        total: issuesNeedingSearch.length,
+      })
+      return searchIssueKeyBatch(config, batch)
+    },
+  )
+
   const uniquePulls = new Map<string, GitHubSearchItem>()
   const pullToIssues = new Map<string, Set<string>>()
 
@@ -923,47 +1271,148 @@ export async function discoverPullRequests(
       pullToIssues.set(id, matches)
     }
   }
+
+  function recordSearchMatch(issueKey: string, item: GitHubSearchItem) {
+    const repository = item.repository_url.split('/').slice(-2).join('/')
+    const id = `${repository}#${item.number}`
+    uniquePulls.set(id, item)
+    const matches = pullToIssues.get(id) ?? new Set<string>()
+    matches.add(issueKey)
+    pullToIssues.set(id, matches)
+  }
+
+  for (const { issueKey, item } of cachedSearchMatches) {
+    recordSearchMatch(issueKey, item)
+  }
+
+  const keysNeedingFallback: string[] = []
   searches.forEach((result, index) => {
     if (result.status === 'rejected') {
-      warnings.push(
-        `Could not search GitHub for ${issuesToSearch[index].key}.`,
+      const batch = searchBatches[index]
+      if (batch.length === 1) {
+        console.error(
+          `GitHub search failed for ${batch[0]}:`,
+          formatErrorDetail(result.reason),
+          result.reason,
+        )
+        warnings.push(`Could not search GitHub for ${batch[0]}.`)
+        return
+      }
+      console.error(
+        `GitHub OR search failed for ${batch.join(', ')}; falling back to per-ticket search:`,
+        formatErrorDetail(result.reason),
+        result.reason,
       )
+      keysNeedingFallback.push(...batch)
       return
     }
     for (const { issueKey, item } of result.value) {
-      const repository = item.repository_url.split('/').slice(-2).join('/')
-      const id = `${repository}#${item.number}`
-      uniquePulls.set(id, item)
-      const matches = pullToIssues.get(id) ?? new Set<string>()
-      matches.add(issueKey)
-      pullToIssues.set(id, matches)
+      recordSearchMatch(issueKey, item)
     }
   })
 
-  const entries = [...uniquePulls.entries()]
-  let detailsStarted = 0
-  const pulls = await mapConcurrent(entries, 6, async ([id, item]) => {
-    const repository = item.repository_url.split('/').slice(-2).join('/')
-    detailsStarted += 1
-    reportProgress?.({
-      phase: 'github-details',
-      message: `Loading ${repository} pull request #${item.number}…`,
-      current: detailsStarted,
-      total: entries.length,
+  if (keysNeedingFallback.length > 0) {
+    let fallbackStarted = 0
+    const fallbackResults = await mapConcurrent(
+      keysNeedingFallback,
+      1,
+      async (issueKey) => {
+        await acquireSearchSlot()
+        fallbackStarted += 1
+        reportProgress?.({
+          phase: 'github-search',
+          message: 'Searching GitHub for pull requests…',
+          current: fallbackStarted,
+          total: keysNeedingFallback.length,
+        })
+        return searchIssueKeyBatch(config, [issueKey])
+      },
+    )
+    fallbackResults.forEach((result, index) => {
+      const issueKey = keysNeedingFallback[index]
+      if (result.status === 'rejected') {
+        console.error(
+          `GitHub search failed for ${issueKey}:`,
+          formatErrorDetail(result.reason),
+          result.reason,
+        )
+        warnings.push(`Could not search GitHub for ${issueKey}.`)
+        return
+      }
+      for (const { issueKey: key, item } of result.value) {
+        recordSearchMatch(key, item)
+      }
     })
-    return { id, pull: await getPullRequest(config, repository, item.number) }
-  })
+  }
+  const entries = [...uniquePulls.entries()].map(([id, item]) => ({
+    id,
+    repository: item.repository_url.split('/').slice(-2).join('/'),
+    number: item.number,
+  }))
+  const uncached: typeof entries = []
+  const resolved = new Map<string, PullRequest>()
+  for (const entry of entries) {
+    const cacheKey = `${entry.repository.toLowerCase()}#${entry.number}`
+    const cached = pullCache.get(cacheKey)
+    if (cached && cached.expiresAt > Date.now()) {
+      try {
+        resolved.set(entry.id, await cached.value)
+        continue
+      } catch {
+        pullCache.delete(cacheKey)
+      }
+    }
+    uncached.push(entry)
+  }
 
-  pulls.forEach((result, index) => {
+  const batches = chunkArray(uncached, GRAPHQL_PULL_BATCH_SIZE)
+  let batchesCompleted = 0
+  const batchResults = await mapConcurrent(
+    batches,
+    MAX_CONCURRENT_GITHUB_READS,
+    async (batch) => {
+      batchesCompleted += 1
+      reportProgress?.({
+        phase: 'github-details',
+        message: 'Loading pull request details…',
+        current: Math.min(
+          batchesCompleted * GRAPHQL_PULL_BATCH_SIZE,
+          uncached.length,
+        ),
+        total: entries.length,
+      })
+      return fetchPullRequestBatch(config, batch)
+    },
+  )
+  batchResults.forEach((result, index) => {
     if (result.status === 'rejected') {
-      warnings.push(`Could not load details for ${entries[index][0]}.`)
+      console.error(
+        `GitHub pull detail batch failed for ${batches[index].map((entry) => entry.id).join(', ')}:`,
+        formatErrorDetail(result.reason),
+        result.reason,
+      )
+      for (const entry of batches[index]) {
+        warnings.push(`Could not load details for ${entry.id}.`)
+      }
       return
     }
-    if (isClosedWithoutMerge(result.value.pull)) return
-    for (const issueKey of pullToIssues.get(result.value.id) ?? []) {
-      byIssue.get(issueKey)?.push(result.value.pull)
+    for (const [id, pull] of result.value) {
+      resolved.set(id, pull)
+    }
+    for (const entry of batches[index]) {
+      if (!result.value.has(entry.id)) {
+        warnings.push(`Could not load details for ${entry.id}.`)
+      }
     }
   })
+
+  for (const entry of entries) {
+    const pull = resolved.get(entry.id)
+    if (!pull || isClosedWithoutMerge(pull)) continue
+    for (const issueKey of pullToIssues.get(entry.id) ?? []) {
+      byIssue.get(issueKey)?.push(pull)
+    }
+  }
 
   return { byIssue, rateLimit: latestRateLimit, warnings }
 }

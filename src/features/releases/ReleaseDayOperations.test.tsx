@@ -9,9 +9,10 @@ import type {
 } from '../../shared/types'
 import {
   ReleaseDayOperations,
+  cleanGitHubReleaseDescription,
   developersForReleaseService,
-  latestProductionReleaseOnOrBeforeDate,
-  releaseCreatedOnOrBeforeDate,
+  latestProductionReleaseOnDate,
+  releaseCreatedOnDate,
   releaseNotesForDashboard,
 } from './ReleaseDayOperations'
 
@@ -206,21 +207,27 @@ describe('ReleaseDayOperations', () => {
     ).toContain('alice')
   })
 
-  it('allows build refresh only for tags created by the release date', () => {
+  it('allows build refresh only for tags created on the release date', () => {
     expect(
-      releaseCreatedOnOrBeforeDate(
+      releaseCreatedOnDate(
         '2026-07-16T23:59:59Z',
         '2026-07-16',
       ),
     ).toBe(true)
     expect(
-      releaseCreatedOnOrBeforeDate(
+      releaseCreatedOnDate(
+        '2026-07-15T23:59:59Z',
+        '2026-07-16',
+      ),
+    ).toBe(false)
+    expect(
+      releaseCreatedOnDate(
         '2026-07-17T00:00:00Z',
         '2026-07-16',
       ),
     ).toBe(false)
     expect(
-      latestProductionReleaseOnOrBeforeDate(
+      latestProductionReleaseOnDate(
         [
           {
             id: 3,
@@ -252,40 +259,49 @@ describe('ReleaseDayOperations', () => {
     ).toBe('v-prod-26.0716.6')
   })
 
-  it('copies every repository release tag and description', async () => {
-    const user = userEvent.setup()
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText },
-    })
-    const productionRelease = {
-      id: 96,
-      tag: 'v-prod-26.0716.6',
-      url: 'https://github.test/releases/96',
-      createdAt: '2026-07-16T13:30:45Z',
-      description:
-        '<!-- release-desk-operation:operation-id -->\n\n## What changed\n\n- Added checkout improvements',
-      buildStatus: 'succeeded' as const,
-      runs: [],
-    }
-    vi.spyOn(api, 'releaseHistory').mockResolvedValue({
+  it('does not show a saved build from a different release date', () => {
+    const saved = {
+      id: 90,
       repository,
-      stagingReleases: [],
-      productionReleases: [productionRelease],
-    })
-
-    const notes = releaseNotesForDashboard(
-      dashboard,
-      { [repository]: [productionRelease] },
-      '2026-07-16',
+      tag: 'v-26.0716.1',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/90',
+      createdAt: '2026-07-16T08:05:00Z',
+    }
+    const state = {
+      ...repositoryState('up_to_date', 'up_to_date'),
+      productionReleases: [
+        {
+          id: saved.id,
+          tag: saved.tag,
+          url: saved.url,
+          createdAt: saved.createdAt,
+          buildStatus: 'succeeded' as const,
+          runs: [],
+        },
+      ],
+    }
+    window.localStorage.setItem(
+      'release-day-operations:release-1',
+      JSON.stringify({
+        versionId: 'release-1',
+        operationId: 'operation-1',
+        releaseDate: '2026-06-23',
+        startedAt: '2026-06-23T08:00:00Z',
+        selectedRepositories: [repository],
+        repositories: {
+          [repository]: { productionRelease: saved },
+        },
+        logs: [],
+      }),
     )
-    expect(notes).toContain(`## ${repository}`)
-    expect(notes).toContain(
-      `**Release tag:** [${productionRelease.tag}](${productionRelease.url})`,
+    window.localStorage.setItem(
+      'release-day-repository-states:release-1',
+      JSON.stringify({
+        cachedAt: Date.now(),
+        states: { [repository]: state },
+      }),
     )
-    expect(notes).toContain('Added checkout improvements')
-    expect(notes).not.toContain('release-desk-operation')
 
     render(
       <ReleaseDayOperations
@@ -294,11 +310,242 @@ describe('ReleaseDayOperations', () => {
         onClose={vi.fn()}
       />,
     )
+
+    expect(screen.getByText('Not created')).toBeVisible()
+    expect(screen.queryByText('Build succeeded')).not.toBeInTheDocument()
+    expect(screen.queryByText(saved.tag)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled()
+  })
+
+  it('allows a new production release when the saved build was canceled', async () => {
+    const user = userEvent.setup()
+    const canceled = {
+      id: 91,
+      repository,
+      tag: 'v-26.0716.1',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/91',
+      createdAt: '2026-07-16T08:05:00Z',
+    }
+    const state = {
+      ...repositoryState('up_to_date', 'up_to_date'),
+      productionReleases: [
+        {
+          id: canceled.id,
+          tag: canceled.tag,
+          url: canceled.url,
+          createdAt: canceled.createdAt,
+          buildStatus: 'canceled' as const,
+          runs: [],
+        },
+      ],
+    }
+    window.localStorage.setItem(
+      'release-day-operations:release-1',
+      JSON.stringify({
+        versionId: 'release-1',
+        operationId: 'operation-1',
+        releaseDate: '2026-07-16',
+        startedAt: '2026-07-16T08:00:00Z',
+        selectedRepositories: [repository],
+        repositories: {
+          [repository]: { productionRelease: canceled },
+        },
+        logs: [],
+      }),
+    )
+    window.localStorage.setItem(
+      'release-day-repository-states:release-1',
+      JSON.stringify({
+        cachedAt: Date.now(),
+        states: { [repository]: state },
+      }),
+    )
+    const replacement = {
+      ...canceled,
+      id: 92,
+      tag: 'v-26.0716.2',
+      url: 'https://github.test/releases/92',
+      createdAt: '2026-07-16T08:10:00Z',
+    }
+    const createRelease = vi
+      .spyOn(api, 'createProductionRelease')
+      .mockResolvedValue(replacement)
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('Not created')).toBeVisible()
+    expect(screen.queryByText('Build succeeded')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '+ Create tag' }))
+
+    await waitFor(() =>
+      expect(createRelease).toHaveBeenCalledWith({
+        repository,
+        date: '2026-07-16',
+        operationId: 'operation-1',
+      }),
+    )
+    expect(
+      await screen.findByRole('link', { name: `${replacement.tag} ↗` }),
+    ).toBeVisible()
+  })
+
+  it('copies rich Slack notes and ignores back-merge bot PRs', async () => {
+    const user = userEvent.setup()
+    const write = vi.fn().mockResolvedValue(undefined)
+    class TestClipboardItem {
+      readonly types: string[]
+      private readonly items: Record<string, Blob>
+      constructor(items: Record<string, Blob>) {
+        this.items = items
+        this.types = Object.keys(items)
+      }
+      async getType(type: string) {
+        return this.items[type]
+      }
+    }
+    vi.stubGlobal('ClipboardItem', TestClipboardItem)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { write, writeText: vi.fn() },
+    })
+    expect(
+      cleanGitHubReleaseDescription(`<!-- release-desk-operation:operation-id -->
+
+## What's Changed
+* Upgrade to Django 5.2 by @rdvs in https://github.com/Orange-Health/accounts/pull/1090
+* Backport master -> release (backmerging through bot) by @devopsautomation-oh in https://github.com/Orange-Health/accounts/pull/1103
+* OH-3978 enhance feedback by @pi-prakhar in https://github.com/Orange-Health/accounts/pull/1105`),
+    ).toBe(`## What's Changed
+* Upgrade to Django 5.2 by @rdvs in https://github.com/Orange-Health/accounts/pull/1090
+* OH-3978 enhance feedback by @pi-prakhar in https://github.com/Orange-Health/accounts/pull/1105`)
+
+    const productionRelease = {
+      id: 96,
+      tag: 'v-26.0716.1',
+      url: 'https://github.test/releases/96',
+      createdAt: '2026-07-16T13:30:45Z',
+      description: `## What's Changed
+* Real feature by @alice in https://github.com/Orange-Health/service-api/pull/101
+* Backport release -> dev (backmerging through bot) by @devopsautomation-oh in https://github.com/Orange-Health/service-api/pull/102`,
+      buildStatus: 'succeeded' as const,
+      runs: [],
+    }
+    const notesDashboard = {
+      ...dashboard,
+      services: [
+        {
+          ...dashboard.services[0],
+          items: [
+            {
+              issue: {
+                key: 'OH-101',
+                summary: 'Improve checkout',
+                status: 'Done',
+                url: 'https://jira.test/OH-101',
+              },
+              pullRequest: {
+                id: 101,
+                repository,
+                number: 101,
+                title: 'OH-101: Improve checkout',
+                url: 'https://github.test/pull/101',
+                state: 'closed' as const,
+                draft: false,
+                merged: true,
+                baseBranch: 'dev',
+                headBranch: 'feature-101',
+                author: 'alice',
+                assignees: [],
+                reviewDecision: 'approved' as const,
+                mergeable: true,
+                mergeableState: 'clean',
+                checks: 'success' as const,
+                updatedAt: '2026-07-16T08:00:00Z',
+              },
+              eligible: false,
+              blockingReasons: [],
+              warningReasons: [],
+            },
+            {
+              issue: {
+                key: 'OH-102',
+                summary: 'Bot back-merge',
+                status: 'Done',
+                url: 'https://jira.test/OH-102',
+              },
+              pullRequest: {
+                id: 102,
+                repository,
+                number: 102,
+                title: 'Backport release -> dev',
+                url: 'https://github.test/pull/102',
+                state: 'closed' as const,
+                draft: false,
+                merged: true,
+                baseBranch: 'dev',
+                headBranch: 'release',
+                author: 'devopsautomation-oh',
+                assignees: [],
+                reviewDecision: 'approved' as const,
+                mergeable: true,
+                mergeableState: 'clean',
+                checks: 'success' as const,
+                updatedAt: '2026-07-16T08:00:00Z',
+              },
+              eligible: false,
+              blockingReasons: [],
+              warningReasons: [],
+            },
+          ],
+        },
+      ],
+    }
+    vi.spyOn(api, 'releaseHistory').mockResolvedValue({
+      repository,
+      stagingReleases: [],
+      productionReleases: [productionRelease],
+    })
+
+    const notes = releaseNotesForDashboard(
+      notesDashboard,
+      { [repository]: [productionRelease] },
+      '2026-07-16',
+    )
+    expect(notes.html).toContain('<b>service-api</b>')
+    expect(notes.html).toContain(
+      `<a href="${productionRelease.url}">${productionRelease.tag}</a>`,
+    )
+    expect(notes.html).toContain('Real feature by @alice')
+    expect(notes.html).toContain(
+      '<a href="https://github.com/Orange-Health/service-api/pull/101">https://github.com/Orange-Health/service-api/pull/101</a>',
+    )
+    expect(notes.html).not.toContain('devopsautomation-oh')
+    expect(notes.plain).not.toContain('devopsautomation-oh')
+    expect(notes.plain).not.toContain('release-desk-operation')
+
+    render(
+      <ReleaseDayOperations
+        dashboard={notesDashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
     await user.click(
       screen.getByRole('button', { name: 'Copy Release Notes' }),
     )
 
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith(notes))
+    await waitFor(() => expect(write).toHaveBeenCalled())
+    const item = write.mock.calls[0][0][0] as ClipboardItem
+    expect(item.types).toEqual(
+      expect.arrayContaining(['text/plain', 'text/html']),
+    )
     expect(
       screen.getByRole('button', { name: '✓ Copied!' }),
     ).toBeVisible()
@@ -322,16 +569,21 @@ describe('ReleaseDayOperations', () => {
     )
 
     expect(api.repositoryState).not.toHaveBeenCalled()
-    expect(screen.getAllByText('Checking')).toHaveLength(2)
+    expect(screen.getAllByText('Refresh pending')).toHaveLength(2)
     await user.click(
       screen.getByRole('button', { name: '↻ Refresh status' }),
     )
+    expect(screen.getAllByText('Checking')).toHaveLength(2)
     expect(
       await screen.findByRole('button', { name: 'Syncing 0/1' }),
     ).toBeDisabled()
     expect(
       screen.getByRole('button', { name: 'Sync service-api' }),
     ).toHaveTextContent('Syncing…')
+    const syncingRow = screen.getByText(repository).closest('tr')
+    expect(syncingRow).toHaveClass('sync-in-progress')
+    expect(syncingRow).toHaveAttribute('inert')
+    expect(syncingRow).toHaveAttribute('aria-busy', 'true')
 
     await act(async () => {
       resolveState(repositoryState('needs_pr', 'needs_pr'))
@@ -343,6 +595,9 @@ describe('ReleaseDayOperations', () => {
       ).toBeEnabled(),
     )
     expect(screen.getByText('Synced')).toBeVisible()
+    expect(syncingRow).not.toHaveClass('sync-in-progress')
+    expect(syncingRow).not.toHaveAttribute('inert')
+    expect(syncingRow).toHaveAttribute('aria-busy', 'false')
   })
 
   it('syncs an individual table row and updates it immediately', async () => {

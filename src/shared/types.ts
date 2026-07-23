@@ -336,6 +336,7 @@ export type MergeFeaturePullRequestInput = {
   repository: string
   pullNumber: number
   retargetToDev?: boolean
+  bypassBranchProtection?: boolean
 }
 
 export type DeploymentEnvironment = 'qa' | 's1' | 's2' | 's3' | 's4' | 's5'
