@@ -67,7 +67,11 @@ type GitHubPull = {
   mergeable: boolean | null
   mergeable_state: string
   base: { ref: string }
-  head: { ref: string; sha: string }
+  head: {
+    ref: string
+    sha: string
+    repo: { full_name: string } | null
+  }
 }
 
 type GitHubReview = {
@@ -458,18 +462,23 @@ async function findPulls(
   head: string,
   base: string,
 ) {
-  const owner = repository.split('/')[0]
   const query = new URLSearchParams({
     state,
-    head: `${owner}:${head}`,
     base,
     sort: 'updated',
     direction: 'desc',
-    per_page: '30',
+    per_page: '100',
   })
-  return githubApi<GitHubPull[]>(
+  const pulls = await githubApi<GitHubPull[]>(
     config,
     `/repos/${repositoryPath(repository)}/pulls?${query}`,
+  )
+  const normalizedRepository = repository.toLowerCase()
+  return pulls.filter(
+    (pull) =>
+      pull.base.ref === base &&
+      pull.head.ref === head &&
+      pull.head.repo?.full_name.toLowerCase() === normalizedRepository,
   )
 }
 
