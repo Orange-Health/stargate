@@ -4,6 +4,7 @@ import type {
   BuildStatus,
   CheckStatus,
   ConnectionConfig,
+  LatestProductionTagDelta,
   MergePromotionPullRequestResult,
   PendingBackMerge,
   PromotionPullRequest,
@@ -635,6 +636,26 @@ async function backMergeStep(
   }
 }
 
+async function latestProductionTagDelta(
+  config: ConnectionConfig,
+  repository: string,
+  defaultBranch: string,
+  productionReleases: TrackedProductionRelease[],
+): Promise<LatestProductionTagDelta | undefined> {
+  const latest = productionReleases[0]
+  if (!latest) return undefined
+  const comparison = await githubApi<GitHubBranchComparison>(
+    config,
+    `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(latest.tag)}...${encodeURIComponent(defaultBranch)}`,
+  )
+  return {
+    tag: latest.tag,
+    commitsAhead: comparison.ahead_by,
+    filesChanged: comparison.files?.length ?? 0,
+    hasSourceChanges: comparisonHasSourceFileChanges(comparison),
+  }
+}
+
 async function loadRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
@@ -688,11 +709,18 @@ async function loadRepositoryReleaseState(
         ]
       : [],
   )
+  const tagDelta = await latestProductionTagDelta(
+    config,
+    repository,
+    metadata.default_branch,
+    trackedReleases.productionReleases,
+  )
   return {
     repository,
     defaultBranch: metadata.default_branch,
     stagingReleases: trackedReleases.stagingReleases,
     productionReleases: trackedReleases.productionReleases,
+    latestProductionTagDelta: tagDelta,
     deployedTags: [],
     deploymentLookupFailed: false,
     productionReady: promotionSteps.some(

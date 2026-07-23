@@ -317,6 +317,116 @@ describe('ReleaseDayOperations', () => {
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled()
   })
 
+  it('offers a new production tag when default is ahead of the latest tag', async () => {
+    const user = userEvent.setup()
+    const existing = {
+      id: 92,
+      repository,
+      tag: 'v26.0716.1',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/92',
+      createdAt: '2026-07-16T08:05:00Z',
+    }
+    const created = {
+      id: 93,
+      repository,
+      tag: 'v26.0716.2',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/93',
+      createdAt: '2026-07-16T10:00:00Z',
+    }
+    let state: RepositoryReleaseState = {
+      ...repositoryState('up_to_date', 'up_to_date'),
+      productionReleases: [
+        {
+          id: existing.id,
+          tag: existing.tag,
+          url: existing.url,
+          createdAt: existing.createdAt,
+          buildStatus: 'succeeded',
+          runs: [],
+        },
+      ],
+      latestProductionTagDelta: {
+        tag: existing.tag,
+        commitsAhead: 2,
+        filesChanged: 3,
+        hasSourceChanges: true,
+      },
+    }
+    window.localStorage.setItem(
+      'release-day-operations:release-1',
+      JSON.stringify({
+        versionId: 'release-1',
+        operationId: 'operation-ahead',
+        releaseDate: '2026-07-16',
+        startedAt: '2026-07-16T08:00:00Z',
+        selectedRepositories: [repository],
+        repositories: {
+          [repository]: { productionRelease: existing },
+        },
+        logs: [],
+      }),
+    )
+    window.localStorage.setItem(
+      'release-day-repository-states:release-1',
+      JSON.stringify({
+        cachedAt: Date.now(),
+        states: { [repository]: state },
+      }),
+    )
+    vi.spyOn(api, 'repositoryState').mockImplementation(async () => state)
+    const createRelease = vi
+      .spyOn(api, 'createProductionRelease')
+      .mockImplementation(async () => {
+        state = {
+          ...state,
+          productionReleases: [
+            {
+              id: created.id,
+              tag: created.tag,
+              url: created.url,
+              createdAt: created.createdAt,
+              buildStatus: 'starting',
+              runs: [],
+            },
+            ...state.productionReleases,
+          ],
+          latestProductionTagDelta: {
+            tag: created.tag,
+            commitsAhead: 0,
+            filesChanged: 0,
+            hasSourceChanges: false,
+          },
+        }
+        return created
+      })
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByText(/main is 2 commits ahead of v26\.0716\.1/),
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '+ Create tag' }))
+
+    await waitFor(() =>
+      expect(createRelease).toHaveBeenCalledWith({
+        repository,
+        date: '2026-07-16',
+      }),
+    )
+    expect(
+      await screen.findByText(`Created ${created.tag} from main.`),
+    ).toBeVisible()
+    expect(createRelease.mock.calls[0][0]).not.toHaveProperty('operationId')
+  })
+
   it('allows a new production release when the saved build was canceled', async () => {
     const user = userEvent.setup()
     const canceled = {

@@ -270,11 +270,19 @@ export type BackMergeStep = {
   pullRequest?: PromotionPullRequest
 }
 
+export type LatestProductionTagDelta = {
+  tag: string
+  commitsAhead: number
+  filesChanged: number
+  hasSourceChanges: boolean
+}
+
 export type RepositoryReleaseState = {
   repository: string
   defaultBranch: string
   stagingReleases: TrackedStagingRelease[]
   productionReleases: TrackedProductionRelease[]
+  latestProductionTagDelta?: LatestProductionTagDelta
   deployedTags: JenkinsDeployedTag[]
   deploymentLookupFailed: boolean
   productionReady: boolean

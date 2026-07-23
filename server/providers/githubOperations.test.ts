@@ -624,6 +624,87 @@ describe('repository state cache', () => {
     clearRepositoryCaches(config, 'Orange-Health/service-api')
   })
 
+  it('reports when default branch is ahead of the latest production tag', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(
+          JSON.stringify({
+            full_name: 'Orange-Health/service-api',
+            default_branch: 'main',
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/releases?')) {
+        return new Response(
+          JSON.stringify([
+            {
+              id: 10,
+              tag_name: 'v26.0723.1',
+              html_url: 'https://github.test/releases/10',
+              created_at: '2026-07-23T08:00:00Z',
+              published_at: '2026-07-23T08:00:00Z',
+              prerelease: false,
+              body: null,
+            },
+          ]),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/actions/runs?')) {
+        return new Response(JSON.stringify({ workflow_runs: [] }), {
+          status: 200,
+        })
+      }
+      if (url.includes('/compare/v26.0723.1...main')) {
+        return new Response(
+          JSON.stringify({
+            ahead_by: 2,
+            behind_by: 0,
+            files: [{ filename: 'src/index.ts' }, { filename: 'README.md' }],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/pulls?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+
+    const state = await getRepositoryReleaseState(
+      config,
+      'Orange-Health/service-api',
+    )
+
+    expect(state.latestProductionTagDelta).toEqual({
+      tag: 'v26.0723.1',
+      commitsAhead: 2,
+      filesChanged: 2,
+      hasSourceChanges: true,
+    })
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+  })
+
   it('finds promotion PRs for repositories forked within the same organization', async () => {
     const repository = 'Orange-Health/asbru'
     const promotionPull = {

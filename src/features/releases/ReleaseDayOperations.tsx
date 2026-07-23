@@ -115,6 +115,12 @@ export function latestProductionReleaseOnDate(
     )[0]
 }
 
+export function defaultBranchNeedsNewProductionTag(
+  state: RepositoryReleaseState | undefined,
+) {
+  return Boolean(state?.latestProductionTagDelta?.hasSourceChanges)
+}
+
 export const RELEASE_NOTES_BOT_AUTHORS = [
   'devopsautomation-oh',
 ] as const
@@ -1281,13 +1287,23 @@ export function ReleaseDayOperations({
           (release) => release.tag === saved.tag,
         )?.buildStatus
       : undefined
+    const needsNewTag = defaultBranchNeedsNewProductionTag(states[repository])
     if (
       saved &&
       releaseCreatedOnDate(saved.createdAt, sessionRef.current.releaseDate) &&
-      savedBuildStatus !== 'canceled'
+      savedBuildStatus !== 'canceled' &&
+      !needsNewTag
     ) {
       log('success', `${saved.tag} was already created for this run.`, repository)
       return
+    }
+    if (needsNewTag && states[repository]?.latestProductionTagDelta) {
+      const delta = states[repository]!.latestProductionTagDelta!
+      log(
+        'info',
+        `${states[repository]!.defaultBranch} is ${delta.commitsAhead} ${delta.commitsAhead === 1 ? 'commit' : 'commits'} ahead of ${delta.tag}; creating a new production tag.`,
+        repository,
+      )
     }
     setSession((current) => ({
       ...current,
@@ -1303,7 +1319,11 @@ export function ReleaseDayOperations({
       const release = await api.createProductionRelease({
         repository,
         date: sessionRef.current.releaseDate,
-        operationId: sessionRef.current.operationId,
+        // ponytail: omit operationId when default moved past latest tag so
+        // GitHub creates a fresh tag instead of returning the idempotent one.
+        ...(needsNewTag
+          ? {}
+          : { operationId: sessionRef.current.operationId }),
       })
       setSession((current) => ({
         ...current,
@@ -1815,6 +1835,9 @@ export function ReleaseDayOperations({
                       )
                         ? undefined
                         : release
+                    const tagDelta = repositoryState?.latestProductionTagDelta
+                    const needsNewTag =
+                      defaultBranchNeedsNewProductionTag(repositoryState)
                     const productionDeployments =
                       repositoryState?.deployedTags.filter(
                         (deployment) =>
@@ -2044,6 +2067,40 @@ export function ReleaseDayOperations({
                                   '↻ Check latest build'
                                 )}
                               </button>
+                              {needsNewTag && tagDelta && (
+                                <div className="release-day-tag-ahead">
+                                  <small>
+                                    {repositoryState?.defaultBranch} is{' '}
+                                    {tagDelta.commitsAhead}{' '}
+                                    {tagDelta.commitsAhead === 1
+                                      ? 'commit'
+                                      : 'commits'}{' '}
+                                    ahead of {tagDelta.tag}
+                                  </small>
+                                  <button
+                                    className="release-day-tag-button"
+                                    type="button"
+                                    disabled={
+                                      refreshing ||
+                                      Boolean(busyAction) ||
+                                      Boolean(activeProductionRelease)
+                                    }
+                                    onClick={() =>
+                                      void createSingleProductionRelease(
+                                        repository,
+                                      )
+                                    }
+                                  >
+                                    {activeProductionRelease === repository ? (
+                                      <>
+                                        <span className="spinner" /> Creating…
+                                      </>
+                                    ) : (
+                                      '+ Create tag'
+                                    )}
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           ) : releaseCreationError ? (
                             <div className="release-day-release-failure">
@@ -2077,6 +2134,16 @@ export function ReleaseDayOperations({
                               <span className="batch-status pending">
                                 Not created
                               </span>
+                              {tagDelta && needsNewTag && (
+                                <small>
+                                  {repositoryState?.defaultBranch} is{' '}
+                                  {tagDelta.commitsAhead}{' '}
+                                  {tagDelta.commitsAhead === 1
+                                    ? 'commit'
+                                    : 'commits'}{' '}
+                                  ahead of {tagDelta.tag}
+                                </small>
+                              )}
                               <button
                                 className="release-day-tag-button"
                                 type="button"
