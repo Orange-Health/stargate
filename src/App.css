@@ -2661,6 +2661,21 @@ label {
   gap: 6px;
 }
 
+.release-day-tag-ahead {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.release-day-tag-ahead small,
+.release-day-release-empty small {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
 .release-day-release-failure small {
   color: var(--danger);
   font-size: 9px;

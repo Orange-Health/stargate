@@ -290,7 +290,7 @@ describe('ServiceOperations', () => {
     ).toBeVisible()
   })
 
-  it('highlights outdated branches and merges an existing back-merge PR', async () => {
+  it('force merges a back-merge PR when checks are blocking', async () => {
     const user = userEvent.setup()
     const merge = vi
       .spyOn(api, 'mergeBackMergePullRequest')
@@ -330,11 +330,45 @@ describe('ServiceOperations', () => {
         name: /PR #43 · Back-merge release into dev/,
       }),
     ).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Merge to dev' }))
+    await user.click(screen.getByRole('button', { name: 'Force merge to dev' }))
 
     expect(merge).toHaveBeenCalledWith({
       repository: 'Orange-Health/service-api',
       pullNumber: 43,
+      bypassBranchProtection: true,
+    })
+  })
+
+  it('force merges a promotion PR when checks are pending', async () => {
+    const user = userEvent.setup()
+    const merge = vi
+      .spyOn(api, 'mergePromotionPullRequest')
+      .mockResolvedValue({ merged: true, message: 'Merged' })
+    vi.spyOn(api, 'repositoryState').mockResolvedValue({
+      ...repositoryState,
+      promotionSteps: [
+        repositoryState.promotionSteps[0],
+        {
+          ...repositoryState.promotionSteps[1],
+          pullRequest: {
+            ...repositoryState.promotionSteps[1].pullRequest!,
+            checks: 'pending',
+            mergeableState: 'blocked',
+          },
+        },
+      ],
+    })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+
+    await user.click(
+      await screen.findByRole('button', { name: 'Force merge to master' }),
+    )
+
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'Orange-Health/service-api',
+      pullNumber: 42,
+      bypassBranchProtection: true,
     })
   })
 

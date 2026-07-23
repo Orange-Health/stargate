@@ -38,6 +38,25 @@ function timeAgo(value: string) {
   return `${Math.floor(seconds / 86_400)}d ago`
 }
 
+function hardMergeBlockReason(pull: {
+  draft: boolean
+  mergeable: boolean | null
+  mergeableState: string
+}) {
+  if (pull.draft) return 'PR is still a draft'
+  if (pull.mergeable === null) return 'GitHub is checking mergeability'
+  if (pull.mergeable === false || pull.mergeableState === 'dirty') {
+    return 'PR has merge conflicts'
+  }
+  return undefined
+}
+
+function checksSoftBlockReason(pull: { checks: string }) {
+  if (pull.checks === 'pending') return 'Checks are pending'
+  if (pull.checks === 'failure') return 'Checks are failing'
+  return undefined
+}
+
 function mergeBlockReason(
   step: PromotionStep,
   hasBackMerges: boolean,
@@ -45,26 +64,32 @@ function mergeBlockReason(
   if (hasBackMerges) return 'Resolve pending back-merges first'
   const pull = step.pullRequest
   if (!pull) return undefined
-  if (pull.draft) return 'PR is still a draft'
-  if (pull.mergeable === null) return 'GitHub is checking mergeability'
-  if (pull.mergeable === false || pull.mergeableState === 'dirty') {
-    return 'PR has merge conflicts'
-  }
-  if (pull.checks === 'pending') return 'Checks are pending'
-  if (pull.checks === 'failure') return 'Checks are failing'
-  return undefined
+  return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
+}
+
+function canForceMergePromotion(
+  step: PromotionStep,
+  hasBackMerges: boolean,
+): boolean {
+  if (hasBackMerges || !step.pullRequest) return false
+  return (
+    !hardMergeBlockReason(step.pullRequest) &&
+    Boolean(checksSoftBlockReason(step.pullRequest))
+  )
 }
 
 function backMergeBlockReason(step: BackMergeStep) {
   const pull = step.pullRequest
   if (!pull) return undefined
-  if (pull.draft) return 'PR is still a draft'
-  if (pull.mergeable === null) return 'GitHub is checking mergeability'
-  if (pull.mergeable === false || pull.mergeableState === 'dirty') {
-    return 'PR has merge conflicts'
-  }
-  if (pull.checks === 'pending') return 'Checks are pending'
-  return undefined
+  return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
+}
+
+function canForceMergeBackMerge(step: BackMergeStep): boolean {
+  if (!step.pullRequest) return false
+  return (
+    !hardMergeBlockReason(step.pullRequest) &&
+    Boolean(checksSoftBlockReason(step.pullRequest))
+  )
 }
 
 export function ServiceOperations({
@@ -380,8 +405,12 @@ export function ServiceOperations({
 
   async function mergePull(step: PromotionStep) {
     if (!step.pullRequest) return
+    const force =
+      canForceMergePromotion(step, (state?.pendingBackMerges.length ?? 0) > 0)
     const confirmed = window.confirm(
-      `Merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?`,
+      force
+        ? `Force merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?\n\nThis bypasses required checks. Your GitHub token must have branch-protection bypass access.`
+        : `Merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?`,
     )
     if (!confirmed) return
     setBusyRoute(step.route)
@@ -390,6 +419,7 @@ export function ServiceOperations({
       await api.mergePromotionPullRequest({
         repository,
         pullNumber: step.pullRequest.number,
+        ...(force ? { bypassBranchProtection: true } : {}),
       })
       await load(true)
     } catch (reason) {
@@ -403,8 +433,11 @@ export function ServiceOperations({
 
   async function mergeBackMerge(step: BackMergeStep) {
     if (!step.pullRequest) return
+    const force = canForceMergeBackMerge(step)
     const confirmed = window.confirm(
-      `Back-merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?`,
+      force
+        ? `Force back-merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?\n\nThis bypasses required checks. Your GitHub token must have branch-protection bypass access.`
+        : `Back-merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?`,
     )
     if (!confirmed) return
     setBusyRoute(step.route)
@@ -413,6 +446,7 @@ export function ServiceOperations({
       await api.mergeBackMergePullRequest({
         repository,
         pullNumber: step.pullRequest.number,
+        ...(force ? { bypassBranchProtection: true } : {}),
       })
       await load(true)
     } catch (reason) {
@@ -741,6 +775,9 @@ export function ServiceOperations({
           <div className="branch-sync-list">
             {state?.backMergeSteps.map((step) => {
             const blockReason = backMergeBlockReason(step)
+            const forceReady = canForceMergeBackMerge(step)
+            const mergeDisabled =
+              (Boolean(blockReason) && !forceReady) || busyRoute === step.route
             return (
               <article
                 className={`branch-sync-row ${step.state === 'up_to_date' ? 'current' : 'outdated'}`}
@@ -811,14 +848,16 @@ export function ServiceOperations({
                     <button
                       className="journey-action merge"
                       type="button"
-                      disabled={
-                        Boolean(blockReason) || busyRoute === step.route
-                      }
+                      disabled={mergeDisabled}
                       onClick={() => void mergeBackMerge(step)}
                     >
                       {busyRoute === step.route
-                        ? 'Merging…'
-                        : `Merge to ${step.toBranch}`}
+                        ? forceReady
+                          ? 'Force merging…'
+                          : 'Merging…'
+                        : forceReady
+                          ? `Force merge to ${step.toBranch}`
+                          : `Merge to ${step.toBranch}`}
                     </button>
                   </>
                 )}
@@ -850,10 +889,11 @@ export function ServiceOperations({
         ) : (
           <div className="journey-track">
             {state?.promotionSteps.map((step, index) => {
-            const blockReason = mergeBlockReason(
-              step,
-              state.pendingBackMerges.length > 0,
-            )
+            const hasBackMerges = state.pendingBackMerges.length > 0
+            const blockReason = mergeBlockReason(step, hasBackMerges)
+            const forceReady = canForceMergePromotion(step, hasBackMerges)
+            const mergeDisabled =
+              (Boolean(blockReason) && !forceReady) || busyRoute === step.route
             return (
               <article className="journey-step" key={step.route}>
                 <div className="journey-branches">
@@ -937,12 +977,16 @@ export function ServiceOperations({
                     <button
                       className="journey-action merge"
                       type="button"
-                      disabled={Boolean(blockReason) || busyRoute === step.route}
+                      disabled={mergeDisabled}
                       onClick={() => void mergePull(step)}
                     >
                       {busyRoute === step.route
-                        ? 'Merging…'
-                        : `Merge to ${step.toBranch}`}
+                        ? forceReady
+                          ? 'Force merging…'
+                          : 'Merging…'
+                        : forceReady
+                          ? `Force merge to ${step.toBranch}`
+                          : `Merge to ${step.toBranch}`}
                     </button>
                   </div>
                 )}
