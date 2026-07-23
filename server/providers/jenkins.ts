@@ -63,7 +63,7 @@ const serviceToRepository = {
   's3wrapper-api': 's3wrapper',
   sapphire: 'sapphire-api',
   'sapphire-web': 'sapphire-web',
-  scheduler: 'scheduler-api',
+  'scheduler-api': 'scheduler-api',
   'scheduler-web': 'scheduler',
   titan: 'titan-api',
   'vault-api': 'vault',
