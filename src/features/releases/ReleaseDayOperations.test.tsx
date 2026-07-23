@@ -761,6 +761,60 @@ describe('ReleaseDayOperations', () => {
     expect(api.repositoryState).toHaveBeenCalledTimes(1)
   })
 
+  it('force merges promotion PRs when checks are the only blocker', async () => {
+    const user = userEvent.setup()
+    const pendingState = repositoryState('pr_open', 'needs_pr')
+    pendingState.promotionSteps[0] = {
+      ...pendingState.promotionSteps[0],
+      pullRequest: {
+        ...pendingState.promotionSteps[0].pullRequest!,
+        checks: 'pending',
+        mergeableState: 'blocked',
+      },
+    }
+    let state = pendingState
+    vi.spyOn(api, 'repositoryState').mockImplementation(async () => state)
+    const merge = vi
+      .spyOn(api, 'mergePromotionPullRequest')
+      .mockImplementation(async () => {
+        state = repositoryState('up_to_date', 'needs_pr')
+        return { merged: true, message: 'Force-merged' }
+      })
+    vi.spyOn(api, 'refreshRepository').mockResolvedValue()
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    await user.click(
+      screen.getByRole('button', { name: '↻ Refresh status' }),
+    )
+    await screen.findByText('Checks are pending')
+
+    const devMergeStep = screen
+      .getByText('Merge Dev → Release PRs')
+      .closest('article')
+    await user.click(
+      within(devMergeStep as HTMLElement).getByRole('button', {
+        name: 'Merge ready PRs',
+      }),
+    )
+
+    await waitFor(() =>
+      expect(merge).toHaveBeenCalledWith({
+        repository,
+        pullNumber: 12,
+        bypassBranchProtection: true,
+      }),
+    )
+    expect(
+      screen.getByText(/force-merging with branch-protection bypass/i),
+    ).toBeVisible()
+  })
+
   it('creates PRs sequentially and patches state without full reconciliation', async () => {
     const user = userEvent.setup()
     const secondRepository = 'Orange-Health/service-web'

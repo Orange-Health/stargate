@@ -324,6 +324,7 @@ export type CreateBackMergePullRequestInput = {
 export type MergePromotionPullRequestInput = {
   repository: string
   pullNumber: number
+  bypassBranchProtection?: boolean
 }
 
 export type MergePromotionPullRequestResult = {

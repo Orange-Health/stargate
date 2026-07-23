@@ -929,10 +929,33 @@ export async function createBackMergePullRequest(
   return promotionPullDetails(config, repository, created)
 }
 
+async function forceMergePullRequest(
+  config: ConnectionConfig,
+  repository: string,
+  pull: GitHubPull,
+): Promise<MergePromotionPullRequestResult> {
+  if (!pull.node_id) {
+    throw new ProviderError(
+      'Pull request node_id is required for force merge.',
+      'PR_MISSING_NODE_ID',
+      'github',
+      502,
+    )
+  }
+  const merged = await mergePullRequestViaGraphql(config, pull.node_id, 'MERGE')
+  clearRepositoryCaches(config, repository)
+  return {
+    merged: merged.merged,
+    message: 'Force-merged with branch protection bypass.',
+    sha: merged.sha,
+  }
+}
+
 export async function mergePromotionPullRequest(
   config: ConnectionConfig,
   repository: string,
   pullNumber: number,
+  bypassBranchProtection = false,
 ): Promise<MergePromotionPullRequestResult> {
   assertConnectedRepository(config, repository)
   const metadata = await githubApi<GitHubRepository>(
@@ -968,6 +991,36 @@ export async function mergePromotionPullRequest(
       409,
     )
   }
+  if (bypassBranchProtection) {
+    if (pull.draft || pull.merged_at) {
+      throw new ProviderError(
+        pull.draft
+          ? 'Draft promotion PRs cannot be merged.'
+          : 'This promotion PR is already merged.',
+        'PROMOTION_PR_NOT_OPEN',
+        'github',
+        409,
+      )
+    }
+    const details = await promotionPullDetails(config, repository, pull)
+    if (details.mergeable === null) {
+      throw new ProviderError(
+        'GitHub is still calculating mergeability.',
+        'PROMOTION_PR_NOT_MERGEABLE',
+        'github',
+        409,
+      )
+    }
+    if (hasActualMergeConflict(details.mergeable, details.mergeableState)) {
+      throw new ProviderError(
+        'The promotion PR has merge conflicts.',
+        'PROMOTION_PR_NOT_MERGEABLE',
+        'github',
+        409,
+      )
+    }
+    return forceMergePullRequest(config, repository, pull)
+  }
   const result = await githubApi<MergePromotionPullRequestResult>(
     config,
     `/repos/${repositoryPath(repository)}/pulls/${pullNumber}/merge`,
@@ -984,6 +1037,7 @@ export async function mergeBackMergePullRequest(
   config: ConnectionConfig,
   repository: string,
   pullNumber: number,
+  bypassBranchProtection = false,
 ): Promise<MergePromotionPullRequestResult> {
   assertConnectedRepository(config, repository)
   const metadata = await githubApi<GitHubRepository>(
@@ -1033,13 +1087,16 @@ export async function mergeBackMergePullRequest(
       409,
     )
   }
-  if (details.checks === 'pending') {
+  if (!bypassBranchProtection && details.checks === 'pending') {
     throw new ProviderError(
       'Required checks are still pending.',
       'BACK_MERGE_CHECKS_PENDING',
       'github',
       409,
     )
+  }
+  if (bypassBranchProtection) {
+    return forceMergePullRequest(config, repository, pull)
   }
   const result = await githubApi<MergePromotionPullRequestResult>(
     config,
@@ -1157,21 +1214,7 @@ export async function mergeFeaturePullRequest(
   }
 
   if (bypassBranchProtection) {
-    if (!pull.node_id) {
-      throw new ProviderError(
-        'Pull request node_id is required for force merge.',
-        'FEATURE_PR_MISSING_NODE_ID',
-        'github',
-        502,
-      )
-    }
-    const merged = await mergePullRequestViaGraphql(config, pull.node_id, 'MERGE')
-    clearRepositoryCaches(config, repository)
-    return {
-      merged: merged.merged,
-      message: 'Force-merged with branch protection bypass.',
-      sha: merged.sha,
-    }
+    return forceMergePullRequest(config, repository, pull)
   }
 
   const result = await githubApi<MergePromotionPullRequestResult>(

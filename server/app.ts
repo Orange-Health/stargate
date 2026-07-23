@@ -116,11 +116,11 @@ const backMergeSchema = z.object({
 const mergePromotionSchema = z.object({
   repository: repositorySchema,
   pullNumber: z.number().int().positive(),
+  bypassBranchProtection: z.boolean().optional(),
 })
 
 const mergeFeaturePullSchema = mergePromotionSchema.extend({
   retargetToDev: z.boolean().optional(),
-  bypassBranchProtection: z.boolean().optional(),
 })
 
 const deploymentSchema = z.object({
@@ -627,6 +627,7 @@ export function createApp() {
           requireConnection(),
           parsed.data.repository,
           parsed.data.pullNumber,
+          parsed.data.bypassBranchProtection,
         ),
       )
     },
@@ -650,6 +651,7 @@ export function createApp() {
           requireConnection(),
           parsed.data.repository,
           parsed.data.pullNumber,
+          parsed.data.bypassBranchProtection,
         ),
       )
     },

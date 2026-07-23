@@ -509,15 +509,29 @@ function routeStep(state: RepositoryReleaseState | undefined, route: PromotionRo
   return state?.promotionSteps.find((step) => step.route === route)
 }
 
-function mergeBlockReason(pull: PromotionPullRequest) {
+function hardMergeBlockReason(pull: PromotionPullRequest) {
   if (pull.draft) return 'PR is still a draft'
   if (pull.mergeable === null) return 'GitHub is still checking mergeability'
   if (pull.mergeable === false || pull.mergeableState === 'dirty') {
     return 'PR has merge conflicts'
   }
+  return undefined
+}
+
+function checksSoftBlockReason(pull: PromotionPullRequest) {
   if (pull.checks === 'pending') return 'Checks are pending'
   if (pull.checks === 'failure') return 'Checks are failing'
   return undefined
+}
+
+function mergeBlockReason(pull: PromotionPullRequest) {
+  return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
+}
+
+function canForceMergePull(pull: PromotionPullRequest) {
+  return (
+    !hardMergeBlockReason(pull) && Boolean(checksSoftBlockReason(pull))
+  )
 }
 
 function phaseState(
@@ -1159,7 +1173,8 @@ export function ReleaseDayOperations({
           repository,
         )
         const blocked = mergeBlockReason(step.pullRequest)
-        if (blocked) {
+        const force = canForceMergePull(step.pullRequest)
+        if (blocked && !force) {
           log(
             'warning',
             `Validation blocked PR #${step.pullRequest.number}: ${blocked}.`,
@@ -1167,21 +1182,32 @@ export function ReleaseDayOperations({
           )
           throw new Error(`${blocked} on PR #${step.pullRequest.number}.`)
         }
-        log(
-          'success',
-          `Validation passed for PR #${step.pullRequest.number}; submitting merge to ${step.toBranch}.`,
-          repository,
-        )
+        if (force) {
+          log(
+            'warning',
+            `Checks are blocking PR #${step.pullRequest.number}; force-merging with branch-protection bypass.`,
+            repository,
+          )
+        } else {
+          log(
+            'success',
+            `Validation passed for PR #${step.pullRequest.number}; submitting merge to ${step.toBranch}.`,
+            repository,
+          )
+        }
         setCellOperation({
           repository,
           route,
-          label: `Merging to ${step.toBranch}`,
+          label: force
+            ? `Force merging to ${step.toBranch}`
+            : `Merging to ${step.toBranch}`,
         })
         let result
         try {
           result = await api.mergePromotionPullRequest({
             repository,
             pullNumber: step.pullRequest.number,
+            ...(force ? { bypassBranchProtection: true } : {}),
           })
         } finally {
           setCellOperation((current) =>

@@ -14,6 +14,7 @@ import {
   hasActualMergeConflict,
   mergeBackMergePullRequest,
   mergeFeaturePullRequest,
+  mergePromotionPullRequest,
   promotionBranches,
   releaseTimestamp,
   sortReleasesNewestFirst,
@@ -200,6 +201,179 @@ describe('back-merge PR merging', () => {
     await expect(
       mergeBackMergePullRequest(config, 'Orange-Health/service-api', 42),
     ).resolves.toMatchObject({ merged: true })
+  })
+
+  it('force merges via GraphQL when bypassing branch protection', async () => {
+    let graphqlCalled = false
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(JSON.stringify({ default_branch: 'main' }), {
+          status: 200,
+        })
+      }
+      if (url.endsWith('/pulls/42')) {
+        return new Response(
+          JSON.stringify({
+            number: 42,
+            node_id: 'PR_kwDOBackForce',
+            title: 'Back-merge main to release',
+            body: null,
+            html_url: 'https://github.test/pull/42',
+            draft: false,
+            merged_at: null,
+            mergeable: true,
+            mergeable_state: 'blocked',
+            base: { ref: 'release' },
+            head: { ref: 'main', sha: 'abc123' },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/reviews?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/check-runs?')) {
+        return new Response(
+          JSON.stringify({
+            check_runs: [{ status: 'in_progress', conclusion: null }],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === 'https://api.github.com/graphql') {
+        graphqlCalled = true
+        return new Response(
+          JSON.stringify({
+            data: {
+              mergePullRequest: {
+                pullRequest: {
+                  merged: true,
+                  mergeCommit: { oid: 'backforce' },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/42/merge')) {
+        throw new Error('REST merge should not be used for force merge')
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    await expect(
+      mergeBackMergePullRequest(config, 'Orange-Health/service-api', 42, true),
+    ).resolves.toMatchObject({
+      merged: true,
+      message: 'Force-merged with branch protection bypass.',
+      sha: 'backforce',
+    })
+    expect(graphqlCalled).toBe(true)
+  })
+})
+
+describe('promotion PR force merge', () => {
+  it('force merges via GraphQL when bypassing branch protection', async () => {
+    let graphqlCalled = false
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(JSON.stringify({ default_branch: 'main' }), {
+          status: 200,
+        })
+      }
+      if (url.includes('/pulls?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/55')) {
+        return new Response(
+          JSON.stringify({
+            number: 55,
+            node_id: 'PR_kwDOPromoForce',
+            title: 'Promote release to main',
+            body: null,
+            html_url: 'https://github.test/pull/55',
+            draft: false,
+            merged_at: null,
+            mergeable: true,
+            mergeable_state: 'blocked',
+            base: { ref: 'main' },
+            head: { ref: 'release', sha: 'def456' },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/reviews?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/check-runs?')) {
+        return new Response(
+          JSON.stringify({
+            check_runs: [{ status: 'in_progress', conclusion: null }],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === 'https://api.github.com/graphql') {
+        graphqlCalled = true
+        return new Response(
+          JSON.stringify({
+            data: {
+              mergePullRequest: {
+                pullRequest: {
+                  merged: true,
+                  mergeCommit: { oid: 'promoforce' },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/55/merge')) {
+        throw new Error('REST merge should not be used for force merge')
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    await expect(
+      mergePromotionPullRequest(config, 'Orange-Health/service-api', 55, true),
+    ).resolves.toMatchObject({
+      merged: true,
+      message: 'Force-merged with branch protection bypass.',
+      sha: 'promoforce',
+    })
+    expect(graphqlCalled).toBe(true)
   })
 })
 
