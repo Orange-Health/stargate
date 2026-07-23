@@ -7,6 +7,7 @@ import type {
 
 type Props = {
   repository: string
+  releaseDate: string
   onClose: () => void
 }
 
@@ -37,12 +38,18 @@ function tagPreview(environment: StagingEnvironment, date: string) {
   return `v-${environment}-v${match[1].slice(-2)}.${match[2]}${match[3]}.N`
 }
 
-export function StagingReleaseDialog({ repository, onClose }: Props) {
+export function StagingReleaseDialog({
+  repository,
+  releaseDate,
+  onClose,
+}: Props) {
   const [environment, setEnvironment] = useState<StagingEnvironment>('qa')
-  const [date, setDate] = useState(localDate)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [created, setCreated] = useState<CreatedStagingRelease>()
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(releaseDate)
+    ? releaseDate
+    : localDate()
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -126,32 +133,21 @@ export function StagingReleaseDialog({ repository, onClose }: Props) {
                 Repository
                 <input value={repository} disabled />
               </label>
-              <div className="field-row">
-                <label>
-                  Environment
-                  <select
-                    value={environment}
-                    onChange={(event) =>
-                      setEnvironment(event.target.value as StagingEnvironment)
-                    }
-                  >
-                    {environments.map((item) => (
-                      <option value={item.value} key={item.value}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Release date
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(event) => setDate(event.target.value)}
-                    required
-                  />
-                </label>
-              </div>
+              <label>
+                Environment
+                <select
+                  value={environment}
+                  onChange={(event) =>
+                    setEnvironment(event.target.value as StagingEnvironment)
+                  }
+                >
+                  {environments.map((item) => (
+                    <option value={item.value} key={item.value}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="tag-preview">
                 <span>Tag pattern</span>
                 <code>{tagPreview(environment, date)}</code>
