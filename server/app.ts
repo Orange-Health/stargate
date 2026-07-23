@@ -118,9 +118,8 @@ const mergePromotionSchema = z.object({
   pullNumber: z.number().int().positive(),
 })
 
-const mergeFeaturePullSchema = z.object({
-  repository: repositorySchema,
-  pullNumber: z.number().int().positive(),
+const mergeFeaturePullSchema = mergePromotionSchema.extend({
+  retargetToDev: z.boolean().optional(),
   bypassBranchProtection: z.boolean().optional(),
 })
 
@@ -159,7 +158,7 @@ const releaseBuildStatusesSchema = z.object({
         tag: z
           .string()
           .regex(
-            /^(?:v(?:-prod)?-\d{2}\.\d{4}\.\d+|v-(?:qa|s[1-6])-v\d{2}\.\d{4}\.\d+)$/,
+            /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+|v-(?:qa|s[1-6])-v\d{2}\.\d{4}\.\d+$/,
           ),
         createdAt: z.iso.datetime(),
       }),
@@ -674,6 +673,7 @@ export function createApp() {
           requireConnection(),
           parsed.data.repository,
           parsed.data.pullNumber,
+          parsed.data.retargetToDev,
           parsed.data.bypassBranchProtection,
         ),
       )

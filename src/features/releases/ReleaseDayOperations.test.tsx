@@ -871,7 +871,7 @@ describe('ReleaseDayOperations', () => {
     const created = {
       id: 91,
       repository,
-      tag: 'v-26.0716.1',
+      tag: 'v26.0716.1',
       sourceBranch: 'main',
       url: 'https://github.test/releases/91',
       createdAt: '2026-07-16T08:05:00Z',
@@ -987,7 +987,7 @@ describe('ReleaseDayOperations', () => {
     const created = {
       id: 92,
       repository,
-      tag: 'v-26.0716.2',
+      tag: 'v26.0716.2',
       sourceBranch: 'main',
       url: 'https://github.test/releases/92',
       createdAt: '2026-07-16T08:10:00Z',

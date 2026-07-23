@@ -313,7 +313,13 @@ describe('feature PR force merge', () => {
     })
 
     await expect(
-      mergeFeaturePullRequest(config, 'Orange-Health/service-api', 8, true),
+      mergeFeaturePullRequest(
+        config,
+        'Orange-Health/service-api',
+        8,
+        false,
+        true,
+      ),
     ).resolves.toMatchObject({
       merged: true,
       sha: 'deadbeef',
@@ -336,7 +342,13 @@ describe('feature PR force merge', () => {
     })
 
     await expect(
-      mergeFeaturePullRequest(config, 'Orange-Health/service-api', 8, true),
+      mergeFeaturePullRequest(
+        config,
+        'Orange-Health/service-api',
+        8,
+        false,
+        true,
+      ),
     ).rejects.toMatchObject({ code: 'FEATURE_PR_NOT_MERGEABLE' })
   })
 
@@ -449,7 +461,7 @@ describe('release build status polling', () => {
               id: 7,
               name: 'Build image',
               event: 'release',
-              head_branch: 'v-26.0715.1',
+              head_branch: 'v26.0715.1',
               status: 'completed',
               conclusion: 'success',
               html_url: 'https://github.test/actions/7',
@@ -476,7 +488,7 @@ describe('release build status polling', () => {
     const [result] = await getReleaseBuildStatuses(config, [
       {
         repository: 'Orange-Health/service-api',
-        tag: 'v-26.0715.1',
+        tag: 'v26.0715.1',
         createdAt: '2026-07-15T08:59:00Z',
       },
     ])
@@ -485,12 +497,12 @@ describe('release build status polling', () => {
     expect(result.runs).toHaveLength(1)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(String(fetchMock.mock.calls[0][0])).toContain(
-      '/actions/runs?branch=v-26.0715.1',
+      '/actions/runs?branch=v26.0715.1',
     )
     const [cached] = await getReleaseBuildStatuses(config, [
       {
         repository: 'Orange-Health/service-api',
-        tag: 'v-26.0715.1',
+        tag: 'v26.0715.1',
         createdAt: '2026-07-15T08:59:00Z',
       },
     ])
@@ -501,7 +513,7 @@ describe('release build status polling', () => {
       [
         {
           repository: 'Orange-Health/service-api',
-          tag: 'v-26.0715.1',
+          tag: 'v26.0715.1',
           createdAt: '2026-07-15T08:59:00Z',
         },
       ],
@@ -513,6 +525,114 @@ describe('release build status polling', () => {
       config,
       'Orange-Health/service-api',
       [],
+      true,
+    )
+  })
+})
+
+describe('mergeFeaturePullRequest', () => {
+  it('retargets a default-branch PR to dev before merging', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = String(input)
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (url.endsWith('/repos/orange/service-api') && method === 'GET') {
+        return new Response(JSON.stringify({ default_branch: 'main' }), {
+          status: 200,
+        })
+      }
+      if (url.includes('/pulls?') && method === 'GET') {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/compare/') && method === 'GET') {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/8') && method === 'GET') {
+        return new Response(
+          JSON.stringify({
+            id: 8,
+            number: 8,
+            title: 'OH-123 Release API',
+            html_url: 'https://github.test/pull/8',
+            draft: false,
+            merged_at: null,
+            mergeable: true,
+            mergeable_state: 'clean',
+            base: { ref: 'main' },
+            head: { ref: 'feature/OH-123', sha: 'abc123' },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/8') && method === 'PATCH') {
+        expect(JSON.parse(String(init?.body))).toEqual({ base: 'dev' })
+        return new Response(
+          JSON.stringify({
+            id: 8,
+            number: 8,
+            title: 'OH-123 Release API',
+            html_url: 'https://github.test/pull/8',
+            draft: false,
+            merged_at: null,
+            mergeable: true,
+            mergeable_state: 'clean',
+            base: { ref: 'dev' },
+            head: { ref: 'feature/OH-123', sha: 'abc123' },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/8/reviews?per_page=100')) {
+        return new Response(
+          JSON.stringify([
+            {
+              user: { login: 'reviewer' },
+              state: 'APPROVED',
+              submitted_at: '2026-07-13T12:00:00Z',
+            },
+          ]),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/commits/abc123/check-runs?per_page=100')) {
+        return new Response(
+          JSON.stringify({
+            check_runs: [{ status: 'completed', conclusion: 'success' }],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/8/merge') && method === 'PUT') {
+        return new Response(
+          JSON.stringify({ merged: true, message: 'Merged', sha: 'def456' }),
+          { status: 200 },
+        )
+      }
+      return new Response('unexpected request', { status: 500 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await mergeFeaturePullRequest(
+      config,
+      'orange/service-api',
+      8,
+      true,
+    )
+
+    expect(result.merged).toBe(true)
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(
       true,
     )
   })

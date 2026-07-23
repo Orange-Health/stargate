@@ -540,6 +540,17 @@ export function repositoryPath(repository: string) {
   return `${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
 }
 
+export async function getRepositoryDefaultBranch(
+  config: ConnectionConfig,
+  repository: string,
+) {
+  const metadata = await githubApi<{ default_branch: string }>(
+    config,
+    `/repos/${repositoryPath(repository)}`,
+  )
+  return metadata.default_branch
+}
+
 export function githubApi<T>(
   config: ConnectionConfig,
   path: string,
@@ -596,7 +607,7 @@ export function productionTagPrefix(repository: string, date: string) {
   }
   const prefix = usesFrontendProductionTag(repository)
     ? 'v-prod-'
-    : 'v-'
+    : 'v'
   return `${prefix}${year.slice(-2)}.${month}${day}.`
 }
 
@@ -606,10 +617,18 @@ export function nextProductionTag(
   existingTags: string[],
 ) {
   const prefix = productionTagPrefix(repository, date)
+  const legacyPrefix = prefix.startsWith('v-prod-')
+    ? undefined
+    : prefix.replace(/^v/, 'v-')
   const highest = existingTags.reduce((current, tag) => {
-    if (!tag.startsWith(prefix)) return current
-    const suffix = tag.slice(prefix.length)
-    return /^\d+$/.test(suffix) ? Math.max(current, Number(suffix)) : current
+    for (const candidate of legacyPrefix ? [prefix, legacyPrefix] : [prefix]) {
+      if (!tag.startsWith(candidate)) continue
+      const suffix = tag.slice(candidate.length)
+      if (/^\d+$/.test(suffix)) {
+        current = Math.max(current, Number(suffix))
+      }
+    }
+    return current
   }, 0)
   return `${prefix}${highest + 1}`
 }

@@ -98,6 +98,7 @@ export type ReleaseItem = {
 
 export type ServiceRelease = {
   repository: string
+  defaultBranch?: string
   items: ReleaseItem[]
   eligibleCount: number
   blockedCount: number
@@ -334,6 +335,7 @@ export type MergePromotionPullRequestResult = {
 export type MergeFeaturePullRequestInput = {
   repository: string
   pullNumber: number
+  retargetToDev?: boolean
   bypassBranchProtection?: boolean
 }
 

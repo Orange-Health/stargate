@@ -300,7 +300,7 @@ async function listTrackedReleases(
     releases.filter(
       (release) =>
         !release.prerelease &&
-        /^v(?:-prod)?-\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
+        /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
     ),
   )
     .slice(0, limit)
@@ -1057,6 +1057,7 @@ export async function mergeFeaturePullRequest(
   config: ConnectionConfig,
   repository: string,
   pullNumber: number,
+  retargetToDev = false,
   bypassBranchProtection = false,
 ): Promise<MergePromotionPullRequestResult> {
   assertConnectedRepository(config, repository)
@@ -1078,17 +1079,30 @@ export async function mergeFeaturePullRequest(
     )
   }
 
-  const pull = await githubApi<GitHubPull>(
+  let pull = await githubApi<GitHubPull>(
     config,
     `/repos/${repositoryPath(repository)}/pulls/${pullNumber}`,
   )
   if (pull.base.ref !== 'dev') {
-    throw new ProviderError(
-      'Only feature PRs targeting dev can be merged from this action.',
-      'INVALID_FEATURE_PR',
-      'github',
-      409,
-    )
+    if (retargetToDev && pull.base.ref === metadata.default_branch) {
+      pull = await githubApi<GitHubPull>(
+        config,
+        `/repos/${repositoryPath(repository)}/pulls/${pullNumber}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ base: 'dev' }),
+        },
+      )
+    } else {
+      throw new ProviderError(
+        retargetToDev
+          ? 'Only feature PRs targeting the default branch can be retargeted to dev.'
+          : 'Only feature PRs targeting dev can be merged from this action.',
+        'INVALID_FEATURE_PR',
+        'github',
+        409,
+      )
+    }
   }
   if (!/\bOH-\d+\b/i.test(pull.title)) {
     throw new ProviderError(

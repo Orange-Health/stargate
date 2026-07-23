@@ -9,7 +9,7 @@ import type {
   ServiceRelease,
 } from '../../src/shared/types.js'
 import { isClosedWithoutMerge } from '../../src/shared/pullRequests.js'
-import { discoverPullRequests } from '../providers/github.js'
+import { discoverPullRequests, getRepositoryDefaultBranch } from '../providers/github.js'
 import { getVersion, listVersionIssues } from '../providers/jira.js'
 
 const CACHE_TTL_MS = 60_000
@@ -83,12 +83,14 @@ export function isClearedMerge(pullRequest?: PullRequest) {
 function summarizeService(
   repository: string,
   items: ReleaseItem[],
+  defaultBranch?: string,
 ): ServiceRelease {
   const visibleItems = items.filter(
     (item) => !isClosedWithoutMerge(item.pullRequest),
   )
   return {
     repository,
+    defaultBranch,
     items: visibleItems.sort((a, b) => a.issue.key.localeCompare(b.issue.key)),
     eligibleCount: visibleItems.filter((item) => item.eligible).length,
     blockedCount: visibleItems.filter(
@@ -159,8 +161,28 @@ export async function aggregateRelease(
     }
   }
 
+  const defaultBranches = new Map<string, string>()
+  await Promise.all(
+    [...serviceItems.keys()].map(async (repository) => {
+      try {
+        defaultBranches.set(
+          repository,
+          await getRepositoryDefaultBranch(config, repository),
+        )
+      } catch {
+        // ponytail: skip default branch when repo metadata is unavailable
+      }
+    }),
+  )
+
   const services = [...serviceItems.entries()]
-    .map(([repository, items]) => summarizeService(repository, items))
+    .map(([repository, items]) =>
+      summarizeService(
+        repository,
+        items,
+        defaultBranches.get(repository),
+      ),
+    )
     .sort((a, b) => a.repository.localeCompare(b.repository))
   reportProgress?.({
     phase: 'mapping',
@@ -219,5 +241,11 @@ export async function refreshServiceRelease(
     }
     for (const pull of pulls) items.push(evaluateEligibility(issue, pull))
   }
-  return summarizeService(repository, items)
+  let defaultBranch: string | undefined
+  try {
+    defaultBranch = await getRepositoryDefaultBranch(config, repository)
+  } catch {
+    // ponytail: refresh still works without default branch metadata
+  }
+  return summarizeService(repository, items, defaultBranch)
 }

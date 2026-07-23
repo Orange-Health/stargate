@@ -40,7 +40,7 @@ const repositoryState: RepositoryReleaseState = {
   productionReleases: [
     {
       id: 4,
-      tag: 'v-26.0713.1',
+      tag: 'v26.0713.1',
       url: 'https://github.test/release/4',
       createdAt: '2026-07-13T13:00:00Z',
       buildStatus: 'succeeded',

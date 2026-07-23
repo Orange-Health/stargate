@@ -11,8 +11,9 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('ProductionDeployDialog', () => {
   it('switches between read-only standard and frontend tag formats', () => {
-    expect(productionTagForFormat('v-26.0714.2', false)).toBe('v-26.0714.2')
-    expect(productionTagForFormat('v-26.0714.2', true)).toBe(
+    expect(productionTagForFormat('v26.0714.2', false)).toBe('v26.0714.2')
+    expect(productionTagForFormat('v-26.0714.2', false)).toBe('v26.0714.2')
+    expect(productionTagForFormat('v26.0714.2', true)).toBe(
       'v-prod-26.0714.2',
     )
   })
@@ -22,13 +23,13 @@ describe('ProductionDeployDialog', () => {
       <ProductionDeployDialog
         repository="Orange-Health/accounts"
         services={['accounts']}
-        sourceTag="v-26.0714.2"
+        sourceTag="v26.0714.2"
         onClose={vi.fn()}
       />,
     )
 
     const tag = screen.getByLabelText('Image tag')
-    expect(tag).toHaveValue('v-26.0714.2')
+    expect(tag).toHaveValue('v26.0714.2')
     expect(tag).toBeDisabled()
   })
 
@@ -37,7 +38,7 @@ describe('ProductionDeployDialog', () => {
       <ProductionDeployDialog
         repository="Orange-Health/asbru"
         services={['asbru-web']}
-        sourceTag="v-26.0714.2"
+        sourceTag="v26.0714.2"
         onClose={vi.fn()}
       />,
     )
@@ -58,7 +59,7 @@ describe('ProductionDeployDialog', () => {
       <ProductionDeployDialog
         repository="Orange-Health/accounts"
         services={['accounts']}
-        sourceTag="v-26.0714.2"
+        sourceTag="v26.0714.2"
         onClose={vi.fn()}
       />,
     )
@@ -84,13 +85,13 @@ describe('ProductionDeployDialog', () => {
           'https://pitstop.test/job/Prod-new-cluster-deployment/944/',
         jobName: 'Prod-new-cluster-deployment',
         service: 'accounts',
-        imageTag: 'v-26.0714.2',
+        imageTag: 'v26.0714.2',
       })
     render(
       <ProductionDeployDialog
         repository="Orange-Health/accounts"
         services={['accounts']}
-        sourceTag="v-26.0714.2"
+        sourceTag="v26.0714.2"
         onClose={vi.fn()}
       />,
     )
@@ -102,7 +103,7 @@ describe('ProductionDeployDialog', () => {
     expect(trigger).toHaveBeenCalledWith({
       repository: 'Orange-Health/accounts',
       service: 'accounts',
-      imageTag: 'v-26.0714.2',
+      imageTag: 'v26.0714.2',
       qaApprovalRequired: false,
       qaName: undefined,
       skipProdMigration: false,
