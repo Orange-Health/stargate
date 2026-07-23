@@ -623,6 +623,101 @@ describe('repository state cache', () => {
     expect(fetchMock).toHaveBeenCalledTimes(12)
     clearRepositoryCaches(config, 'Orange-Health/service-api')
   })
+
+  it('finds promotion PRs for repositories forked within the same organization', async () => {
+    const repository = 'Orange-Health/asbru'
+    const promotionPull = {
+      number: 196,
+      node_id: 'PR_kwDOAsbru',
+      title: 'Promote release to main',
+      body: null,
+      html_url: 'https://github.test/Orange-Health/asbru/pull/196',
+      draft: false,
+      merged_at: null,
+      mergeable: true,
+      mergeable_state: 'blocked',
+      base: { ref: 'main' },
+      head: {
+        ref: 'release',
+        sha: 'release-sha',
+        repo: { full_name: repository },
+      },
+    }
+    const sameBranchFromAnotherFork = {
+      ...promotionPull,
+      number: 195,
+      head: {
+        ...promotionPull.head,
+        repo: { full_name: 'Orange-Health/bifrost' },
+      },
+    }
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith(`/repos/${repository}`)) {
+        return new Response(
+          JSON.stringify({ full_name: repository, default_branch: 'main' }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/releases?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/compare/')) {
+        const hasReleaseChanges = url.includes('/compare/main...release')
+        return new Response(
+          JSON.stringify({
+            ahead_by: hasReleaseChanges ? 1 : 0,
+            behind_by: 0,
+            files: hasReleaseChanges ? [{ filename: 'Dockerfile' }] : [],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.includes('/pulls?')) {
+        const requestUrl = new URL(url)
+        expect(requestUrl.searchParams.has('head')).toBe(false)
+        const pulls =
+          requestUrl.searchParams.get('state') === 'open' &&
+          requestUrl.searchParams.get('base') === 'main'
+            ? [sameBranchFromAnotherFork, promotionPull]
+            : []
+        return new Response(JSON.stringify(pulls), { status: 200 })
+      }
+      if (url.includes('/pulls/196/reviews?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/commits/release-sha/check-runs?')) {
+        return new Response(JSON.stringify({ check_runs: [] }), {
+          status: 200,
+        })
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    clearRepositoryCaches(config, repository)
+
+    const state = await getRepositoryReleaseState(config, repository)
+
+    expect(
+      state.promotionSteps.find(
+        (step) => step.route === 'release-to-default',
+      ),
+    ).toMatchObject({
+      state: 'pr_open',
+      pullRequest: { number: 196 },
+    })
+    clearRepositoryCaches(config, repository)
+  })
 })
 
 describe('release build status polling', () => {
