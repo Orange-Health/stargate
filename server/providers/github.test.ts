@@ -331,6 +331,79 @@ describe('Jira development links', () => {
     ).toBe(false)
   })
 
+  it('keeps the last known GitHub rate limit when provider caches satisfy a refresh', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url === 'https://api.github.com/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          variables: Record<string, string | number>
+        }
+        const data: Record<string, unknown> = {}
+        for (const key of Object.keys(body.variables)) {
+          const match = /^number(\d+)$/.exec(key)
+          if (!match) continue
+          const index = match[1]
+          const pullNumber = Number(body.variables[key])
+          data[`p${index}`] = {
+            pullRequest: {
+              databaseId: pullNumber,
+              number: pullNumber,
+              title: 'OH-999 linked work',
+              url: `https://github.com/Orange-Health/service-api/pull/${pullNumber}`,
+              state: 'OPEN',
+              isDraft: false,
+              merged: false,
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'CLEAN',
+              baseRefName: 'dev',
+              headRefName: 'feature/OH-999',
+              updatedAt: '2026-07-15T08:00:00Z',
+              reviewDecision: 'APPROVED',
+              author: { login: 'dev', avatarUrl: 'https://avatar.test/dev' },
+              assignees: { nodes: [] },
+              latestReviews: { nodes: [] },
+              commits: { nodes: [] },
+            },
+          }
+        }
+        return new Response(JSON.stringify({ data }), {
+          status: 200,
+          headers: {
+            'x-ratelimit-remaining': '4321',
+            'x-ratelimit-limit': '5000',
+            'x-ratelimit-reset': '1893456000',
+          },
+        })
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    const issues = [
+      {
+        key: 'OH-999',
+        developmentSummary:
+          'https://github.com/Orange-Health/service-api/pull/99',
+      },
+    ]
+
+    const first = await discoverPullRequests(config, issues)
+    expect(first.rateLimit?.remaining).toBe(4321)
+
+    const second = await discoverPullRequests(config, issues)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(second.rateLimit?.remaining).toBe(4321)
+  })
+
   it('batches unique pull request details in a single GraphQL request', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input)

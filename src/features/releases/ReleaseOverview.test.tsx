@@ -253,6 +253,8 @@ describe('ReleaseOverview', () => {
     ).toBeInTheDocument()
     expect(screen.getByDisplayValue('orange/service-api')).toBeDisabled()
     expect(screen.getByText(/A pre-release tag will be created/)).toBeVisible()
+    expect(screen.queryByLabelText(/release date/i)).not.toBeInTheDocument()
+    expect(screen.getByText('v-qa-v26.0716.N')).toBeVisible()
     expect(
       screen.queryByRole('option', { name: 'Production' }),
     ).not.toBeInTheDocument()
@@ -672,6 +674,61 @@ describe('ReleaseOverview', () => {
     expect(onRefresh).toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: 'Merge to dev' })).not.toBeInTheDocument()
     expect(screen.getByText('Merged')).toBeInTheDocument()
+  })
+
+  it('force merges an unapproved feature PR targeting dev', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const merge = vi
+      .spyOn(api, 'mergeFeaturePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Force-merged' })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const blockedItem = {
+      ...dashboard.services[0].items[0],
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        baseBranch: 'dev',
+        reviewDecision: 'review_required' as const,
+        checks: 'pending' as const,
+      },
+      eligible: false,
+      blockingReasons: ['REVIEW_REQUIRED' as const],
+      warningReasons: ['CHECKS_PENDING' as const],
+    }
+    const blockedDashboard: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [],
+      services: [
+        {
+          ...dashboard.services[0],
+          eligibleCount: 0,
+          blockedCount: 1,
+          items: [blockedItem],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[blockedDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={blockedDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Force merge to dev' }),
+    )
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'orange/service-api',
+      pullNumber: 8,
+      bypassBranchProtection: true,
+    })
+    expect(onRefresh).toHaveBeenCalled()
   })
 
   it('does not reload enrichment when only dashboard freshness changes', async () => {

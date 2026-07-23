@@ -255,14 +255,21 @@ function ServiceDetail({
     setService(initialService)
   }, [initialService])
 
-  async function mergePullRequest(pullNumber: number) {
-    if (!window.confirm(`Merge feature PR #${pullNumber} into dev?`)) return
+  async function mergePullRequest(
+    pullNumber: number,
+    bypassBranchProtection = false,
+  ) {
+    const confirmMessage = bypassBranchProtection
+      ? `Force merge feature PR #${pullNumber} into dev?\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`
+      : `Merge feature PR #${pullNumber} into dev?`
+    if (!window.confirm(confirmMessage)) return
     setMerging(pullNumber)
     setMergeError('')
     try {
       await api.mergeFeaturePullRequest({
         repository: service.repository,
         pullNumber,
+        ...(bypassBranchProtection ? { bypassBranchProtection: true } : {}),
       })
       setOptimisticallyMerged((current) => new Set(current).add(pullNumber))
       await onDataChanged()
@@ -379,6 +386,19 @@ function ServiceDetail({
             !service.backMergePending &&
             !item.pullRequest?.merged &&
             !optimisticallyMerged.has(item.pullRequest?.number ?? -1)
+          const forceMergeReady =
+            Boolean(item.pullRequest) &&
+            item.pullRequest!.baseBranch === 'dev' &&
+            !item.pullRequest!.merged &&
+            !item.pullRequest!.draft &&
+            !mergeReady &&
+            !service.backMergePending &&
+            !optimisticallyMerged.has(item.pullRequest!.number) &&
+            !item.blockingReasons.includes('NO_MATCHING_PR') &&
+            !item.blockingReasons.includes('HAS_CONFLICTS') &&
+            !item.blockingReasons.includes('MERGEABILITY_PENDING') &&
+            !item.blockingReasons.includes('DRAFT') &&
+            !item.blockingReasons.includes('ALREADY_MERGED')
           return (
             <article
               className="pr-row"
@@ -468,6 +488,20 @@ function ServiceDetail({
                   {merging === item.pullRequest.number
                     ? 'Merging…'
                     : 'Merge to dev'}
+                </button>
+              )}
+              {forceMergeReady && item.pullRequest && (
+                <button
+                  className="merge-feature-button"
+                  type="button"
+                  disabled={merging === item.pullRequest.number}
+                  onClick={() =>
+                    void mergePullRequest(item.pullRequest!.number, true)
+                  }
+                >
+                  {merging === item.pullRequest.number
+                    ? 'Force merging…'
+                    : 'Force merge to dev'}
                 </button>
               )}
             </div>
@@ -1187,6 +1221,7 @@ export function ReleaseOverview({
       {releaseRepository && (
         <StagingReleaseDialog
           repository={releaseRepository}
+          releaseDate={dashboard?.version.releaseDate ?? ''}
           onClose={() => setReleaseRepository('')}
         />
       )}

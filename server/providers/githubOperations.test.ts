@@ -13,6 +13,7 @@ import {
   getRepositoryReleaseState,
   hasActualMergeConflict,
   mergeBackMergePullRequest,
+  mergeFeaturePullRequest,
   promotionBranches,
   releaseTimestamp,
   sortReleasesNewestFirst,
@@ -199,6 +200,158 @@ describe('back-merge PR merging', () => {
     await expect(
       mergeBackMergePullRequest(config, 'Orange-Health/service-api', 42),
     ).resolves.toMatchObject({ merged: true })
+  })
+})
+
+describe('feature PR force merge', () => {
+  const config: ConnectionConfig = {
+    jiraSite: 'https://jira.test',
+    jiraEmail: 'rm@test.com',
+    jiraToken: 'jira',
+    githubOrg: 'Orange-Health',
+    githubToken: 'github',
+    jenkinsUrl: 'https://jenkins.test',
+    jenkinsUsername: 'rm',
+    jenkinsToken: 'jenkins',
+  }
+
+  function featurePullFixture(overrides: Record<string, unknown> = {}) {
+    return {
+      number: 8,
+      node_id: 'PR_kwDOForceMerge',
+      title: 'OH-123 Ship it',
+      body: null,
+      html_url: 'https://github.test/pull/8',
+      draft: false,
+      merged_at: null,
+      mergeable: true,
+      mergeable_state: 'blocked',
+      base: { ref: 'dev' },
+      head: { ref: 'feature/OH-123', sha: 'abc123' },
+      ...overrides,
+    }
+  }
+
+  function mockFeatureMergeApis(options: {
+    pull?: Record<string, unknown>
+    reviews?: unknown[]
+    checkRuns?: unknown[]
+    onGraphql?: (body: unknown) => void
+    onRestMerge?: () => void
+  }) {
+    const pull = featurePullFixture(options.pull)
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(JSON.stringify({ default_branch: 'main' }), {
+          status: 200,
+        })
+      }
+      if (url.includes('/pulls?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/8')) {
+        return new Response(JSON.stringify(pull), { status: 200 })
+      }
+      if (url.includes('/reviews?')) {
+        return new Response(JSON.stringify(options.reviews ?? []), {
+          status: 200,
+        })
+      }
+      if (url.includes('/check-runs?')) {
+        return new Response(
+          JSON.stringify({
+            check_runs: options.checkRuns ?? [
+              { status: 'in_progress', conclusion: null },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === 'https://api.github.com/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}'))
+        options.onGraphql?.(body)
+        return new Response(
+          JSON.stringify({
+            data: {
+              mergePullRequest: {
+                pullRequest: {
+                  merged: true,
+                  mergeCommit: { oid: 'deadbeef' },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/pulls/8/merge')) {
+        options.onRestMerge?.()
+        return new Response(
+          JSON.stringify({ merged: true, message: 'merged' }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('force merges via GraphQL without requiring approval or completed checks', async () => {
+    let graphqlBody: unknown
+    mockFeatureMergeApis({
+      onGraphql: (body) => {
+        graphqlBody = body
+      },
+    })
+
+    await expect(
+      mergeFeaturePullRequest(config, 'Orange-Health/service-api', 8, true),
+    ).resolves.toMatchObject({
+      merged: true,
+      sha: 'deadbeef',
+      message: 'Force-merged with branch protection bypass.',
+    })
+
+    expect(graphqlBody).toMatchObject({
+      variables: {
+        input: {
+          pullRequestId: 'PR_kwDOForceMerge',
+          mergeMethod: 'MERGE',
+        },
+      },
+    })
+  })
+
+  it('rejects force merge when the PR has real conflicts', async () => {
+    mockFeatureMergeApis({
+      pull: { mergeable: false, mergeable_state: 'dirty' },
+    })
+
+    await expect(
+      mergeFeaturePullRequest(config, 'Orange-Health/service-api', 8, true),
+    ).rejects.toMatchObject({ code: 'FEATURE_PR_NOT_MERGEABLE' })
+  })
+
+  it('still requires approval on the normal merge path', async () => {
+    let restMergeCalled = false
+    mockFeatureMergeApis({
+      onRestMerge: () => {
+        restMergeCalled = true
+      },
+    })
+
+    await expect(
+      mergeFeaturePullRequest(config, 'Orange-Health/service-api', 8, false),
+    ).rejects.toMatchObject({ code: 'FEATURE_PR_NOT_APPROVED' })
+    expect(restMergeCalled).toBe(false)
   })
 })
 

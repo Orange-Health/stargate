@@ -149,6 +149,7 @@ export function clearGitHubProviderCache(
   if (!repository) {
     pullCache.clear()
     searchCache.clear()
+    latestRateLimit = undefined
     for (const cache of knownConditionalCaches) cache.clear()
     knownConditionalCaches.clear()
     githubRequestScheduler.reset()
@@ -420,13 +421,21 @@ function recordGitHubRateLimit(response: Response) {
   }
 }
 
+type GraphqlVariables = Record<
+  string,
+  string | number | boolean | null | Record<string, string | number | boolean | null>
+>
+
 async function githubGraphql<T extends Record<string, unknown>>(
   config: ConnectionConfig,
   query: string,
-  variables: Record<string, string | number>,
+  variables: GraphqlVariables,
+  options?: { asMutation?: boolean },
 ): Promise<T> {
-  // GraphQL is always POST; schedule as GET so read concurrency applies
-  const response = await githubRequestScheduler.schedule('GET', () =>
+  // GraphQL is always POST; schedule reads as GET so read concurrency applies.
+  // Mutations use POST scheduling so they serialize with other writes.
+  const scheduleMethod = options?.asMutation ? 'POST' : 'GET'
+  const response = await githubRequestScheduler.schedule(scheduleMethod, () =>
     fetch('https://api.github.com/graphql', {
       method: 'POST',
       headers: {
@@ -462,6 +471,59 @@ async function githubGraphql<T extends Record<string, unknown>>(
     502,
     false,
   )
+}
+
+export type GraphqlMergeMethod = 'MERGE' | 'SQUASH' | 'REBASE'
+
+export async function mergePullRequestViaGraphql(
+  config: ConnectionConfig,
+  pullRequestNodeId: string,
+  mergeMethod: GraphqlMergeMethod = 'MERGE',
+): Promise<{ merged: boolean; sha?: string }> {
+  const data = await githubGraphql<{
+    mergePullRequest: {
+      pullRequest: {
+        merged: boolean
+        mergeCommit: { oid: string } | null
+      } | null
+    } | null
+  }>(
+    config,
+    `
+    mutation MergePullRequest($input: MergePullRequestInput!) {
+      mergePullRequest(input: $input) {
+        pullRequest {
+          merged
+          mergeCommit {
+            oid
+          }
+        }
+      }
+    }
+    `,
+    {
+      input: {
+        pullRequestId: pullRequestNodeId,
+        mergeMethod,
+      },
+    },
+    { asMutation: true },
+  )
+
+  const pull = data.mergePullRequest?.pullRequest
+  if (!pull?.merged) {
+    throw new ProviderError(
+      'GitHub GraphQL merge did not report success.',
+      'PROVIDER_REQUEST_FAILED',
+      'github',
+      502,
+      false,
+    )
+  }
+  return {
+    merged: true,
+    sha: pull.mergeCommit?.oid,
+  }
 }
 
 export function repositoryPath(repository: string) {
@@ -1100,7 +1162,8 @@ export async function discoverPullRequests(
   issues: Array<{ key: string; developmentSummary?: string }>,
   reportProgress?: (progress: DashboardProgress) => void,
 ): Promise<GitHubDiscovery> {
-  latestRateLimit = undefined
+  // Keep the last known rate limit when provider caches satisfy the request
+  // without new GitHub HTTP calls (otherwise the UI shows "—").
   const byIssue = new Map<string, PullRequest[]>(
     issues.map((issue) => [issue.key, []]),
   )
@@ -1146,7 +1209,7 @@ export async function discoverPullRequests(
       searchesStarted += 1
       reportProgress?.({
         phase: 'github-search',
-        message: `Searching GitHub for pull requests (batch ${searchesStarted} of ${searchBatches.length})…`,
+        message: 'Searching GitHub for pull requests…',
         current: Math.min(
           searchesStarted * SEARCH_ISSUE_BATCH_SIZE,
           uncachedIssueKeys.length,
@@ -1224,7 +1287,7 @@ export async function discoverPullRequests(
         fallbackStarted += 1
         reportProgress?.({
           phase: 'github-search',
-          message: `Retrying GitHub search for ${issueKey}…`,
+          message: 'Searching GitHub for pull requests…',
           current: fallbackStarted,
           total: keysNeedingFallback.length,
         })
@@ -1277,7 +1340,7 @@ export async function discoverPullRequests(
       batchesCompleted += 1
       reportProgress?.({
         phase: 'github-details',
-        message: `Loading pull request details (batch ${batchesCompleted} of ${batches.length})…`,
+        message: 'Loading pull request details…',
         current: Math.min(
           batchesCompleted * GRAPHQL_PULL_BATCH_SIZE,
           uncached.length,
