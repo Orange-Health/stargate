@@ -359,6 +359,11 @@ select:focus {
   box-shadow: 0 0 0 3px rgb(59 130 246 / 18%);
 }
 
+input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 button {
   font: inherit;
 }
@@ -402,6 +407,10 @@ button:disabled {
   opacity: 0.55;
 }
 
+:root:not([data-theme='light']) button:disabled {
+  opacity: 0.72;
+}
+
 .alert {
   border: 1px solid;
   border-radius: 9px;
@@ -425,7 +434,7 @@ button:disabled {
 
 .topbar {
   align-items: center;
-  background: rgb(10 15 24 / 88%);
+  background: rgb(7 11 18 / 94%);
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--line);
   display: flex;
@@ -661,13 +670,13 @@ button:disabled {
 }
 
 .readiness-score p {
-  color: #aeb4af;
+  color: var(--on-strong-muted);
   font-size: 11px;
   margin: 4px 0 0;
 }
 
 .stat {
-  border-left: 1px solid #2b3a54;
+  border-left: 1px solid var(--line-strong);
   display: flex;
   flex: 0 0 150px;
   flex-direction: column;
@@ -682,7 +691,7 @@ button:disabled {
 }
 
 .stat span {
-  color: #aeb4af;
+  color: var(--on-strong-muted);
   font-size: 10px;
   margin-top: 3px;
   text-transform: uppercase;
@@ -1028,7 +1037,7 @@ button:disabled {
 }
 
 .detail-panel {
-  background: #080d15;
+  background: var(--surface-subtle);
   min-width: 0;
   overflow: hidden;
   display: flex;
@@ -1435,7 +1444,7 @@ button:disabled {
 }
 
 .service-operations {
-  background: #080d15;
+  background: var(--surface-subtle);
   border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
@@ -2323,7 +2332,7 @@ label {
 }
 
 .release-day-header p {
-  color: #aeb8ca;
+  color: var(--muted);
   font-size: 12px;
   margin: 0;
 }
@@ -2454,7 +2463,7 @@ label {
 
 .release-day-step.locked {
   background: var(--paper-warm);
-  opacity: 0.68;
+  opacity: 0.78;
 }
 
 .release-day-step > span:first-child {
@@ -2541,12 +2550,12 @@ label {
 }
 
 .release-day-table tr.unselected {
-  opacity: 0.42;
+  opacity: 0.58;
 }
 
 .release-day-table tr.sync-in-progress {
   cursor: wait;
-  opacity: 0.58;
+  opacity: 0.72;
 }
 
 .release-day-table tr.sync-in-progress td {
@@ -2931,7 +2940,7 @@ label {
 
 .release-day-log > div > span,
 .release-day-log > p {
-  color: #aeb8ca;
+  color: var(--on-strong-muted);
   font-size: 10px;
 }
 
@@ -2954,7 +2963,7 @@ label {
 
 .release-day-log li {
   align-items: baseline;
-  border-top: 1px solid #2b3a54;
+  border-top: 1px solid var(--line-strong);
   display: grid;
   font-size: 10px;
   gap: 9px;
@@ -2964,7 +2973,7 @@ label {
 
 .release-day-log time,
 .release-day-log code {
-  color: #aeb8ca;
+  color: var(--on-strong-muted);
 }
 
 .release-day-log li.success span {
@@ -3044,7 +3053,7 @@ label {
   }
 
   .stat {
-    border-top: 1px solid #2b3a54;
+    border-top: 1px solid var(--line-strong);
     flex: 1;
   }
 
