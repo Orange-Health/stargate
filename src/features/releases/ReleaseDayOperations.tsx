@@ -10,6 +10,29 @@ import type {
   TrackedProductionRelease,
 } from '../../shared/types'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
+import {
+  RELEASE_NOTES_BOT_AUTHORS,
+  cleanGitHubReleaseDescription,
+  copyReleaseNotesContent,
+  githubDescriptionToHtml,
+  githubDescriptionToPlain,
+  isReleaseNotesBotAuthor,
+  latestProductionReleaseOnDate,
+  releaseCreatedOnDate,
+  releaseNotesForDashboard,
+  type ReleaseNotesFormat,
+} from './releaseNotes'
+
+export {
+  RELEASE_NOTES_BOT_AUTHORS,
+  cleanGitHubReleaseDescription,
+  githubDescriptionToHtml,
+  githubDescriptionToPlain,
+  isReleaseNotesBotAuthor,
+  latestProductionReleaseOnDate,
+  releaseCreatedOnDate,
+  releaseNotesForDashboard,
+}
 
 type Props = {
   dashboard: ReleaseDashboard
@@ -93,240 +116,10 @@ function localDate() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-export function releaseCreatedOnDate(
-  createdAt: string,
-  releaseDate: string,
-) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(releaseDate)
-    ? createdAt.slice(0, 10) === releaseDate
-    : false
-}
-
-export function latestProductionReleaseOnDate(
-  releases: TrackedProductionRelease[],
-  releaseDate: string,
-) {
-  return releases
-    .filter((release) => releaseCreatedOnDate(release.createdAt, releaseDate))
-    .sort(
-      (left, right) =>
-        new Date(right.createdAt).getTime() -
-        new Date(left.createdAt).getTime(),
-    )[0]
-}
-
 export function defaultBranchNeedsNewProductionTag(
   state: RepositoryReleaseState | undefined,
 ) {
   return Boolean(state?.latestProductionTagDelta?.hasSourceChanges)
-}
-
-export const RELEASE_NOTES_BOT_AUTHORS = [
-  'devopsautomation-oh',
-] as const
-
-export function isReleaseNotesBotAuthor(value: string) {
-  const login = value.replace(/^@/, '').toLowerCase()
-  return RELEASE_NOTES_BOT_AUTHORS.some((bot) => bot === login)
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-}
-
-export function cleanGitHubReleaseDescription(text: string) {
-  const withoutComments = text.replace(/<!--[\s\S]*?-->/g, '').trim()
-  if (!withoutComments) return ''
-
-  const keptLines: string[] = []
-  for (const line of withoutComments.split('\n')) {
-    const authors = [...line.matchAll(/@([A-Za-z0-9-]+)/g)].map(
-      (match) => match[1],
-    )
-    if (
-      authors.some((author) => isReleaseNotesBotAuthor(author)) ||
-      (/back(?:port|merg)/i.test(line) &&
-        /devopsautomation-oh/i.test(line))
-    ) {
-      continue
-    }
-    keptLines.push(line)
-  }
-
-  return keptLines
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function markdownInlineToHtml(text: string) {
-  return escapeHtml(text)
-    .replace(
-      /\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-      '<a href="$2">$1</a>',
-    )
-    .replace(
-      /(https?:\/\/github\.com\/[^\s<]+)/g,
-      '<a href="$1">$1</a>',
-    )
-    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-    .replace(/__([^_]+)__/g, '<b>$1</b>')
-}
-
-export function githubDescriptionToHtml(text: string) {
-  const cleaned = cleanGitHubReleaseDescription(text)
-  if (!cleaned) return ''
-
-  const blocks: string[] = []
-  let listItems: string[] = []
-
-  const flushList = () => {
-    if (listItems.length === 0) return
-    blocks.push(`<ul>${listItems.join('')}</ul>`)
-    listItems = []
-  }
-
-  for (const line of cleaned.split('\n')) {
-    const heading = /^#{1,6}\s+(.+)$/.exec(line)
-    const bullet = /^\s*[-*]\s+(.+)$/.exec(line)
-    if (heading) {
-      flushList()
-      blocks.push(`<p><b>${markdownInlineToHtml(heading[1])}</b></p>`)
-      continue
-    }
-    if (bullet) {
-      listItems.push(`<li>${markdownInlineToHtml(bullet[1])}</li>`)
-      continue
-    }
-    if (!line.trim()) {
-      flushList()
-      continue
-    }
-    flushList()
-    blocks.push(`<p>${markdownInlineToHtml(line)}</p>`)
-  }
-  flushList()
-  return blocks.join('')
-}
-
-export function githubDescriptionToPlain(text: string) {
-  return cleanGitHubReleaseDescription(text)
-    .replace(/^#{1,6}\s+(.+)$/gm, '$1')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '$1 ($2)')
-    .replace(/^\s*[-*]\s+/gm, '• ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function serviceChangeSummary(
-  service: ReleaseDashboard['services'][number],
-): { plain: string; html: string } {
-  const items = service.items.filter((item) => {
-    const author = item.pullRequest?.author
-    return !author || !isReleaseNotesBotAuthor(author)
-  })
-  if (items.length === 0) return { plain: '', html: '' }
-
-  const plain = items
-    .map((item) => {
-      const issue = `• ${item.issue.key}: ${item.issue.summary}`
-      if (!item.pullRequest) return issue
-      return `${issue}\n  PR #${item.pullRequest.number}: ${item.pullRequest.title}\n  ${item.pullRequest.url}`
-    })
-    .join('\n')
-
-  const html = `<ul>${items
-    .map((item) => {
-      const issue = `${escapeHtml(item.issue.key)}: ${escapeHtml(item.issue.summary)}`
-      if (!item.pullRequest) return `<li>${issue}</li>`
-      return `<li>${issue}<br><a href="${escapeHtml(item.pullRequest.url)}">PR #${item.pullRequest.number}</a> — ${escapeHtml(item.pullRequest.title)}</li>`
-    })
-    .join('')}</ul>`
-
-  return { plain, html }
-}
-
-export function releaseNotesForDashboard(
-  dashboard: ReleaseDashboard,
-  releasesByRepository: Record<string, TrackedProductionRelease[]>,
-  releaseDate: string,
-) {
-  const plainSections: string[] = []
-  const htmlSections: string[] = []
-
-  for (const service of dashboard.services) {
-    const release = latestProductionReleaseOnDate(
-      releasesByRepository[service.repository] ?? [],
-      releaseDate,
-    )
-    const serviceName =
-      service.repository.split('/').at(-1) ?? service.repository
-    const fallback = serviceChangeSummary(service)
-
-    if (!release) {
-      plainSections.push(
-        `${serviceName}\nTag: Not created\n${fallback.plain || 'No tickets linked to this service.'}`,
-      )
-      htmlSections.push(
-        `<p><b>${escapeHtml(serviceName)}</b><br>Tag: <i>Not created</i></p>${fallback.html || '<p><i>No tickets linked to this service.</i></p>'}`,
-      )
-      continue
-    }
-
-    const githubHtml = githubDescriptionToHtml(release.description ?? '')
-    const githubPlain = githubDescriptionToPlain(release.description ?? '')
-    const descriptionPlain =
-      githubPlain ||
-      fallback.plain ||
-      'No changes listed for this service.'
-    const descriptionHtml =
-      githubHtml ||
-      fallback.html ||
-      '<p><i>No changes listed for this service.</i></p>'
-
-    plainSections.push(
-      `${serviceName}\nTag: ${release.tag}\n${release.url}\n${descriptionPlain}`,
-    )
-    htmlSections.push(
-      `<p><b>${escapeHtml(serviceName)}</b><br>Tag: <a href="${escapeHtml(release.url)}">${escapeHtml(release.tag)}</a></p>${descriptionHtml}`,
-    )
-  }
-
-  return {
-    plain: `${dashboard.version.name}\nRelease date: ${releaseDate}\n\n${plainSections.join('\n\n')}`,
-    html: `<p><b>${escapeHtml(dashboard.version.name)}</b><br>Release date: ${escapeHtml(releaseDate)}</p>${htmlSections.join('<hr>')}`,
-  }
-}
-
-async function copyReleaseNotesContent(notes: {
-  plain: string
-  html: string
-}) {
-  if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-    await navigator.clipboard.write([
-      new ClipboardItem({
-        'text/plain': new Blob([notes.plain], { type: 'text/plain' }),
-        'text/html': new Blob([notes.html], { type: 'text/html' }),
-      }),
-    ])
-    return
-  }
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(notes.plain)
-    return
-  }
-  const textarea = document.createElement('textarea')
-  textarea.value = notes.plain
-  textarea.style.position = 'fixed'
-  textarea.style.opacity = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
-  document.execCommand('copy')
-  textarea.remove()
 }
 
 function sessionKey(versionId: string) {
@@ -614,6 +407,8 @@ export function ReleaseDayOperations({
   const [copyNotesStatus, setCopyNotesStatus] = useState<
     'idle' | 'copying' | 'copied' | 'error'
   >('idle')
+  const [copyNotesMenuOpen, setCopyNotesMenuOpen] = useState(false)
+  const copyNotesMenuRef = useRef<HTMLDivElement>(null)
   const [cellOperation, setCellOperation] = useState<CellOperation>()
   const [repositorySync, setRepositorySync] = useState<
     Record<string, RepositorySyncStatus>
@@ -1512,8 +1307,23 @@ export function ReleaseDayOperations({
     })
   }
 
-  async function copyReleaseNotes() {
+  useEffect(() => {
+    if (!copyNotesMenuOpen) return
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (
+        copyNotesMenuRef.current &&
+        !copyNotesMenuRef.current.contains(event.target as Node)
+      ) {
+        setCopyNotesMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', closeOnOutsideClick)
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick)
+  }, [copyNotesMenuOpen])
+
+  async function copyReleaseNotes(format: ReleaseNotesFormat) {
     if (copyNotesStatus === 'copying') return
+    setCopyNotesMenuOpen(false)
     setCopyNotesStatus('copying')
     const releasesByRepository: Record<string, TrackedProductionRelease[]> = {}
     const failures: string[] = []
@@ -1547,11 +1357,12 @@ export function ReleaseDayOperations({
           releasesByRepository,
           sessionRef.current.releaseDate,
         ),
+        format,
       )
       setCopyNotesStatus('copied')
       log(
         'success',
-        `Copied release notes for ${dashboard.services.length} repositories.`,
+        `Copied ${format} release notes for ${dashboard.services.length} repositories.`,
       )
     } catch (reason) {
       setCopyNotesStatus('error')
@@ -1629,24 +1440,51 @@ export function ReleaseDayOperations({
                     ? `Syncing ${syncCompleted}/${selected.length}`
                     : '↻ Refresh status'}
                 </button>
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void copyReleaseNotes()}
-                  disabled={
-                    refreshing ||
-                    Boolean(busyAction) ||
-                    copyNotesStatus === 'copying'
-                  }
-                >
-                  {copyNotesStatus === 'copying'
-                    ? 'Copying…'
-                    : copyNotesStatus === 'copied'
-                      ? '✓ Copied!'
-                      : copyNotesStatus === 'error'
-                        ? 'Retry Copy Release Notes'
-                        : 'Copy Release Notes'}
-                </button>
+                <div className="copy-notes-menu" ref={copyNotesMenuRef}>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={copyNotesMenuOpen}
+                    onClick={() =>
+                      setCopyNotesMenuOpen((current) => !current)
+                    }
+                    disabled={
+                      refreshing ||
+                      Boolean(busyAction) ||
+                      copyNotesStatus === 'copying'
+                    }
+                  >
+                    {copyNotesStatus === 'copying'
+                      ? 'Copying…'
+                      : copyNotesStatus === 'copied'
+                        ? '✓ Copied!'
+                        : copyNotesStatus === 'error'
+                          ? 'Retry Copy Release Notes'
+                          : 'Copy Release Notes'}
+                    <span aria-hidden="true">
+                      {copyNotesMenuOpen ? '⌃' : '⌄'}
+                    </span>
+                  </button>
+                  {copyNotesMenuOpen && (
+                    <div className="copy-notes-menu-panel" role="menu">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => void copyReleaseNotes('slack')}
+                      >
+                        Slack
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => void copyReleaseNotes('plain')}
+                      >
+                        Plain text
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   className="secondary-button"
                   type="button"

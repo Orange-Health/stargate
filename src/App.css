@@ -2479,6 +2479,43 @@ label {
   padding: 0 10px;
 }
 
+.copy-notes-menu {
+  position: relative;
+}
+
+.copy-notes-menu-panel {
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 18%);
+  display: grid;
+  gap: 2px;
+  min-width: 140px;
+  padding: 4px;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+}
+
+.copy-notes-menu-panel button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.copy-notes-menu-panel button:hover {
+  background: var(--green-faint);
+  border-color: var(--green);
+  color: var(--green-pale);
+}
+
 .release-day-toolbar .text-button {
   font-size: 10px;
 }

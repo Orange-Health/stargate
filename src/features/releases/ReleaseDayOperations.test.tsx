@@ -628,15 +628,20 @@ describe('ReleaseDayOperations', () => {
       { [repository]: [productionRelease] },
       '2026-07-16',
     )
-    expect(notes.html).toContain('<b>service-api</b>')
-    expect(notes.html).toContain(
-      `<a href="${productionRelease.url}">${productionRelease.tag}</a>`,
+    expect(notes.slack).toContain(
+      '*service-api* : <https://github.test/releases/96|v-26.0716.1>',
     )
-    expect(notes.html).toContain('Real feature by @alice')
     expect(notes.html).toContain(
-      '<a href="https://github.com/Orange-Health/service-api/pull/101">https://github.com/Orange-Health/service-api/pull/101</a>',
+      '<b>service-api</b>: <a href="https://github.test/releases/96">v-26.0716.1</a>',
     )
-    expect(notes.html).not.toContain('devopsautomation-oh')
+    expect(notes.slack).toContain(
+      '- <https://jira.test/OH-101|OH-101>: Improve checkout by <https://github.com/alice|@alice> in <https://github.test/pull/101|PR>',
+    )
+    expect(notes.slack).not.toContain('Real feature by @alice')
+    expect(notes.slack).not.toContain('devopsautomation-oh')
+    expect(notes.plain).toContain(
+      '• OH-101: Improve checkout by @alice (https://github.com/alice)',
+    )
     expect(notes.plain).not.toContain('devopsautomation-oh')
     expect(notes.plain).not.toContain('release-desk-operation')
 
@@ -648,8 +653,9 @@ describe('ReleaseDayOperations', () => {
       />,
     )
     await user.click(
-      screen.getByRole('button', { name: 'Copy Release Notes' }),
+      screen.getByRole('button', { name: /Copy Release Notes/i }),
     )
+    await user.click(screen.getByRole('menuitem', { name: 'Slack' }))
 
     await waitFor(() => expect(write).toHaveBeenCalled())
     const item = write.mock.calls[0][0][0] as ClipboardItem
@@ -657,7 +663,7 @@ describe('ReleaseDayOperations', () => {
       expect.arrayContaining(['text/plain', 'text/html']),
     )
     expect(
-      screen.getByRole('button', { name: '✓ Copied!' }),
+      screen.getByRole('button', { name: /Copied!/i }),
     ).toBeVisible()
   })
 
