@@ -619,7 +619,6 @@ describe('ReleaseOverview', () => {
     const merge = vi
       .spyOn(api, 'mergeFeaturePullRequest')
       .mockResolvedValue({ merged: true, message: 'Merged' })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const readyItem = {
       ...dashboard.services[0].items[0],
       pullRequest: {
@@ -668,6 +667,7 @@ describe('ReleaseOverview', () => {
     expect(screen.getByAltText('reviewer')).toBeInTheDocument()
     expect(screen.getByText('0 of 1 tickets merged to dev')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Merge to dev' }))
+    await user.click(screen.getByRole('button', { name: 'Merge' }))
     expect(merge).toHaveBeenCalledWith({
       repository: 'orange/service-api',
       pullNumber: 8,
@@ -678,13 +678,279 @@ describe('ReleaseOverview', () => {
     expect(screen.getByText('Merged')).toBeInTheDocument()
   })
 
+  it('bulk merges all ready feature PRs into dev across services', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const merge = vi
+      .spyOn(api, 'mergeFeaturePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Merged' })
+    const firstReady = {
+      ...dashboard.services[0].items[0],
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        number: 8,
+        baseBranch: 'dev',
+        reviewDecision: 'approved' as const,
+        checks: 'success' as const,
+      },
+      eligible: true,
+      blockingReasons: [],
+      warningReasons: [],
+    }
+    const secondReady = {
+      ...dashboard.services[0].items[0],
+      issue: {
+        ...dashboard.services[0].items[0].issue,
+        key: 'OH-456',
+        url: 'https://jira.test/OH-456',
+      },
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        id: 2,
+        number: 9,
+        repository: 'orange/billing-api',
+        title: 'OH-456 Billing',
+        url: 'https://github.test/pull/9',
+        baseBranch: 'main',
+        reviewDecision: 'approved' as const,
+        checks: 'success' as const,
+      },
+      eligible: false,
+      blockingReasons: ['WRONG_BASE_BRANCH' as const],
+      warningReasons: [],
+    }
+    const readyDashboard: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [],
+      services: [
+        {
+          ...dashboard.services[0],
+          eligibleCount: 1,
+          blockedCount: 0,
+          items: [firstReady],
+        },
+        {
+          repository: 'orange/billing-api',
+          defaultBranch: 'main',
+          eligibleCount: 0,
+          blockedCount: 1,
+          mergedCount: 0,
+          backMergePending: false,
+          items: [secondReady],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[readyDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={readyDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Merge all ready release PRs into dev',
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Merge all' }))
+    expect(merge).toHaveBeenCalledTimes(2)
+    expect(merge).toHaveBeenNthCalledWith(1, {
+      repository: 'orange/service-api',
+      pullNumber: 8,
+      retargetToDev: false,
+    })
+    expect(merge).toHaveBeenNthCalledWith(2, {
+      repository: 'orange/billing-api',
+      pullNumber: 9,
+      retargetToDev: true,
+    })
+    expect(onRefresh).toHaveBeenCalled()
+  })
+
+  it('bulk merges all ready feature PRs for the selected service', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const merge = vi
+      .spyOn(api, 'mergeFeaturePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Merged' })
+    const firstReady = {
+      ...dashboard.services[0].items[0],
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        number: 8,
+        baseBranch: 'dev',
+        reviewDecision: 'approved' as const,
+        checks: 'success' as const,
+      },
+      eligible: true,
+      blockingReasons: [],
+      warningReasons: [],
+    }
+    const secondReady = {
+      ...dashboard.services[0].items[0],
+      issue: {
+        ...dashboard.services[0].items[0].issue,
+        key: 'OH-456',
+        url: 'https://jira.test/OH-456',
+      },
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        id: 2,
+        number: 9,
+        title: 'OH-456 Extra',
+        url: 'https://github.test/pull/9',
+        baseBranch: 'dev',
+        reviewDecision: 'approved' as const,
+        checks: 'success' as const,
+      },
+      eligible: true,
+      blockingReasons: [],
+      warningReasons: [],
+    }
+    const readyDashboard: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [],
+      services: [
+        {
+          ...dashboard.services[0],
+          eligibleCount: 2,
+          blockedCount: 0,
+          items: [firstReady, secondReady],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[readyDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={readyDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Merge all ready PRs into dev for this service',
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Merge all' }))
+    expect(merge).toHaveBeenCalledTimes(2)
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'orange/service-api',
+      pullNumber: 8,
+      retargetToDev: false,
+    })
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'orange/service-api',
+      pullNumber: 9,
+      retargetToDev: false,
+    })
+    expect(onRefresh).toHaveBeenCalled()
+  })
+
+  it('force merges PRs into dev, retargeting default-branch PRs', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const merge = vi
+      .spyOn(api, 'mergeFeaturePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Force-merged' })
+    const blockedDev = {
+      ...dashboard.services[0].items[0],
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        number: 8,
+        baseBranch: 'dev',
+        reviewDecision: 'review_required' as const,
+        checks: 'pending' as const,
+      },
+      eligible: false,
+      blockingReasons: ['REVIEW_REQUIRED' as const],
+      warningReasons: ['CHECKS_PENDING' as const],
+    }
+    const defaultBranchPr = {
+      ...dashboard.services[0].items[0],
+      issue: {
+        ...dashboard.services[0].items[0].issue,
+        key: 'OH-456',
+        url: 'https://jira.test/OH-456',
+      },
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        id: 2,
+        number: 9,
+        title: 'OH-456 Billing',
+        url: 'https://github.test/pull/9',
+        baseBranch: 'main',
+        reviewDecision: 'review_required' as const,
+        checks: 'failure' as const,
+      },
+      eligible: false,
+      blockingReasons: ['WRONG_BASE_BRANCH' as const, 'REVIEW_REQUIRED' as const],
+      warningReasons: ['CHECKS_FAILED' as const],
+    }
+    const forceDashboard: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [],
+      services: [
+        {
+          ...dashboard.services[0],
+          eligibleCount: 0,
+          blockedCount: 2,
+          items: [blockedDev, defaultBranchPr],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[forceDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={forceDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Force merge all release PRs into dev',
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Force merge all' }))
+    expect(merge).toHaveBeenCalledTimes(2)
+    expect(merge).toHaveBeenNthCalledWith(1, {
+      repository: 'orange/service-api',
+      pullNumber: 8,
+      retargetToDev: false,
+      bypassBranchProtection: true,
+    })
+    expect(merge).toHaveBeenNthCalledWith(2, {
+      repository: 'orange/service-api',
+      pullNumber: 9,
+      retargetToDev: true,
+      bypassBranchProtection: true,
+    })
+    expect(onRefresh).toHaveBeenCalled()
+  })
+
   it('retargets a default-branch PR to dev and merges it', async () => {
     const user = userEvent.setup()
     const onRefresh = vi.fn()
     const merge = vi
       .spyOn(api, 'mergeFeaturePullRequest')
       .mockResolvedValue({ merged: true, message: 'Merged' })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const retargetItem = {
       ...dashboard.services[0].items[0],
       pullRequest: {
@@ -723,6 +989,9 @@ describe('ReleaseOverview', () => {
     await user.click(
       screen.getByRole('button', { name: 'Retarget to dev and merge' }),
     )
+    await user.click(
+      screen.getByRole('button', { name: 'Retarget and merge' }),
+    )
     expect(merge).toHaveBeenCalledWith({
       repository: 'orange/service-api',
       pullNumber: 8,
@@ -737,7 +1006,6 @@ describe('ReleaseOverview', () => {
     const merge = vi
       .spyOn(api, 'mergeFeaturePullRequest')
       .mockResolvedValue({ merged: true, message: 'Force-merged' })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const blockedItem = {
       ...dashboard.services[0].items[0],
       pullRequest: {
@@ -778,6 +1046,7 @@ describe('ReleaseOverview', () => {
     await user.click(
       screen.getByRole('button', { name: 'Force merge to dev' }),
     )
+    await user.click(screen.getByRole('button', { name: 'Force merge' }))
     expect(merge).toHaveBeenCalledWith({
       repository: 'orange/service-api',
       pullNumber: 8,

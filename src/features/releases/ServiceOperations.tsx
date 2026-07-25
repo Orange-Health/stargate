@@ -8,6 +8,7 @@ import type {
   TrackedStagingRelease,
   TrackedProductionRelease,
 } from '../../shared/types'
+import { ConfirmDialog } from './ConfirmDialog'
 import { DeployDialog } from './DeployDialog'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
 
@@ -17,6 +18,15 @@ type Props = {
   view?: 'all' | 'releases' | 'branches' | 'hidden'
   onCreateStagingRelease?: () => void
   onCreateProductionRelease?: () => void
+}
+
+type PendingServiceMerge = {
+  kind: 'promotion' | 'back-merge'
+  force: boolean
+  pullNumber: number
+  fromBranch: string
+  toBranch: string
+  route: string
 }
 
 const buildLabels: Record<BuildStatus, string> = {
@@ -110,6 +120,7 @@ export function ServiceOperations({
     useState<TrackedStagingRelease>()
   const [productionDeployRelease, setProductionDeployRelease] =
     useState<TrackedProductionRelease>()
+  const [pendingMerge, setPendingMerge] = useState<PendingServiceMerge>()
   const [browserNotifications, setBrowserNotifications] = useState(
     () =>
       typeof Notification !== 'undefined' &&
@@ -407,58 +418,88 @@ export function ServiceOperations({
     if (!step.pullRequest) return
     const force =
       canForceMergePromotion(step, (state?.pendingBackMerges.length ?? 0) > 0)
-    const confirmed = window.confirm(
-      force
-        ? `Force merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?\n\nThis bypasses required checks. Your GitHub token must have branch-protection bypass access.`
-        : `Merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?`,
-    )
-    if (!confirmed) return
-    setBusyRoute(step.route)
+    setPendingMerge({
+      kind: 'promotion',
+      force,
+      pullNumber: step.pullRequest.number,
+      fromBranch: step.fromBranch,
+      toBranch: step.toBranch,
+      route: step.route,
+    })
+  }
+
+  async function mergeBackMerge(step: BackMergeStep) {
+    if (!step.pullRequest) return
+    const force = canForceMergeBackMerge(step)
+    setPendingMerge({
+      kind: 'back-merge',
+      force,
+      pullNumber: step.pullRequest.number,
+      fromBranch: step.fromBranch,
+      toBranch: step.toBranch,
+      route: step.route,
+    })
+  }
+
+  async function confirmPendingMerge() {
+    if (!pendingMerge) return
+    const pending = pendingMerge
+    setPendingMerge(undefined)
+    setBusyRoute(pending.route)
     setError('')
     try {
-      await api.mergePromotionPullRequest({
-        repository,
-        pullNumber: step.pullRequest.number,
-        ...(force ? { bypassBranchProtection: true } : {}),
-      })
+      if (pending.kind === 'promotion') {
+        await api.mergePromotionPullRequest({
+          repository,
+          pullNumber: pending.pullNumber,
+          ...(pending.force ? { bypassBranchProtection: true } : {}),
+        })
+      } else {
+        await api.mergeBackMergePullRequest({
+          repository,
+          pullNumber: pending.pullNumber,
+          ...(pending.force ? { bypassBranchProtection: true } : {}),
+        })
+      }
       await load(true)
     } catch (reason) {
       setError(
-        reason instanceof Error ? reason.message : 'Could not merge the PR.',
+        reason instanceof Error
+          ? reason.message
+          : pending.kind === 'promotion'
+            ? 'Could not merge the PR.'
+            : 'Could not merge the back-merge PR.',
       )
     } finally {
       setBusyRoute('')
     }
   }
 
-  async function mergeBackMerge(step: BackMergeStep) {
-    if (!step.pullRequest) return
-    const force = canForceMergeBackMerge(step)
-    const confirmed = window.confirm(
-      force
-        ? `Force back-merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?\n\nThis bypasses required checks. Your GitHub token must have branch-protection bypass access.`
-        : `Back-merge #${step.pullRequest.number} from ${step.fromBranch} to ${step.toBranch}?`,
-    )
-    if (!confirmed) return
-    setBusyRoute(step.route)
-    setError('')
-    try {
-      await api.mergeBackMergePullRequest({
-        repository,
-        pullNumber: step.pullRequest.number,
-        ...(force ? { bypassBranchProtection: true } : {}),
-      })
-      await load(true)
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : 'Could not merge the back-merge PR.',
-      )
-    } finally {
-      setBusyRoute('')
-    }
-  }
+  const pendingMergeCopy = pendingMerge
+    ? pendingMerge.kind === 'promotion'
+      ? pendingMerge.force
+        ? {
+            title: `Force merge to ${pendingMerge.toBranch}?`,
+            message: `Force merge #${pendingMerge.pullNumber} from ${pendingMerge.fromBranch} to ${pendingMerge.toBranch}?\n\nThis bypasses required checks. Your GitHub token must have branch-protection bypass access.`,
+            confirmLabel: 'Force merge',
+          }
+        : {
+            title: `Merge to ${pendingMerge.toBranch}?`,
+            message: `Merge #${pendingMerge.pullNumber} from ${pendingMerge.fromBranch} to ${pendingMerge.toBranch}?`,
+            confirmLabel: 'Merge',
+          }
+      : pendingMerge.force
+        ? {
+            title: `Force back-merge to ${pendingMerge.toBranch}?`,
+            message: `Force back-merge #${pendingMerge.pullNumber} from ${pendingMerge.fromBranch} to ${pendingMerge.toBranch}?\n\nThis bypasses required checks. Your GitHub token must have branch-protection bypass access.`,
+            confirmLabel: 'Force merge',
+          }
+        : {
+            title: `Back-merge to ${pendingMerge.toBranch}?`,
+            message: `Back-merge #${pendingMerge.pullNumber} from ${pendingMerge.fromBranch} to ${pendingMerge.toBranch}?`,
+            confirmLabel: 'Merge',
+          }
+    : undefined
 
   async function createBackMerge(step: BackMergeStep) {
     setBusyRoute(step.route)
@@ -1014,6 +1055,15 @@ export function ServiceOperations({
           services={state.jenkinsServices}
           sourceTag={productionDeployRelease.tag}
           onClose={() => setProductionDeployRelease(undefined)}
+        />
+      )}
+      {pendingMergeCopy && (
+        <ConfirmDialog
+          title={pendingMergeCopy.title}
+          message={pendingMergeCopy.message}
+          confirmLabel={pendingMergeCopy.confirmLabel}
+          onCancel={() => setPendingMerge(undefined)}
+          onConfirm={() => void confirmPendingMerge()}
         />
       )}
     </div>

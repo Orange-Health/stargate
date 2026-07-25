@@ -11,11 +11,27 @@ import type {
   ReleaseItem,
   ServiceRelease,
 } from '../../shared/types'
+import { ConfirmDialog } from './ConfirmDialog'
+import {
+  featureForceMergeActions,
+  featureMergeActions,
+  isFeatureForceMergeReady,
+  isFeatureMergeReady,
+  isFeatureRetargetReady,
+} from './featureMerge'
 import { StagingReleaseDialog } from './StagingReleaseDialog'
 import { ProductionReleaseDialog } from './ProductionReleaseDialog'
 import { ReleaseDayOperations } from './ReleaseDayOperations'
 import { ServiceOperations } from './ServiceOperations'
 import { ThemeToggle } from '../theme/ThemeToggle'
+
+type PendingFeatureMerge = {
+  pullNumber: number
+  retargetToDev: boolean
+  bypassBranchProtection: boolean
+}
+
+type BulkMergeMode = 'ready' | 'force'
 
 type Props = {
   connection: ConnectionStatus
@@ -75,21 +91,6 @@ function reasonLabel(
     return 'Targets default branch'
   }
   return reasonLabels[reason]
-}
-
-function canRetargetToDev(item: ReleaseItem, service: ServiceRelease) {
-  const pull = item.pullRequest
-  if (!pull || pull.merged || pull.draft) return false
-  if (!service.defaultBranch || pull.baseBranch !== service.defaultBranch) {
-    return false
-  }
-  const otherBlockers = item.blockingReasons.filter(
-    (reason) => reason !== 'WRONG_BASE_BRANCH',
-  )
-  return (
-    otherBlockers.length === 0 &&
-    !item.warningReasons.includes('CHECKS_PENDING')
-  )
 }
 
 function isClearedMerge(item: ReleaseItem) {
@@ -276,6 +277,7 @@ function ServiceDetail({
   const [service, setService] = useState(initialService)
   const name = service.repository.split('/').at(-1)
   const [merging, setMerging] = useState<number>()
+  const [bulkMerging, setBulkMerging] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [mergeError, setMergeError] = useState('')
   const [activeTab, setActiveTab] = useState<'prs' | 'releases' | 'branches'>(
@@ -285,23 +287,41 @@ function ServiceDetail({
   const [optimisticallyMerged, setOptimisticallyMerged] = useState<Set<number>>(
     new Set(),
   )
+  const [pendingMerge, setPendingMerge] = useState<PendingFeatureMerge>()
+  const [pendingBulkMerge, setPendingBulkMerge] = useState<BulkMergeMode>()
+  const readyMergeActions = featureMergeActions(service, optimisticallyMerged)
+  const forceMergeActions = featureForceMergeActions(
+    service,
+    optimisticallyMerged,
+  )
+  const mergeBusy = bulkMerging || merging !== undefined
 
   useEffect(() => {
     setService(initialService)
   }, [initialService])
 
-  async function mergePullRequest(
+  function requestMerge(
     pullNumber: number,
     options: { retargetToDev?: boolean; bypassBranchProtection?: boolean } = {},
   ) {
-    const retargetToDev = options.retargetToDev ?? false
-    const bypassBranchProtection = options.bypassBranchProtection ?? false
-    const confirmMessage = bypassBranchProtection
-      ? `Force merge feature PR #${pullNumber} into dev?\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`
-      : retargetToDev
-        ? `Retarget feature PR #${pullNumber} to dev and merge it?`
-        : `Merge feature PR #${pullNumber} into dev?`
-    if (!window.confirm(confirmMessage)) return
+    setPendingBulkMerge(undefined)
+    setPendingMerge({
+      pullNumber,
+      retargetToDev: options.retargetToDev ?? false,
+      bypassBranchProtection: options.bypassBranchProtection ?? false,
+    })
+  }
+
+  function requestBulkMerge(mode: BulkMergeMode) {
+    const actions = mode === 'force' ? forceMergeActions : readyMergeActions
+    if (actions.length === 0 || mergeBusy) return
+    setPendingMerge(undefined)
+    setPendingBulkMerge(mode)
+  }
+
+  async function mergePullRequest(pending: PendingFeatureMerge) {
+    const { pullNumber, retargetToDev, bypassBranchProtection } = pending
+    setPendingMerge(undefined)
     setMerging(pullNumber)
     setMergeError('')
     try {
@@ -321,6 +341,94 @@ function ServiceDetail({
       setMerging(undefined)
     }
   }
+
+  async function mergeAllReadyPullRequests(mode: BulkMergeMode) {
+    const actions = mode === 'force' ? forceMergeActions : readyMergeActions
+    if (actions.length === 0 || mergeBusy) return
+    setPendingBulkMerge(undefined)
+    setBulkMerging(true)
+    setMergeError('')
+    const merged = new Set<number>()
+    const failures: string[] = []
+    for (const action of actions) {
+      try {
+        await api.mergeFeaturePullRequest({
+          repository: action.repository,
+          pullNumber: action.pullNumber,
+          retargetToDev: Boolean(action.retargetToDev),
+          ...(action.bypassBranchProtection
+            ? { bypassBranchProtection: true }
+            : {}),
+        })
+        merged.add(action.pullNumber)
+      } catch (reason) {
+        failures.push(
+          `#${action.pullNumber}: ${
+            reason instanceof Error ? reason.message : 'Could not merge the PR.'
+          }`,
+        )
+      }
+    }
+    if (merged.size > 0) {
+      setOptimisticallyMerged((current) => new Set([...current, ...merged]))
+      await onDataChanged()
+    }
+    if (failures.length > 0) {
+      setMergeError(
+        `Merged ${merged.size}/${actions.length}. ${failures.join(' ')}`,
+      )
+    }
+    setBulkMerging(false)
+  }
+
+  const pendingMergeCopy = pendingMerge
+    ? pendingMerge.bypassBranchProtection
+      ? {
+          title: 'Force merge to dev?',
+          message: `Force merge feature PR #${pendingMerge.pullNumber} into dev?\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`,
+          confirmLabel: 'Force merge',
+        }
+      : pendingMerge.retargetToDev
+        ? {
+            title: 'Retarget and merge?',
+            message: `Retarget feature PR #${pendingMerge.pullNumber} to dev and merge it?`,
+            confirmLabel: 'Retarget and merge',
+          }
+        : {
+            title: 'Merge to dev?',
+            message: `Merge feature PR #${pendingMerge.pullNumber} into dev?`,
+            confirmLabel: 'Merge',
+          }
+    : undefined
+
+  const pendingBulkActions =
+    pendingBulkMerge === 'force'
+      ? forceMergeActions
+      : pendingBulkMerge === 'ready'
+        ? readyMergeActions
+        : []
+  const bulkMergeRetargetCount = pendingBulkActions.filter(
+    (action) => action.retargetToDev,
+  ).length
+  const pendingBulkMergeCopy = pendingBulkMerge
+    ? pendingBulkMerge === 'force'
+      ? {
+          title: 'Force merge all to dev?',
+          message:
+            bulkMergeRetargetCount > 0
+              ? `Force merge ${pendingBulkActions.length} PR(s) into dev for ${service.repository}?\n\n${bulkMergeRetargetCount} will be retargeted from the default branch first.\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`
+              : `Force merge ${pendingBulkActions.length} PR(s) into dev for ${service.repository}?\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`,
+          confirmLabel: 'Force merge all',
+        }
+      : {
+          title: 'Merge all ready to dev?',
+          message:
+            bulkMergeRetargetCount > 0
+              ? `Merge ${pendingBulkActions.length} ready PR(s) into dev for ${service.repository}?\n\n${bulkMergeRetargetCount} will be retargeted from the default branch first.`
+              : `Merge ${pendingBulkActions.length} ready PR(s) into dev for ${service.repository}?`,
+          confirmLabel: 'Merge all',
+        }
+    : undefined
 
   async function refreshService() {
     setRefreshing(true)
@@ -408,11 +516,41 @@ function ServiceDetail({
         aria-label="PRs"
       >
         <div className="service-tab-panel-actions">
+          <div className="service-bulk-merge-actions">
+            <button
+              className="merge-feature-button"
+              type="button"
+              aria-label="Merge all ready PRs into dev for this service"
+              onClick={() => requestBulkMerge('ready')}
+              disabled={
+                readyMergeActions.length === 0 || mergeBusy || refreshing
+              }
+            >
+              {bulkMerging
+                ? 'Merging all…'
+                : readyMergeActions.length > 0
+                  ? `Merge all ready to dev (${readyMergeActions.length})`
+                  : 'No ready PRs to merge'}
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              aria-label="Force merge all PRs into dev for this service"
+              onClick={() => requestBulkMerge('force')}
+              disabled={
+                forceMergeActions.length === 0 || mergeBusy || refreshing
+              }
+            >
+              {forceMergeActions.length > 0
+                ? `Force merge all to dev (${forceMergeActions.length})`
+                : 'No PRs to force merge'}
+            </button>
+          </div>
           <button
             className="secondary-button"
             type="button"
             onClick={() => void refreshService()}
-            disabled={refreshing || merging !== undefined}
+            disabled={refreshing || mergeBusy}
           >
             {refreshing ? 'Refreshing…' : '↻ Refresh PRs'}
           </button>
@@ -420,29 +558,20 @@ function ServiceDetail({
       <div className="operation-section">
       <div className="pr-list">
         {service.items.map((item) => {
-          const mergeReady =
-            item.eligible &&
-            !item.warningReasons.includes('CHECKS_PENDING') &&
-            !service.backMergePending &&
-            !item.pullRequest?.merged &&
-            !optimisticallyMerged.has(item.pullRequest?.number ?? -1)
-          const retargetReady =
-            canRetargetToDev(item, service) &&
-            !service.backMergePending &&
-            !optimisticallyMerged.has(item.pullRequest?.number ?? -1)
+          const mergeReady = isFeatureMergeReady(
+            item,
+            service,
+            optimisticallyMerged,
+          )
+          const retargetReady = isFeatureRetargetReady(
+            item,
+            service,
+            optimisticallyMerged,
+          )
           const forceMergeReady =
-            Boolean(item.pullRequest) &&
-            item.pullRequest!.baseBranch === 'dev' &&
-            !item.pullRequest!.merged &&
-            !item.pullRequest!.draft &&
             !mergeReady &&
-            !service.backMergePending &&
-            !optimisticallyMerged.has(item.pullRequest!.number) &&
-            !item.blockingReasons.includes('NO_MATCHING_PR') &&
-            !item.blockingReasons.includes('HAS_CONFLICTS') &&
-            !item.blockingReasons.includes('MERGEABILITY_PENDING') &&
-            !item.blockingReasons.includes('DRAFT') &&
-            !item.blockingReasons.includes('ALREADY_MERGED')
+            item.pullRequest?.baseBranch === 'dev' &&
+            isFeatureForceMergeReady(item, service, optimisticallyMerged)
           return (
             <article
               className="pr-row"
@@ -524,9 +653,9 @@ function ServiceDetail({
                 <button
                   className="merge-feature-button"
                   type="button"
-                  disabled={merging === item.pullRequest.number}
+                  disabled={mergeBusy}
                   onClick={() =>
-                    void mergePullRequest(item.pullRequest!.number, {
+                    requestMerge(item.pullRequest!.number, {
                       retargetToDev: true,
                     })
                   }
@@ -540,10 +669,8 @@ function ServiceDetail({
                 <button
                   className="merge-feature-button"
                   type="button"
-                  disabled={merging === item.pullRequest.number}
-                  onClick={() =>
-                    void mergePullRequest(item.pullRequest!.number)
-                  }
+                  disabled={mergeBusy}
+                  onClick={() => requestMerge(item.pullRequest!.number)}
                 >
                   {merging === item.pullRequest.number
                     ? 'Merging…'
@@ -554,9 +681,9 @@ function ServiceDetail({
                 <button
                   className="merge-feature-button"
                   type="button"
-                  disabled={merging === item.pullRequest.number}
+                  disabled={mergeBusy}
                   onClick={() =>
-                    void mergePullRequest(item.pullRequest!.number, {
+                    requestMerge(item.pullRequest!.number, {
                       bypassBranchProtection: true,
                     })
                   }
@@ -573,6 +700,24 @@ function ServiceDetail({
       </div>
       </div>
       </div>
+      )}
+      {pendingMergeCopy && pendingMerge && (
+        <ConfirmDialog
+          title={pendingMergeCopy.title}
+          message={pendingMergeCopy.message}
+          confirmLabel={pendingMergeCopy.confirmLabel}
+          onCancel={() => setPendingMerge(undefined)}
+          onConfirm={() => void mergePullRequest(pendingMerge)}
+        />
+      )}
+      {pendingBulkMergeCopy && pendingBulkMerge && (
+        <ConfirmDialog
+          title={pendingBulkMergeCopy.title}
+          message={pendingBulkMergeCopy.message}
+          confirmLabel={pendingBulkMergeCopy.confirmLabel}
+          onCancel={() => setPendingBulkMerge(undefined)}
+          onConfirm={() => void mergeAllReadyPullRequests(pendingBulkMerge)}
+        />
       )}
       {operationsActivated && (
         <div
@@ -644,6 +789,10 @@ export function ReleaseOverview({
     Record<string, DeploymentFreshness>
   >({})
   const [freshnessLoading, setFreshnessLoading] = useState(false)
+  const [bulkMerging, setBulkMerging] = useState(false)
+  const [bulkMergeError, setBulkMergeError] = useState('')
+  const [pendingReleaseBulkMerge, setPendingReleaseBulkMerge] =
+    useState<BulkMergeMode>()
   const serviceListRef = useRef<HTMLDivElement>(null)
   const [serviceListOverflow, setServiceListOverflow] = useState({
     top: false,
@@ -857,6 +1006,15 @@ export function ReleaseOverview({
     visibleServices.filter(
       (service) => deploymentFreshness[service.repository]?.outdated,
     ).length
+  const releaseMergeActions = useMemo(
+    () => visibleServices.flatMap((service) => featureMergeActions(service)),
+    [visibleServices],
+  )
+  const releaseForceMergeActions = useMemo(
+    () =>
+      visibleServices.flatMap((service) => featureForceMergeActions(service)),
+    [visibleServices],
+  )
   const selectedServiceWithRisk = selectedService
     ? {
         ...selectedService,
@@ -867,6 +1025,83 @@ export function ReleaseOverview({
           repositoryRisks[selectedService.repository]?.checkFailed ??
           selectedService.riskCheckFailed,
       }
+    : undefined
+
+  async function mergeAllReadyFeaturePullRequests(mode: BulkMergeMode) {
+    const actions =
+      mode === 'force' ? releaseForceMergeActions : releaseMergeActions
+    if (actions.length === 0 || bulkMerging || loading) return
+    setPendingReleaseBulkMerge(undefined)
+    setBulkMerging(true)
+    setBulkMergeError('')
+    let mergedCount = 0
+    const failures: string[] = []
+    for (const action of actions) {
+      try {
+        await api.mergeFeaturePullRequest({
+          repository: action.repository,
+          pullNumber: action.pullNumber,
+          retargetToDev: Boolean(action.retargetToDev),
+          ...(action.bypassBranchProtection
+            ? { bypassBranchProtection: true }
+            : {}),
+        })
+        mergedCount += 1
+      } catch (reason) {
+        failures.push(
+          `${action.repository}#${action.pullNumber}: ${
+            reason instanceof Error ? reason.message : 'Could not merge the PR.'
+          }`,
+        )
+      }
+    }
+    await onRefresh()
+    if (failures.length > 0) {
+      setBulkMergeError(
+        `Merged ${mergedCount}/${actions.length}. ${failures.join(' ')}`,
+      )
+    }
+    setBulkMerging(false)
+  }
+
+  const pendingReleaseBulkActions =
+    pendingReleaseBulkMerge === 'force'
+      ? releaseForceMergeActions
+      : pendingReleaseBulkMerge === 'ready'
+        ? releaseMergeActions
+        : []
+  const releaseBulkRetargetCount = pendingReleaseBulkActions.filter(
+    (action) => action.retargetToDev,
+  ).length
+  const releaseBulkServiceCount = new Set(
+    pendingReleaseBulkActions.map((action) => action.repository),
+  ).size
+  const pendingReleaseBulkMergeCopy = pendingReleaseBulkMerge
+    ? pendingReleaseBulkMerge === 'force'
+      ? {
+          title: 'Force merge all to dev?',
+          message:
+            releaseBulkRetargetCount > 0
+              ? `Force merge ${pendingReleaseBulkActions.length} PR(s) into dev across ${releaseBulkServiceCount} service(s)?
+
+${releaseBulkRetargetCount} will be retargeted from the default branch first.
+
+This bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`
+              : `Force merge ${pendingReleaseBulkActions.length} PR(s) into dev across ${releaseBulkServiceCount} service(s)?
+
+This bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`,
+          confirmLabel: 'Force merge all',
+        }
+      : {
+          title: 'Merge all ready to dev?',
+          message:
+            releaseBulkRetargetCount > 0
+              ? `Merge ${pendingReleaseBulkActions.length} ready PR(s) into dev across ${releaseBulkServiceCount} service(s)?
+
+${releaseBulkRetargetCount} will be retargeted from the default branch first.`
+              : `Merge ${pendingReleaseBulkActions.length} ready PR(s) into dev across ${releaseBulkServiceCount} service(s)?`,
+          confirmLabel: 'Merge all',
+        }
     : undefined
 
   useEffect(() => {
@@ -982,7 +1217,7 @@ export function ReleaseOverview({
               className="secondary-button"
               type="button"
               onClick={onRefresh}
-              disabled={loading || !selectedVersionId}
+              disabled={loading || bulkMerging || !selectedVersionId}
             >
               {loading ? 'Syncing…' : '↻ Refresh'}
             </button>
@@ -992,6 +1227,12 @@ export function ReleaseOverview({
         {error && (
           <div className="alert error" role="alert">
             <strong>Couldn’t load this release.</strong> {error}
+          </div>
+        )}
+
+        {bulkMergeError && (
+          <div className="alert error" role="alert">
+            <strong>Bulk merge unfinished.</strong> {bulkMergeError}
           </div>
         )}
 
@@ -1056,6 +1297,40 @@ export function ReleaseOverview({
                   <p>
                     {readyItems} of {totalItems} tickets merged to dev
                   </p>
+                  <div className="overview-bulk-merge-actions">
+                    <button
+                      className="merge-feature-button overview-bulk-merge"
+                      type="button"
+                      aria-label="Merge all ready release PRs into dev"
+                      onClick={() => setPendingReleaseBulkMerge('ready')}
+                      disabled={
+                        loading ||
+                        bulkMerging ||
+                        releaseMergeActions.length === 0
+                      }
+                    >
+                      {bulkMerging
+                        ? 'Merging all to dev…'
+                        : releaseMergeActions.length > 0
+                          ? `Merge all ready to dev (${releaseMergeActions.length})`
+                          : 'No ready PRs to merge'}
+                    </button>
+                    <button
+                      className="secondary-button overview-bulk-merge"
+                      type="button"
+                      aria-label="Force merge all release PRs into dev"
+                      onClick={() => setPendingReleaseBulkMerge('force')}
+                      disabled={
+                        loading ||
+                        bulkMerging ||
+                        releaseForceMergeActions.length === 0
+                      }
+                    >
+                      {releaseForceMergeActions.length > 0
+                        ? `Force merge all to dev (${releaseForceMergeActions.length})`
+                        : 'No PRs to force merge'}
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="stat">
@@ -1291,6 +1566,17 @@ export function ReleaseOverview({
         <ProductionReleaseDialog
           repository={productionReleaseRepository}
           onClose={() => setProductionReleaseRepository('')}
+        />
+      )}
+      {pendingReleaseBulkMergeCopy && pendingReleaseBulkMerge && (
+        <ConfirmDialog
+          title={pendingReleaseBulkMergeCopy.title}
+          message={pendingReleaseBulkMergeCopy.message}
+          confirmLabel={pendingReleaseBulkMergeCopy.confirmLabel}
+          onCancel={() => setPendingReleaseBulkMerge(undefined)}
+          onConfirm={() =>
+            void mergeAllReadyFeaturePullRequests(pendingReleaseBulkMerge)
+          }
         />
       )}
     </div>
