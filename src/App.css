@@ -603,6 +603,13 @@ button:disabled {
   gap: 28px;
 }
 
+.release-meta .merge-feature-button {
+  margin-top: 0;
+  min-height: 36px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
 .release-meta > span {
   color: var(--muted);
   display: flex;
@@ -649,6 +656,26 @@ button:disabled {
   flex: 1;
   gap: 17px;
   padding: 22px 28px;
+}
+
+.overview-bulk-merge {
+  margin-top: 10px;
+}
+
+.overview-bulk-merge-actions,
+.service-bulk-merge-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overview-bulk-merge-actions .overview-bulk-merge {
+  margin-top: 0;
+}
+
+.overview-bulk-merge-actions {
+  margin-top: 10px;
 }
 
 .readiness-score > span {
@@ -1101,9 +1128,15 @@ button:disabled {
 }
 
 .service-tab-panel-actions {
+  align-items: center;
   display: flex;
-  justify-content: flex-end;
+  gap: 10px;
+  justify-content: space-between;
   padding: 14px 24px 0;
+}
+
+.service-tab-panel-actions .merge-feature-button {
+  margin-top: 0;
 }
 
 .create-release-button {
@@ -1209,6 +1242,15 @@ button:disabled {
   display: grid;
   gap: 10px;
   grid-template-columns: 0.7fr 1.3fr;
+}
+
+.confirm-dialog {
+  display: grid;
+  gap: 12px;
+}
+
+.confirm-dialog .dialog-actions {
+  margin-top: 10px;
 }
 
 .release-created {

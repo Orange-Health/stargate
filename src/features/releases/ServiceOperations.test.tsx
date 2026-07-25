@@ -169,7 +169,6 @@ describe('ServiceOperations', () => {
     const merge = vi
       .spyOn(api, 'mergePromotionPullRequest')
       .mockResolvedValue({ merged: true, message: 'Merged' })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<ServiceOperations repository="Orange-Health/service-api" />)
 
     await user.click(await screen.findByRole('button', { name: 'Create PR' }))
@@ -179,6 +178,7 @@ describe('ServiceOperations', () => {
     })
 
     await user.click(screen.getByRole('button', { name: 'Merge to master' }))
+    await user.click(screen.getByRole('button', { name: 'Merge' }))
     expect(merge).toHaveBeenCalledWith({
       repository: 'Orange-Health/service-api',
       pullNumber: 42,
@@ -321,7 +321,6 @@ describe('ServiceOperations', () => {
         },
       ],
     })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<ServiceOperations repository="Orange-Health/service-api" />)
 
     expect(await screen.findByText('release is 2 commits behind')).toBeVisible()
@@ -331,6 +330,7 @@ describe('ServiceOperations', () => {
       }),
     ).toBeVisible()
     await user.click(screen.getByRole('button', { name: 'Force merge to dev' }))
+    await user.click(screen.getByRole('button', { name: 'Force merge' }))
 
     expect(merge).toHaveBeenCalledWith({
       repository: 'Orange-Health/service-api',
@@ -358,12 +358,12 @@ describe('ServiceOperations', () => {
         },
       ],
     })
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<ServiceOperations repository="Orange-Health/service-api" />)
 
     await user.click(
       await screen.findByRole('button', { name: 'Force merge to master' }),
     )
+    await user.click(screen.getByRole('button', { name: 'Force merge' }))
 
     expect(merge).toHaveBeenCalledWith({
       repository: 'Orange-Health/service-api',
