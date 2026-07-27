@@ -297,7 +297,7 @@ export function ConnectionScreen({ onConnect }: Props) {
             </div>
             <p className="field-hint">
               Enables production release options through
-              Prod-new-cluster-deployment.
+              Prod Deployments/Prod-cluster-deployment.
             </p>
           </fieldset>
 

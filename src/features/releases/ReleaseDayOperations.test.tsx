@@ -1121,7 +1121,7 @@ describe('ReleaseDayOperations', () => {
           environment: 'production',
           buildNumber: 2201,
           buildUrl:
-            'https://jenkins.test/job/Prod-new-cluster-deployment/2201/',
+            'https://jenkins.test/job/Prod%20Deployments/job/Prod-cluster-deployment/2201/',
           deployedAt: '2026-07-16T14:00:00Z',
         },
       ],

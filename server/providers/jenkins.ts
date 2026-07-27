@@ -296,7 +296,7 @@ export async function getCurrentProductionDeployments(
     try {
       const builds = await recentJobBuilds(
         jenkinsClient(prodConfig),
-        "Prod-new-cluster-deployment",
+        "Prod Deployments/Prod-cluster-deployment",
       );
       return productionDeployedTagsFromBuilds(builds, services);
     } catch (error) {
@@ -377,7 +377,7 @@ export function productionDeploymentSpec(
     );
   }
   return {
-    jobName: "Prod-new-cluster-deployment",
+    jobName: "Prod Deployments/Prod-cluster-deployment",
     parameters: {
       SERVICE: input.service,
       IMAGE_TAG: input.imageTag,

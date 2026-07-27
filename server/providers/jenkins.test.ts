@@ -146,7 +146,7 @@ describe('deployedTagsFromBuilds', () => {
           {
             number: 2201,
             result: 'SUCCESS',
-            url: 'https://jenkins.test/job/Prod-new-cluster-deployment/2201/',
+            url: 'https://jenkins.test/job/Prod%20Deployments/job/Prod-cluster-deployment/2201/',
             timestamp: 1_721_141_200_000,
             actions: [parameters('sapphire-web', 'v-prod-26.0716.6')],
           },
@@ -182,7 +182,7 @@ describe('productionDeploymentSpec', () => {
         prodMigrationJob: 'Prod-new-cluster-migration',
       }),
     ).toEqual({
-      jobName: 'Prod-new-cluster-deployment',
+      jobName: 'Prod Deployments/Prod-cluster-deployment',
       parameters: {
         SERVICE: 'accounts',
         IMAGE_TAG: 'v26.0714.1',

@@ -246,7 +246,7 @@ export function ProductionDeployDialog({
               </label>
               <div className="deployment-summary">
                 <span>Job</span>
-                <code>Prod-new-cluster-deployment</code>
+                <code>Prod Deployments/Prod-cluster-deployment</code>
                 <small>
                   Jenkins will receive the service, image tag, QA approval, and
                   migration parameters shown above.

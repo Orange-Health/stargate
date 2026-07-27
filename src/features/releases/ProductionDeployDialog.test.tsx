@@ -82,8 +82,8 @@ describe('ProductionDeployDialog', () => {
         queueId: 944,
         queueUrl: 'https://pitstop.test/queue/item/944/',
         buildUrl:
-          'https://pitstop.test/job/Prod-new-cluster-deployment/944/',
-        jobName: 'Prod-new-cluster-deployment',
+          'https://pitstop.test/job/Prod%20Deployments/job/Prod-cluster-deployment/944/',
+        jobName: 'Prod Deployments/Prod-cluster-deployment',
         service: 'accounts',
         imageTag: 'v26.0714.2',
       })
