@@ -739,7 +739,8 @@ export async function createProductionRelease(
     const existing = releases.find(
       (release) =>
         release.tag_name.startsWith(prefix) &&
-        release.body?.includes(operationMarker),
+        release.body?.includes(operationMarker) &&
+        release.target_commitish === sourceBranch,
     )
     if (existing) {
       const runs = await githubFetch<{
@@ -758,7 +759,7 @@ export async function createProductionRelease(
           id: existing.id,
           repository,
           tag: existing.tag_name,
-          sourceBranch: existing.target_commitish || sourceBranch,
+          sourceBranch,
           url: existing.html_url,
           createdAt: existing.created_at,
         }

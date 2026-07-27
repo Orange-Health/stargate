@@ -107,6 +107,10 @@ export const api = {
       `/api/github/repository-pull-requests?${query}`,
     )
   },
+  repositoryPullRequestAuthors: (repository: string) =>
+    request<string[]>(
+      `/api/github/repository-pull-request-authors?repository=${encodeURIComponent(repository)}`,
+    ),
   dashboard: (
     versionId: string,
     refresh = false,

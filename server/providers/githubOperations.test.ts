@@ -12,6 +12,7 @@ import {
   getReleaseBuildStatuses,
   getRepositoryReleaseState,
   hasActualMergeConflict,
+  listRepositoryPullRequestAuthors,
   listRepositoryPullRequests,
   mergeBackMergePullRequest,
   mergeFeaturePullRequest,
@@ -130,6 +131,26 @@ describe('repository pull requests', () => {
 
     expect(result.merged).toBe(true)
     expect(fetchMock.mock.calls[1][1]?.method).toBe('PUT')
+  })
+
+  it('lists unique recent pull request authors', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          { user: { login: 'zoe' } },
+          { user: { login: 'alex' } },
+          { user: { login: 'zoe' } },
+        ]),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const authors = await listRepositoryPullRequestAuthors(
+      config,
+      'Orange-Health/author-service',
+    )
+
+    expect(authors).toEqual(['alex', 'zoe'])
   })
 
   it('searches pull requests by author', async () => {

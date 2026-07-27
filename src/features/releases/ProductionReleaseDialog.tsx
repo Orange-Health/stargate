@@ -74,7 +74,8 @@ export function ProductionReleaseDialog({ repository, onClose }: Props) {
             <p className="eyebrow">Production release created</p>
             <h2 id="production-release-title">{created.tag}</h2>
             <p>
-              GitHub created this production tag from <code>release</code>.
+              GitHub created this production tag from the default branch{' '}
+              <code>{created.sourceBranch}</code>.
             </p>
             <a
               className="primary-button release-link"

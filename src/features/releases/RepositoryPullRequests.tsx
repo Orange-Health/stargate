@@ -27,7 +27,8 @@ export function RepositoryPullRequests({ repository }: Props) {
   )
   const [baseFilter, setBaseFilter] = useState('')
   const [authorFilter, setAuthorFilter] = useState('')
-  const [appliedAuthor, setAppliedAuthor] = useState('')
+  const [authors, setAuthors] = useState<string[]>([])
+  const [authorsLoading, setAuthorsLoading] = useState(false)
   const [page, setPage] = useState(1)
   const [result, setResult] = useState<RepositoryPullRequestList>()
   const [loading, setLoading] = useState(true)
@@ -40,17 +41,27 @@ export function RepositoryPullRequests({ repository }: Props) {
     setPage(1)
     setBaseFilter('')
     setAuthorFilter('')
-    setAppliedAuthor('')
     setResult(undefined)
   }, [repository])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setAppliedAuthor(authorFilter.trim())
-      setPage(1)
-    }, 350)
-    return () => window.clearTimeout(timer)
-  }, [authorFilter])
+    let active = true
+    setAuthorsLoading(true)
+    api
+      .repositoryPullRequestAuthors(repository)
+      .then((next) => {
+        if (active) setAuthors(next)
+      })
+      .catch(() => {
+        if (active) setAuthors([])
+      })
+      .finally(() => {
+        if (active) setAuthorsLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [repository])
 
   useEffect(() => {
     let active = true
@@ -60,7 +71,7 @@ export function RepositoryPullRequests({ repository }: Props) {
       .repositoryPullRequests(repository, {
         state: stateFilter,
         base: baseFilter || undefined,
-        author: appliedAuthor || undefined,
+        author: authorFilter || undefined,
         page,
       })
       .then((next) => {
@@ -80,7 +91,7 @@ export function RepositoryPullRequests({ repository }: Props) {
     return () => {
       active = false
     }
-  }, [appliedAuthor, baseFilter, page, reload, repository, stateFilter])
+  }, [authorFilter, baseFilter, page, reload, repository, stateFilter])
 
   async function mergePullRequest(pull: RepositoryPullRequest) {
     setPendingMerge(undefined)
@@ -147,13 +158,24 @@ export function RepositoryPullRequests({ repository }: Props) {
         </label>
         <label>
           Author
-          <input
-            type="search"
+          <select
             value={authorFilter}
-            onChange={(event) => setAuthorFilter(event.target.value)}
-            placeholder="GitHub username"
+            onChange={(event) => {
+              setAuthorFilter(event.target.value)
+              setPage(1)
+            }}
             aria-label="Author"
-          />
+            disabled={authorsLoading}
+          >
+            <option value="">
+              {authorsLoading ? 'Loading authors…' : 'All authors'}
+            </option>
+            {authors.map((author) => (
+              <option value={author} key={author}>
+                {author}
+              </option>
+            ))}
+          </select>
         </label>
         <button
           className="secondary-button"

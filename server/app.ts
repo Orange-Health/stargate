@@ -30,6 +30,7 @@ import {
   getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   getRepositoryRisks,
+  listRepositoryPullRequestAuthors,
   listRepositoryPullRequests,
   mergeBackMergePullRequest,
   mergeFeaturePullRequest,
@@ -500,6 +501,28 @@ export function createApp() {
       ),
     )
   })
+
+  app.get(
+    '/api/github/repository-pull-request-authors',
+    async (request, response) => {
+      const parsed = repositorySchema.safeParse(request.query.repository)
+      if (!parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_REPOSITORY',
+            message: 'Repository must use the owner/name format.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        await listRepositoryPullRequestAuthors(
+          requireConnection(),
+          parsed.data,
+        ),
+      )
+    },
+  )
 
   app.get('/api/github/repository-state', async (request, response) => {
     const parsed = repositorySchema.safeParse(request.query.repository)

@@ -571,6 +571,26 @@ export async function listRepositoryPullRequests(
   }
 }
 
+export async function listRepositoryPullRequestAuthors(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<string[]> {
+  assertConnectedRepository(config, repository)
+  const query = new URLSearchParams({
+    state: 'all',
+    sort: 'updated',
+    direction: 'desc',
+    per_page: '100',
+  })
+  const pulls = await githubApi<GitHubPull[]>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls?${query}`,
+  )
+  return [...new Set(pulls.map((pull) => pull.user.login))].sort((left, right) =>
+    left.localeCompare(right),
+  )
+}
+
 type GitHubBranchComparison = {
   ahead_by: number
   behind_by: number

@@ -1563,8 +1563,7 @@ button:disabled {
   text-transform: uppercase;
 }
 
-.repository-pr-toolbar select,
-.repository-pr-toolbar input {
+.repository-pr-toolbar select {
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1574,11 +1573,6 @@ button:disabled {
   min-height: 38px;
   padding: 0 30px 0 10px;
   text-transform: none;
-}
-
-.repository-pr-toolbar input {
-  min-width: 165px;
-  padding-right: 10px;
 }
 
 .repository-pr-toolbar > button {

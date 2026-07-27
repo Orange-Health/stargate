@@ -29,6 +29,10 @@ describe('RepositoryPullRequests', () => {
         },
       ],
     })
+    vi.spyOn(api, 'repositoryPullRequestAuthors').mockResolvedValue([
+      'developer',
+      'release-manager',
+    ])
     vi.spyOn(api, 'mergeRepositoryPullRequest').mockResolvedValue({
       merged: true,
       message: 'Merged',
@@ -47,7 +51,10 @@ describe('RepositoryPullRequests', () => {
         expect.objectContaining({ state: 'all', page: 1 }),
       ),
     )
-    await user.type(screen.getByLabelText('Author'), 'developer')
+    await waitFor(() =>
+      expect(screen.getByLabelText('Author')).toHaveTextContent('developer'),
+    )
+    await user.selectOptions(screen.getByLabelText('Author'), 'developer')
     await waitFor(() =>
       expect(api.repositoryPullRequests).toHaveBeenLastCalledWith(
         'Orange-Health/service-api',

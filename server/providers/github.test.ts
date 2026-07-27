@@ -1072,6 +1072,63 @@ describe('production release tags', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
+  it('does not reuse an interrupted production release from a non-default branch', async () => {
+    const operationId = '5ce8a585-87f7-4c58-8e4f-8a3dd49b16df'
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ default_branch: 'main' })),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            {
+              id: 101,
+              tag_name: 'v26.0714.1',
+              target_commitish: 'release',
+              html_url: 'https://github.test/releases/101',
+              created_at: '2026-07-14T12:05:00Z',
+              body: `<!-- release-desk-operation:${operationId} -->`,
+            },
+          ]),
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify([])))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 102,
+            html_url: 'https://github.test/releases/102',
+            created_at: '2026-07-14T12:06:00Z',
+          }),
+          { status: 201 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await createProductionRelease(
+      config,
+      'orange/service-api',
+      '2026-07-14',
+      operationId,
+    )
+
+    expect(result.sourceBranch).toBe('main')
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toMatchObject({
+      target_commitish: 'main',
+    })
+  })
+
   it('does not reuse an interrupted operation release from another date', async () => {
     const operationId = '5ce8a585-87f7-4c58-8e4f-8a3dd49b16df'
     const fetchMock = vi
