@@ -15,12 +15,14 @@ import type {
   MergeFeaturePullRequestInput,
   MergePromotionPullRequestInput,
   MergePromotionPullRequestResult,
+  OrganizationRepository,
   PromotionPullRequest,
   ReleaseBuildStatusInput,
   ReleaseBuildStatusResult,
   ReleaseDashboard,
   RepositoryReleaseHistory,
   RepositoryReleaseState,
+  RepositoryPullRequestList,
   RepositoryRisk,
   ServiceRefreshResult,
   TriggerDeploymentInput,
@@ -83,6 +85,28 @@ export const api = {
       method: 'DELETE',
     }),
   releases: () => request<JiraVersion[]>('/api/releases'),
+  repositories: () =>
+    request<OrganizationRepository[]>('/api/github/repositories'),
+  repositoryPullRequests: (
+    repository: string,
+    options: {
+      state?: 'open' | 'closed' | 'all'
+      base?: string
+      author?: string
+      page?: number
+    } = {},
+  ) => {
+    const query = new URLSearchParams({
+      repository,
+      state: options.state ?? 'open',
+      page: String(options.page ?? 1),
+    })
+    if (options.base) query.set('base', options.base)
+    if (options.author) query.set('author', options.author)
+    return request<RepositoryPullRequestList>(
+      `/api/github/repository-pull-requests?${query}`,
+    )
+  },
   dashboard: (
     versionId: string,
     refresh = false,
@@ -193,6 +217,17 @@ export const api = {
       {
         method: 'POST',
         body: JSON.stringify(input),
+      },
+    ),
+  mergeRepositoryPullRequest: (input: MergePromotionPullRequestInput) =>
+    request<MergePromotionPullRequestResult>(
+      '/api/github/repository-pull-requests/merge',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          repository: input.repository,
+          pullNumber: input.pullNumber,
+        }),
       },
     ),
   triggerDeployment: (input: TriggerDeploymentInput) =>

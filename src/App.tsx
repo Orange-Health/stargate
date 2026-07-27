@@ -3,6 +3,7 @@ import './App.css'
 import { ConnectionScreen } from './features/connections/ConnectionScreen'
 import { ReleaseOverview } from './features/releases/ReleaseOverview'
 import { api } from './shared/api'
+import { ALL_SERVICES_ID } from './shared/types'
 import type {
   ConnectionConfig,
   ConnectionStatus,
@@ -50,6 +51,7 @@ function App() {
         if (!active) return
         setReleases(items)
         setSelectedVersionId((current) =>
+          current === ALL_SERVICES_ID ||
           items.some((item) => item.id === current)
             ? current
             : items[0]?.id || '',
@@ -89,6 +91,11 @@ function App() {
 
   useEffect(() => {
     if (!selectedVersionId || !connection?.connected) return
+    if (selectedVersionId === ALL_SERVICES_ID) {
+      setDashboard(undefined)
+      setDashboardLoading(false)
+      return
+    }
     void loadDashboard(selectedVersionId)
   }, [selectedVersionId, connection])
 
@@ -152,7 +159,7 @@ function App() {
     requestSequence.current += 1
     setDashboard(undefined)
     setError('')
-    setDashboardLoading(true)
+    setDashboardLoading(versionId !== ALL_SERVICES_ID)
     setDashboardProgress(undefined)
     setSelectedRepository('')
     setSelectedVersionId(versionId)
@@ -197,7 +204,11 @@ function App() {
       onSelectVersion={selectVersion}
       selectedRepository={selectedRepository}
       onSelectRepository={setSelectedRepository}
-      onRefresh={() => loadDashboard(selectedVersionId, true)}
+      onRefresh={() =>
+        selectedVersionId === ALL_SERVICES_ID
+          ? Promise.resolve()
+          : loadDashboard(selectedVersionId, true)
+      }
       onDisconnect={() => void disconnect()}
     />
   )

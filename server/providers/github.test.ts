@@ -9,6 +9,7 @@ import {
   buildIssueSearchQuery,
   countSearchBooleanOperators,
   githubApi,
+  listOrganizationRepositories,
   nextProductionTag,
   nextStagingTag,
   stagingTagPrefix,
@@ -20,6 +21,51 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   clearGitHubProviderCache()
+})
+
+describe('organization repositories', () => {
+  it('lists and maps repositories from the connected organization', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            archived: false,
+            default_branch: 'main',
+            full_name: 'orange/service-api',
+            html_url: 'https://github.com/orange/service-api',
+            name: 'service-api',
+            private: true,
+          },
+        ]),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const repositories = await listOrganizationRepositories({
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    })
+
+    expect(repositories).toEqual([
+      {
+        archived: false,
+        defaultBranch: 'main',
+        name: 'service-api',
+        private: true,
+        repository: 'orange/service-api',
+        url: 'https://github.com/orange/service-api',
+      },
+    ])
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.github.com/orgs/orange/repos?type=all&sort=full_name&direction=asc&per_page=100&page=1',
+      expect.any(Object),
+    )
+  })
 })
 
 describe('conditional GitHub requests', () => {

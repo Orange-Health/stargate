@@ -107,6 +107,38 @@ export type ServiceRelease = {
   riskCheckFailed?: boolean
 }
 
+export type OrganizationRepository = {
+  repository: string
+  name: string
+  defaultBranch: string
+  url: string
+  archived: boolean
+  private: boolean
+}
+
+export type RepositoryPullRequest = {
+  number: number
+  title: string
+  url: string
+  state: 'open' | 'closed'
+  draft: boolean
+  merged: boolean
+  author: string
+  headBranch: string
+  baseBranch: string
+  updatedAt: string
+}
+
+export type RepositoryPullRequestList = {
+  repository: string
+  defaultBranch: string
+  items: RepositoryPullRequest[]
+  page: number
+  hasMore: boolean
+}
+
+export const ALL_SERVICES_ID = 'all-services'
+
 export type ProviderWarning = {
   provider: 'jira' | 'github' | 'jenkins'
   message: string

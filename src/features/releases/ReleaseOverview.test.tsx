@@ -75,6 +75,8 @@ const dashboard: ReleaseDashboard = {
 
 describe('ReleaseOverview', () => {
   beforeEach(() => {
+    window.localStorage.clear()
+    vi.spyOn(api, 'repositories').mockResolvedValue([])
     vi.spyOn(api, 'repositoryRisks').mockImplementation(async (repositories) =>
       repositories.map((repository) => ({
         repository,
@@ -97,6 +99,95 @@ describe('ReleaseOverview', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
+  })
+
+  it('offers release operations for repositories outside a Jira release', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockReturnValue(new Promise(() => {}))
+    vi.mocked(api.repositories).mockResolvedValueOnce([
+      {
+        repository: 'orange/service-api',
+        name: 'service-api',
+        defaultBranch: 'main',
+        url: 'https://github.test/orange/service-api',
+        archived: false,
+        private: true,
+      },
+      {
+        repository: 'orange/operations',
+        name: 'operations',
+        defaultBranch: 'master',
+        url: 'https://github.test/orange/operations',
+        archived: false,
+        private: true,
+      },
+    ])
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="all-services"
+        selectedRepository="orange/operations"
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'All services' }))
+      .toBeVisible()
+    expect(screen.getByRole('heading', { name: 'operations' })).toBeVisible()
+    expect(screen.getByRole('link', { name: /orange\/operations/ })).toHaveAttribute(
+      'href',
+      'https://github.test/orange/operations',
+    )
+    expect(
+      screen.getByRole('button', { name: /Create staging release/ }),
+    ).toBeVisible()
+    expect(screen.getByRole('tab', { name: 'Releases' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(
+      screen.getByRole('button', { name: '↻ Refresh releases' }),
+    ).toBeVisible()
+
+    await user.click(screen.getByRole('tab', { name: 'Branch Ops' }))
+
+    expect(
+      screen.getByRole('button', { name: '↻ Refresh branch ops' }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: /Create staging release/ }),
+    ).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Pin operations' }))
+
+    expect(
+      screen.getByRole('button', { name: 'Unpin operations' }),
+    ).toBeVisible()
+    expect(
+      JSON.parse(
+        window.localStorage.getItem('release-desk-pinned-repositories') ?? '[]',
+      ),
+    ).toEqual(['orange/operations'])
+    const operationsRow = screen
+      .getByRole('button', { name: /operationsmaster/ })
+      .closest('.all-service-row')
+    const serviceApiRow = screen
+      .getByRole('button', { name: /service-apimain/ })
+      .closest('.all-service-row')
+    expect(operationsRow).not.toBeNull()
+    expect(serviceApiRow).not.toBeNull()
+    expect(
+      operationsRow!.compareDocumentPosition(serviceApiRow!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 
   it('shows the current Jira or GitHub operation while loading', () => {

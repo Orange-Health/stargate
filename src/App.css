@@ -1447,6 +1447,203 @@ button:disabled {
   padding: 20px;
 }
 
+.all-services-list {
+  max-height: calc(100vh - 255px);
+}
+
+.all-service-row {
+  display: flex;
+  gap: 6px;
+}
+
+.all-service-card {
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 13px 14px;
+  text-align: left;
+  transition: border-color 150ms ease;
+  flex: 1 1 auto;
+}
+
+.all-service-card:hover,
+.all-service-card.selected {
+  border-color: var(--green-light);
+}
+
+.all-service-card.selected {
+  background: var(--green-faint);
+}
+
+.all-service-card span {
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.all-service-card small {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  flex: 0 0 auto;
+}
+
+.pin-service-button {
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 38px;
+  font-size: 17px;
+  justify-content: center;
+  transition:
+    background 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.pin-service-button:hover,
+.pin-service-button.pinned {
+  background: var(--green-faint);
+  border-color: var(--green-light);
+  color: var(--green);
+}
+
+.repositories-message {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 18px 4px;
+}
+
+.all-service-detail > .detail-heading a {
+  display: inline-block;
+  font-size: 12px;
+  margin-top: 5px;
+  text-decoration: none;
+}
+
+.all-service-detail > .detail-heading a:hover {
+  color: var(--green);
+}
+
+.repository-pr-panel {
+  background: var(--surface-subtle);
+  border-top: 1px solid var(--line);
+  padding: 20px 24px 24px;
+}
+
+.repository-pr-toolbar {
+  align-items: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.repository-pr-toolbar label {
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 10px;
+  font-weight: 700;
+  gap: 5px;
+  text-transform: uppercase;
+}
+
+.repository-pr-toolbar select,
+.repository-pr-toolbar input {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  min-height: 38px;
+  padding: 0 30px 0 10px;
+  text-transform: none;
+}
+
+.repository-pr-toolbar input {
+  min-width: 165px;
+  padding-right: 10px;
+}
+
+.repository-pr-toolbar > button {
+  margin-left: auto;
+}
+
+.repository-pr-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.repository-pr-row {
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 15px;
+}
+
+.repository-pr-main {
+  min-width: 0;
+}
+
+.repository-pr-title {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.repository-pr-title a {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-pr-title a:hover {
+  color: var(--green);
+}
+
+.repository-pr-main > small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.repository-pr-pagination {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+
+.repository-pr-pagination span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
 .unmatched-grid {
   display: grid;
   gap: 8px;
@@ -1735,9 +1932,12 @@ button:disabled {
 }
 
 .deployment-lookup-note {
+  background: var(--amber-faint);
+  border-bottom: 1px solid var(--amber-line);
   color: var(--amber);
   font-size: 11px;
-  margin: -8px 18px 12px;
+  margin: 0;
+  padding: 10px 18px;
 }
 
 .build-status {

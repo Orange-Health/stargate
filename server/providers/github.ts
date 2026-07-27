@@ -4,6 +4,7 @@ import type {
   CreatedProductionRelease,
   CreatedStagingRelease,
   DashboardProgress,
+  OrganizationRepository,
   PullRequest,
   RateLimit,
   ReviewDecision,
@@ -816,6 +817,39 @@ export async function testGitHubConnection(config: ConnectionConfig) {
     ),
   ])
   return { user: user.login, org: org.login }
+}
+
+export async function listOrganizationRepositories(
+  config: ConnectionConfig,
+): Promise<OrganizationRepository[]> {
+  type GitHubRepository = {
+    archived: boolean
+    default_branch: string
+    full_name: string
+    html_url: string
+    name: string
+    private: boolean
+  }
+
+  const repositories: OrganizationRepository[] = []
+  for (let page = 1; ; page += 1) {
+    const batch = await githubFetch<GitHubRepository[]>(
+      config,
+      `/orgs/${encodeURIComponent(config.githubOrg)}/repos?type=all&sort=full_name&direction=asc&per_page=100&page=${page}`,
+    )
+    repositories.push(
+      ...batch.map((repository) => ({
+        repository: repository.full_name,
+        name: repository.name,
+        defaultBranch: repository.default_branch,
+        url: repository.html_url,
+        archived: repository.archived,
+        private: repository.private,
+      })),
+    )
+    if (batch.length < 100) break
+  }
+  return repositories
 }
 
 export function titleContainsIssueKey(title: string, issueKey: string) {

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../shared/api'
 import { isClosedWithoutMerge } from '../../shared/pullRequests'
+import { ALL_SERVICES_ID } from '../../shared/types'
 import type {
   ConnectionStatus,
   DashboardProgress,
   DeploymentFreshness,
   EligibilityReason,
   JiraVersion,
+  OrganizationRepository,
   ReleaseDashboard,
   ReleaseItem,
   ServiceRelease,
@@ -22,6 +24,7 @@ import {
 import { StagingReleaseDialog } from './StagingReleaseDialog'
 import { ProductionReleaseDialog } from './ProductionReleaseDialog'
 import { ReleaseDayOperations } from './ReleaseDayOperations'
+import { RepositoryPullRequests } from './RepositoryPullRequests'
 import { ServiceOperations } from './ServiceOperations'
 import { ThemeToggle } from '../theme/ThemeToggle'
 
@@ -32,6 +35,25 @@ type PendingFeatureMerge = {
 }
 
 type BulkMergeMode = 'ready' | 'force'
+
+const PINNED_REPOSITORIES_KEY = 'release-desk-pinned-repositories'
+
+function loadPinnedRepositories() {
+  try {
+    const value = JSON.parse(
+      window.localStorage.getItem(PINNED_REPOSITORIES_KEY) ?? '[]',
+    )
+    return new Set<string>(
+      Array.isArray(value)
+        ? value.filter((repository): repository is string =>
+            Boolean(repository && typeof repository === 'string'),
+          )
+        : [],
+    )
+  } catch {
+    return new Set<string>()
+  }
+}
 
 type Props = {
   connection: ConnectionStatus
@@ -148,6 +170,7 @@ function ReleasePicker({
   const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const selected = releases.find((release) => release.id === selectedVersionId)
+  const allServicesSelected = selectedVersionId === ALL_SERVICES_ID
 
   useEffect(() => {
     function closeOnOutsideClick(event: MouseEvent) {
@@ -167,13 +190,30 @@ function ReleasePicker({
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
-        <span>{selected?.name ?? 'Select a release'}</span>
+        <span>
+          {allServicesSelected
+            ? 'All services'
+            : selected?.name ?? 'Select a release'}
+        </span>
         <span className="release-picker-chevron" aria-hidden="true">
           {open ? '⌃' : '⌄'}
         </span>
       </button>
       {open && (
         <div className="release-picker-menu" role="listbox">
+          <button
+            type="button"
+            role="option"
+            aria-selected={allServicesSelected}
+            className={allServicesSelected ? 'selected' : ''}
+            onClick={() => {
+              setOpen(false)
+              onSelect(ALL_SERVICES_ID)
+            }}
+          >
+            <span>All services</span>
+            <small>Organization-wide operations</small>
+          </button>
           {releases.map((release) => (
             <button
               type="button"
@@ -768,6 +808,19 @@ export function ReleaseOverview({
     'all' | 'pending' | 'issues' | 'backmerges' | 'outdated'
   >('all')
   const [serviceSearch, setServiceSearch] = useState('')
+  const [repositorySearch, setRepositorySearch] = useState('')
+  const [pinnedRepositories, setPinnedRepositories] = useState(
+    loadPinnedRepositories,
+  )
+  const [organizationRepositories, setOrganizationRepositories] = useState<
+    OrganizationRepository[]
+  >([])
+  const [repositoriesLoading, setRepositoriesLoading] = useState(false)
+  const [repositoriesError, setRepositoriesError] = useState('')
+  const [repositoriesReload, setRepositoriesReload] = useState(0)
+  const [allServicesActiveTab, setAllServicesActiveTab] = useState<
+    'prs' | 'releases' | 'branches'
+  >('releases')
   const [syncedClock, setSyncedClock] = useState(() => Date.now())
   const [releaseDayOpen, setReleaseDayOpen] = useState(
     () =>
@@ -814,6 +867,68 @@ export function ReleaseOverview({
       .map((service) => service.repository)
       .sort()
       .join('\n')
+  const allServicesSelected = selectedVersionId === ALL_SERVICES_ID
+  const filteredOrganizationRepositories = useMemo(() => {
+    const query = repositorySearch.trim().toLowerCase()
+    const matches = query
+      ? organizationRepositories.filter(
+          (repository) =>
+            repository.name.toLowerCase().includes(query) ||
+            repository.repository.toLowerCase().includes(query),
+        )
+      : organizationRepositories
+    return [
+      ...matches.filter((repository) =>
+        pinnedRepositories.has(repository.repository),
+      ),
+      ...matches.filter(
+        (repository) => !pinnedRepositories.has(repository.repository),
+      ),
+    ]
+  }, [organizationRepositories, pinnedRepositories, repositorySearch])
+  const selectedOrganizationRepository =
+    filteredOrganizationRepositories.find(
+      (repository) => repository.repository === selectedRepository,
+    ) ?? filteredOrganizationRepositories[0]
+
+  function toggleRepositoryPin(repository: string) {
+    setPinnedRepositories((current) => {
+      const next = new Set(current)
+      if (next.has(repository)) next.delete(repository)
+      else next.add(repository)
+      window.localStorage.setItem(
+        PINNED_REPOSITORIES_KEY,
+        JSON.stringify([...next]),
+      )
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!allServicesSelected) return
+    let active = true
+    setRepositoriesLoading(true)
+    setRepositoriesError('')
+    api
+      .repositories()
+      .then((repositories) => {
+        if (active) setOrganizationRepositories(repositories)
+      })
+      .catch((reason) => {
+        if (!active) return
+        setRepositoriesError(
+          reason instanceof Error
+            ? reason.message
+            : 'Could not load repositories.',
+        )
+      })
+      .finally(() => {
+        if (active) setRepositoriesLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [allServicesSelected, repositoriesReload])
 
   useEffect(() => {
     const syncView = () =>
@@ -1188,7 +1303,9 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
       <main className="dashboard">
         <section className="release-toolbar">
           <div>
-            <p className="eyebrow">Active release</p>
+            <p className="eyebrow">
+              {allServicesSelected ? 'Operations scope' : 'Active release'}
+            </p>
             <ReleasePicker
               releases={releases}
               selectedVersionId={selectedVersionId}
@@ -1201,10 +1318,12 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             />
           </div>
           <div className="release-meta">
-            <span>
-              Target
-              <strong>{formatDate(dashboard?.version.releaseDate)}</strong>
-            </span>
+            {!allServicesSelected && (
+              <span>
+                Target
+                <strong>{formatDate(dashboard?.version.releaseDate)}</strong>
+              </span>
+            )}
             {dashboard && (
               <span>
                 Last synced
@@ -1216,10 +1335,23 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             <button
               className="secondary-button"
               type="button"
-              onClick={onRefresh}
-              disabled={loading || bulkMerging || !selectedVersionId}
+              onClick={() => {
+                if (allServicesSelected) {
+                  setRepositoriesReload((current) => current + 1)
+                } else {
+                  void onRefresh()
+                }
+              }}
+              disabled={
+                loading ||
+                (allServicesSelected && repositoriesLoading) ||
+                bulkMerging ||
+                !selectedVersionId
+              }
             >
-              {loading ? 'Syncing…' : '↻ Refresh'}
+              {loading || (allServicesSelected && repositoriesLoading)
+                ? 'Syncing…'
+                : '↻ Refresh'}
             </button>
           </div>
         </section>
@@ -1236,7 +1368,196 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           </div>
         )}
 
-        {loading && !dashboard && (
+        {allServicesSelected && (
+          <div className="dashboard-grid">
+            <section className="services-panel">
+              <div className="section-heading">
+                <div>
+                  <h2>All services</h2>
+                </div>
+                <span>
+                  {filteredOrganizationRepositories.length}/
+                  {organizationRepositories.length}
+                </span>
+              </div>
+              <label className="service-search">
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <circle cx="11" cy="11" r="6.5" />
+                  <path d="m16 16 4 4" />
+                </svg>
+                <input
+                  type="search"
+                  value={repositorySearch}
+                  onChange={(event) => {
+                    setRepositorySearch(event.target.value)
+                    onSelectRepository('')
+                  }}
+                  placeholder="Search services"
+                  aria-label="Search all services"
+                />
+              </label>
+              {repositoriesLoading ? (
+                <div className="repositories-message">Loading services…</div>
+              ) : repositoriesError ? (
+                <div className="alert warning">{repositoriesError}</div>
+              ) : (
+                <div className="service-list all-services-list">
+                  {filteredOrganizationRepositories.length > 0 ? (
+                    filteredOrganizationRepositories.map((repository) => (
+                      <div
+                        className="all-service-row"
+                        key={repository.repository}
+                      >
+                        <button
+                          className={`all-service-card ${
+                            selectedOrganizationRepository?.repository ===
+                            repository.repository
+                              ? 'selected'
+                              : ''
+                          }`}
+                          type="button"
+                          onClick={() =>
+                            onSelectRepository(repository.repository)
+                          }
+                        >
+                          <span>{repository.name}</span>
+                          <small>
+                            {repository.archived
+                              ? 'Archived'
+                              : repository.defaultBranch}
+                          </small>
+                        </button>
+                        <button
+                          className={`pin-service-button ${
+                            pinnedRepositories.has(repository.repository)
+                              ? 'pinned'
+                              : ''
+                          }`}
+                          type="button"
+                          aria-label={`${
+                            pinnedRepositories.has(repository.repository)
+                              ? 'Unpin'
+                              : 'Pin'
+                          } ${repository.name}`}
+                          title={`${
+                            pinnedRepositories.has(repository.repository)
+                              ? 'Unpin from'
+                              : 'Pin to'
+                          } top`}
+                          onClick={() =>
+                            toggleRepositoryPin(repository.repository)
+                          }
+                        >
+                          {pinnedRepositories.has(repository.repository)
+                            ? '★'
+                            : '☆'}
+                        </button>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="service-search-empty">
+                      No services match your search.
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+            {selectedOrganizationRepository ? (
+              <section
+                className="detail-panel all-service-detail"
+                key={selectedOrganizationRepository.repository}
+              >
+                <div className="detail-heading">
+                  <div>
+                    <h2>{selectedOrganizationRepository.name}</h2>
+                    <a
+                      className="muted"
+                      href={selectedOrganizationRepository.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {selectedOrganizationRepository.repository}
+                    </a>
+                  </div>
+                </div>
+                <div
+                  className="service-detail-tabs"
+                  role="tablist"
+                  aria-label="Service details"
+                >
+                  {[
+                    ['prs', 'PRs'],
+                    ['releases', 'Releases'],
+                    ['branches', 'Branch Ops'],
+                  ].map(([tab, label]) => (
+                    <button
+                      className={allServicesActiveTab === tab ? 'active' : ''}
+                      type="button"
+                      role="tab"
+                      aria-selected={allServicesActiveTab === tab}
+                      key={tab}
+                      onClick={() =>
+                        setAllServicesActiveTab(
+                          tab as 'prs' | 'releases' | 'branches',
+                        )
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div
+                  role="tabpanel"
+                  aria-label={
+                    allServicesActiveTab === 'prs'
+                      ? 'PRs'
+                      : allServicesActiveTab === 'releases'
+                      ? 'Releases'
+                      : 'Branch Ops'
+                  }
+                >
+                  {allServicesActiveTab === 'prs' ? (
+                    <RepositoryPullRequests
+                      repository={selectedOrganizationRepository.repository}
+                    />
+                  ) : (
+                    <ServiceOperations
+                      repository={selectedOrganizationRepository.repository}
+                      productionEnabled={Boolean(connection.productionEnabled)}
+                      view={allServicesActiveTab}
+                      onCreateStagingRelease={() =>
+                        setReleaseRepository(
+                          selectedOrganizationRepository.repository,
+                        )
+                      }
+                      onCreateProductionRelease={
+                        connection.productionEnabled
+                          ? () =>
+                              setProductionReleaseRepository(
+                                selectedOrganizationRepository.repository,
+                              )
+                          : undefined
+                      }
+                    />
+                  )}
+                </div>
+              </section>
+            ) : (
+              !repositoriesLoading && (
+                <section className="detail-panel empty-state">
+                  <h2>No service selected</h2>
+                  <p>Choose a repository to manage its release operations.</p>
+                </section>
+              )
+            )}
+          </div>
+        )}
+
+        {!allServicesSelected && loading && !dashboard && (
           <div className="loading-state" role="status" aria-live="polite">
             <span className="spinner" />
             <h2>Mapping release tickets to pull requests…</h2>
@@ -1268,7 +1589,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           </div>
         )}
 
-        {loading && dashboard && (
+        {!allServicesSelected && loading && dashboard && (
           <div className="sync-state" role="status">
             <span className="spinner" />
             {dashboardProgress?.message ?? 'Refreshing release data…'}
@@ -1282,7 +1603,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           </div>
         )}
 
-        {dashboard && (
+        {!allServicesSelected && dashboard && (
           <>
             <section className="overview-strip">
               <div className="readiness-score">

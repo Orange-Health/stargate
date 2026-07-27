@@ -12,9 +12,11 @@ import {
   getReleaseBuildStatuses,
   getRepositoryReleaseState,
   hasActualMergeConflict,
+  listRepositoryPullRequests,
   mergeBackMergePullRequest,
   mergeFeaturePullRequest,
   mergePromotionPullRequest,
+  mergeRepositoryPullRequest,
   promotionBranches,
   releaseTimestamp,
   sortReleasesNewestFirst,
@@ -36,6 +38,136 @@ function run(
     updatedAt: '2026-07-13T12:01:00Z',
   }
 }
+
+describe('repository pull requests', () => {
+  const config: ConnectionConfig = {
+    jiraSite: 'https://jira.test',
+    jiraEmail: 'rm@test.com',
+    jiraToken: 'jira',
+    githubOrg: 'Orange-Health',
+    githubToken: 'github',
+    jenkinsUrl: 'https://jenkins.test',
+    jenkinsUsername: 'rm',
+    jenkinsToken: 'jenkins',
+  }
+
+  it('lists five recent pull requests and reports another page', async () => {
+    const pulls = Array.from({ length: 5 }, (_, index) => ({
+      number: index + 1,
+      node_id: `PR_${index + 1}`,
+      title: `Pull ${index + 1}`,
+      body: null,
+      html_url: `https://github.test/pull/${index + 1}`,
+      draft: false,
+      state: 'open',
+      merged_at: null,
+      mergeable: true,
+      mergeable_state: 'clean',
+      updated_at: '2026-07-27T10:00:00Z',
+      user: { login: 'developer' },
+      base: { ref: 'dev' },
+      head: {
+        ref: `feature/${index + 1}`,
+        sha: `sha-${index + 1}`,
+        repo: { full_name: 'Orange-Health/recent-service' },
+      },
+    }))
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            full_name: 'Orange-Health/recent-service',
+            default_branch: 'main',
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(pulls)))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await listRepositoryPullRequests(
+      config,
+      'Orange-Health/recent-service',
+      { state: 'open', base: 'dev', page: 2 },
+    )
+
+    expect(result.items).toHaveLength(5)
+    expect(result.hasMore).toBe(true)
+    expect(result.page).toBe(2)
+    expect(String(fetchMock.mock.calls[1][0])).toContain(
+      'state=open&sort=updated&direction=desc&per_page=5&page=2&base=dev',
+    )
+  })
+
+  it('merges an open non-draft pull request', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            number: 9,
+            state: 'open',
+            draft: false,
+            merged_at: null,
+            mergeable: true,
+            head: { ref: 'feature/OH-9' },
+            base: { ref: 'dev' },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ merged: true, message: 'Merged', sha: 'abc' }),
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await mergeRepositoryPullRequest(
+      config,
+      'Orange-Health/recent-service',
+      9,
+    )
+
+    expect(result.merged).toBe(true)
+    expect(fetchMock.mock.calls[1][1]?.method).toBe('PUT')
+  })
+
+  it('searches pull requests by author', async () => {
+    const pull = {
+      number: 8,
+      title: 'Authored pull',
+      html_url: 'https://github.test/pull/8',
+      draft: false,
+      state: 'open',
+      merged_at: null,
+      updated_at: '2026-07-27T10:00:00Z',
+      user: { login: 'developer' },
+      base: { ref: 'dev' },
+      head: { ref: 'feature/OH-8' },
+    }
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ default_branch: 'main' })),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ total_count: 1, items: [{ number: 8 }] })),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(pull)))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await listRepositoryPullRequests(
+      config,
+      'Orange-Health/recent-service',
+      { state: 'open', author: 'developer', page: 1 },
+    )
+
+    expect(result.items[0]?.author).toBe('developer')
+    expect(decodeURIComponent(String(fetchMock.mock.calls[1][0]))).toContain(
+      'author:developer',
+    )
+  })
+})
 
 describe('aggregateBuildStatus', () => {
   it('reports starting while GitHub has not created a run', () => {

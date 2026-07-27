@@ -14,6 +14,7 @@ import type {
   ReleaseBuildStatusResult,
   RepositoryReleaseHistory,
   RepositoryReleaseState,
+  RepositoryPullRequestList,
   RepositoryRisk,
   ReviewDecision,
   StagingEnvironment,
@@ -64,9 +65,12 @@ type GitHubPull = {
   body: string | null
   html_url: string
   draft: boolean
+  state: 'open' | 'closed'
   merged_at: string | null
   mergeable: boolean | null
   mergeable_state: string
+  updated_at: string
+  user: { login: string }
   base: { ref: string }
   head: {
     ref: string
@@ -481,6 +485,90 @@ async function findPulls(
       pull.head.ref === head &&
       pull.head.repo?.full_name.toLowerCase() === normalizedRepository,
   )
+}
+
+export async function listRepositoryPullRequests(
+  config: ConnectionConfig,
+  repository: string,
+  options: {
+    state: 'open' | 'closed' | 'all'
+    base?: string
+    author?: string
+    page: number
+  },
+): Promise<RepositoryPullRequestList> {
+  assertConnectedRepository(config, repository)
+  const metadataPromise = githubApi<GitHubRepository>(
+    config,
+    `/repos/${repositoryPath(repository)}`,
+  )
+  let hasMore = false
+  let pullsPromise: Promise<GitHubPull[]>
+  if (options.author) {
+    const qualifiers = [
+      `repo:${repository}`,
+      'is:pr',
+      `author:${options.author}`,
+      ...(options.state === 'all' ? [] : [`is:${options.state}`]),
+      ...(options.base ? [`base:${options.base}`] : []),
+    ]
+    const searchQuery = new URLSearchParams({
+      q: qualifiers.join(' '),
+      sort: 'updated',
+      order: 'desc',
+      per_page: '5',
+      page: String(options.page),
+    })
+    pullsPromise = githubApi<{
+      total_count: number
+      items: Array<{ number: number }>
+    }>(config, `/search/issues?${searchQuery}`).then(async (search) => {
+      hasMore = options.page * 5 < search.total_count
+      return Promise.all(
+        search.items.map((item) =>
+          githubApi<GitHubPull>(
+            config,
+            `/repos/${repositoryPath(repository)}/pulls/${item.number}`,
+          ),
+        ),
+      )
+    })
+  } else {
+    const query = new URLSearchParams({
+      state: options.state,
+      sort: 'updated',
+      direction: 'desc',
+      per_page: '5',
+      page: String(options.page),
+    })
+    if (options.base) query.set('base', options.base)
+    pullsPromise = githubApi<GitHubPull[]>(
+      config,
+      `/repos/${repositoryPath(repository)}/pulls?${query}`,
+    ).then((pulls) => {
+      hasMore = pulls.length === 5
+      return pulls
+    })
+  }
+  const [metadata, pulls] = await Promise.all([metadataPromise, pullsPromise])
+  return {
+    repository,
+    defaultBranch: metadata.default_branch,
+    items: pulls.map((pull) => ({
+      number: pull.number,
+      title: pull.title,
+      url: pull.html_url,
+      state: pull.state,
+      draft: pull.draft,
+      merged: Boolean(pull.merged_at),
+      author: pull.user.login,
+      headBranch: pull.head.ref,
+      baseBranch: pull.base.ref,
+      updatedAt: pull.updated_at,
+    })),
+    page: options.page,
+    hasMore,
+  }
 }
 
 type GitHubBranchComparison = {
@@ -986,6 +1074,52 @@ async function forceMergePullRequest(
     message: 'Force-merged with branch protection bypass.',
     sha: merged.sha,
   }
+}
+
+export async function mergeRepositoryPullRequest(
+  config: ConnectionConfig,
+  repository: string,
+  pullNumber: number,
+): Promise<MergePromotionPullRequestResult> {
+  assertConnectedRepository(config, repository)
+  const pull = await githubApi<GitHubPull>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls/${pullNumber}`,
+  )
+  if (pull.state !== 'open' || pull.merged_at) {
+    throw new ProviderError(
+      'Only open, unmerged pull requests can be merged.',
+      'PULL_REQUEST_NOT_OPEN',
+      'github',
+      409,
+    )
+  }
+  if (pull.draft) {
+    throw new ProviderError(
+      'Draft pull requests cannot be merged.',
+      'PULL_REQUEST_IS_DRAFT',
+      'github',
+      409,
+    )
+  }
+  if (pull.mergeable === false) {
+    throw new ProviderError(
+      'This pull request has merge conflicts.',
+      'PULL_REQUEST_CONFLICT',
+      'github',
+      409,
+    )
+  }
+  const result = await githubApi<MergePromotionPullRequestResult>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls/${pullNumber}/merge`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ merge_method: 'merge' }),
+    },
+  )
+  if (result.merged) clearRepositoryCaches(config, repository)
+  return result
 }
 
 export async function mergePromotionPullRequest(

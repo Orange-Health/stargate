@@ -19,6 +19,7 @@ import {
   clearGitHubProviderCache,
   createProductionRelease,
   createStagingRelease,
+  listOrganizationRepositories,
   testGitHubConnection,
 } from './providers/github.js'
 import {
@@ -29,9 +30,11 @@ import {
   getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   getRepositoryRisks,
+  listRepositoryPullRequests,
   mergeBackMergePullRequest,
   mergeFeaturePullRequest,
   mergePromotionPullRequest,
+  mergeRepositoryPullRequest,
 } from './providers/githubOperations.js'
 import {
   listUnreleasedVersions,
@@ -121,6 +124,23 @@ const mergePromotionSchema = z.object({
 
 const mergeFeaturePullSchema = mergePromotionSchema.extend({
   retargetToDev: z.boolean().optional(),
+})
+const repositoryPullQuerySchema = z.object({
+  repository: repositorySchema,
+  state: z.enum(['open', 'closed', 'all']).default('open'),
+  base: z
+    .string()
+    .regex(/^[A-Za-z0-9._/-]+$/)
+    .optional(),
+  author: z
+    .string()
+    .regex(/^[A-Za-z0-9-]+$/)
+    .optional(),
+  page: z.coerce.number().int().positive().default(1),
+})
+const mergeRepositoryPullSchema = z.object({
+  repository: repositorySchema,
+  pullNumber: z.number().int().positive(),
 })
 
 const deploymentSchema = z.object({
@@ -452,6 +472,35 @@ export function createApp() {
     response.status(201).json(release)
   })
 
+  app.get('/api/github/repositories', async (_request, response) => {
+    response.json(await listOrganizationRepositories(requireConnection()))
+  })
+
+  app.get('/api/github/repository-pull-requests', async (request, response) => {
+    const parsed = repositoryPullQuerySchema.safeParse(request.query)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_PULL_REQUEST_QUERY',
+          message: 'Repository, state, branch, or page is invalid.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json(
+      await listRepositoryPullRequests(
+        requireConnection(),
+        parsed.data.repository,
+        {
+          state: parsed.data.state,
+          base: parsed.data.base,
+          author: parsed.data.author,
+          page: parsed.data.page,
+        },
+      ),
+    )
+  })
+
   app.get('/api/github/repository-state', async (request, response) => {
     const parsed = repositorySchema.safeParse(request.query.repository)
     if (!parsed.success) {
@@ -677,6 +726,29 @@ export function createApp() {
           parsed.data.pullNumber,
           parsed.data.retargetToDev,
           parsed.data.bypassBranchProtection,
+        ),
+      )
+    },
+  )
+
+  app.post(
+    '/api/github/repository-pull-requests/merge',
+    async (request, response) => {
+      const parsed = mergeRepositoryPullSchema.safeParse(request.body)
+      if (!parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_PULL_REQUEST_MERGE',
+            message: 'Repository and a valid pull request number are required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        await mergeRepositoryPullRequest(
+          requireConnection(),
+          parsed.data.repository,
+          parsed.data.pullNumber,
         ),
       )
     },
