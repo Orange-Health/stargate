@@ -28,6 +28,7 @@ const serviceToRepository = {
   compass: "compass-clinics",
   consent: "consent-service",
   chronos: "chronos",
+  citrus: "citrus",
   "cpms-web": "cpms",
   dokumentor: "dokumentor",
   runestone: "runestone",
