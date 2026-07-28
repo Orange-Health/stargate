@@ -1528,6 +1528,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                     <ServiceOperations
                       repository={selectedOrganizationRepository.repository}
                       productionEnabled={Boolean(connection.productionEnabled)}
+                      includeAllVReleases
                       view={allServicesActiveTab}
                       onCreateStagingRelease={() =>
                         setReleaseRepository(
@@ -1880,6 +1881,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
         <StagingReleaseDialog
           repository={releaseRepository}
           releaseDate={dashboard?.version.releaseDate ?? ''}
+          allowBranchSelection={allServicesSelected}
           onClose={() => setReleaseRepository('')}
         />
       )}

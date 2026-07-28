@@ -10,6 +10,7 @@ import {
   countSearchBooleanOperators,
   githubApi,
   listOrganizationRepositories,
+  listRepositoryBranches,
   nextProductionTag,
   nextStagingTag,
   stagingTagPrefix,
@@ -65,6 +66,37 @@ describe('organization repositories', () => {
       'https://api.github.com/orgs/orange/repos?type=all&sort=full_name&direction=asc&per_page=100&page=1',
       expect.any(Object),
     )
+  })
+
+  it('lists repository branches for source selection', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify([
+            { name: 'feature/OH-42' },
+            { name: 'dev' },
+            { name: 'main' },
+          ]),
+        ),
+      ),
+    )
+
+    const branches = await listRepositoryBranches(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'orange',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      'orange/service-api',
+    )
+
+    expect(branches).toEqual(['dev', 'feature/OH-42', 'main'])
   })
 })
 
@@ -935,6 +967,52 @@ describe('staging release tags', () => {
       generate_release_notes: true,
     })
     expect(releaseBody).not.toHaveProperty('body')
+  })
+
+  it('creates a prerelease from a selected branch', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ name: 'feature/OH-42' })),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify([])))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 100,
+            html_url: 'https://github.test/releases/100',
+            created_at: '2026-07-13T12:00:00Z',
+          }),
+          { status: 201 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await createStagingRelease(
+      config,
+      'orange/service-api',
+      's2',
+      '2026-07-13',
+      'feature/OH-42',
+    )
+
+    expect(result.sourceBranch).toBe('feature/OH-42')
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/branches/feature%2FOH-42',
+    )
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({
+      target_commitish: 'feature/OH-42',
+    })
   })
 })
 

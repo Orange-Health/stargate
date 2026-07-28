@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { api } from '../../shared/api'
 import type {
   CreatedStagingRelease,
@@ -8,6 +8,7 @@ import type {
 type Props = {
   repository: string
   releaseDate: string
+  allowBranchSelection?: boolean
   onClose: () => void
 }
 
@@ -41,15 +42,39 @@ function tagPreview(environment: StagingEnvironment, date: string) {
 export function StagingReleaseDialog({
   repository,
   releaseDate,
+  allowBranchSelection = false,
   onClose,
 }: Props) {
   const [environment, setEnvironment] = useState<StagingEnvironment>('qa')
+  const [sourceBranch, setSourceBranch] = useState('dev')
+  const [branches, setBranches] = useState<string[]>([])
+  const [branchesLoading, setBranchesLoading] = useState(false)
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [created, setCreated] = useState<CreatedStagingRelease>()
   const date = /^\d{4}-\d{2}-\d{2}$/.test(releaseDate)
     ? releaseDate
     : localDate()
+
+  useEffect(() => {
+    if (!allowBranchSelection) return
+    let active = true
+    setBranchesLoading(true)
+    api
+      .repositoryBranches(repository)
+      .then((items) => {
+        if (active) setBranches(items)
+      })
+      .catch(() => {
+        if (active) setBranches([])
+      })
+      .finally(() => {
+        if (active) setBranchesLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [allowBranchSelection, repository])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -60,6 +85,7 @@ export function StagingReleaseDialog({
         repository,
         environment,
         date,
+        sourceBranch,
       })
       setCreated(result)
       window.dispatchEvent(
@@ -104,8 +130,8 @@ export function StagingReleaseDialog({
             <p className="eyebrow">Pre-release created</p>
             <h2 id="staging-release-title">{created.tag}</h2>
             <p>
-              GitHub created this tag from <code>dev</code>. The matching
-              workflow can now build the staging image.
+              GitHub created this tag from <code>{created.sourceBranch}</code>.
+              The matching workflow can now build the staging image.
             </p>
             <a
               className="primary-button release-link"
@@ -125,7 +151,7 @@ export function StagingReleaseDialog({
             <h2 id="staging-release-title">Create GitHub release</h2>
             <p className="dialog-copy">
               A pre-release tag will be created from the latest commit on{' '}
-              <code>dev</code>.
+              <code>{sourceBranch}</code>.
             </p>
 
             <form onSubmit={submit}>
@@ -148,6 +174,27 @@ export function StagingReleaseDialog({
                   ))}
                 </select>
               </label>
+              {allowBranchSelection && (
+                <label>
+                  Source branch
+                  <input
+                    type="search"
+                    list="staging-source-branches"
+                    value={sourceBranch}
+                    onChange={(event) => setSourceBranch(event.target.value)}
+                    placeholder={
+                      branchesLoading ? 'Loading branches…' : 'Search branches'
+                    }
+                    autoComplete="off"
+                    required
+                  />
+                  <datalist id="staging-source-branches">
+                    {branches.map((branch) => (
+                      <option value={branch} key={branch} />
+                    ))}
+                  </datalist>
+                </label>
+              )}
               <div className="tag-preview">
                 <span>Tag pattern</span>
                 <code>{tagPreview(environment, date)}</code>

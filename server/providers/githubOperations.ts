@@ -125,6 +125,7 @@ export function clearRepositoryCaches(
   riskCache.delete(key)
   qaBuildCache.delete(key)
   repositoryStateCache.delete(key)
+  repositoryStateCache.delete(`${key}:all-v`)
   if (includeBuilds) {
     const buildPrefix = `${key}:`
     for (const buildKey of terminalBuildCache.keys()) {
@@ -205,6 +206,18 @@ export function sortReleasesNewestFirst<
   )
 }
 
+function mapWorkflowRun(run: GitHubWorkflowRun): WorkflowRun {
+  return {
+    id: run.id,
+    name: run.name,
+    status: run.status,
+    conclusion: run.conclusion ?? undefined,
+    url: run.html_url,
+    startedAt: run.run_started_at,
+    updatedAt: run.updated_at,
+  }
+}
+
 async function listReleaseRuns(
   config: ConnectionConfig,
   repository: string,
@@ -231,15 +244,7 @@ async function listReleaseRuns(
         new Date(run.run_started_at).getTime() >=
           new Date(releaseTimestamp(release)).getTime() - 60_000,
     )
-    .map((run) => ({
-      id: run.id,
-      name: run.name,
-      status: run.status,
-      conclusion: run.conclusion ?? undefined,
-      url: run.html_url,
-      startedAt: run.run_started_at,
-      updatedAt: run.updated_at,
-    }))
+    .map(mapWorkflowRun)
   if (
     ['succeeded', 'failed', 'canceled'].includes(aggregateBuildStatus(runs))
   ) {
@@ -289,18 +294,29 @@ async function listTrackedReleases(
   config: ConnectionConfig,
   repository: string,
   limit = 3,
+  includeAllVReleases = false,
 ): Promise<{
   stagingReleases: TrackedStagingRelease[]
   productionReleases: TrackedProductionRelease[]
 }> {
-  const releases = await githubApi<GitHubRelease[]>(
-    config,
-    `/repos/${repositoryPath(repository)}/releases?per_page=30`,
-  )
+  const [releases, recentRuns] = await Promise.all([
+    githubApi<GitHubRelease[]>(
+      config,
+      `/repos/${repositoryPath(repository)}/releases?per_page=30`,
+    ),
+    includeAllVReleases
+      ? githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
+          config,
+          `/repos/${repositoryPath(repository)}/actions/runs?per_page=100`,
+        ).then((response) => response.workflow_runs)
+      : Promise.resolve([]),
+  ])
   const staging = sortReleasesNewestFirst(
     releases.filter(
       (release) =>
-        release.prerelease && stagingTagPattern.test(release.tag_name),
+        includeAllVReleases
+          ? release.tag_name.startsWith('v-')
+          : release.prerelease && stagingTagPattern.test(release.tag_name),
     ),
   )
     .slice(0, limit)
@@ -314,15 +330,16 @@ async function listTrackedReleases(
   )
     .slice(0, limit)
 
-  const stagingReleases = await Promise.all(
+  const releaseBackedStaging = await Promise.all(
     staging.map(async (release) => {
       const runs = await listReleaseRuns(config, repository, release)
       return {
         id: release.id,
         tag: release.tag_name,
-        environment: stagingTagPattern.exec(
-          release.tag_name,
-        )?.[1] as StagingEnvironment,
+        environment:
+          (stagingTagPattern.exec(release.tag_name)?.[1] as
+            | StagingEnvironment
+            | undefined) ?? 'custom',
         url: release.html_url,
         createdAt: releaseTimestamp(release),
         buildStatus: aggregateBuildStatus(runs),
@@ -330,6 +347,51 @@ async function listTrackedReleases(
       }
     }),
   )
+  const releaseTags = new Set(
+    releaseBackedStaging.map((release) => release.tag),
+  )
+  const runsByTag = new Map<string, GitHubWorkflowRun[]>()
+  if (includeAllVReleases) {
+    for (const run of recentRuns) {
+      const tag = run.head_branch
+      if (!tag?.startsWith('v-') || releaseTags.has(tag)) continue
+      const current = runsByTag.get(tag) ?? []
+      current.push(run)
+      runsByTag.set(tag, current)
+    }
+  }
+  const actionOnlyBuilds: TrackedStagingRelease[] = [...runsByTag].map(
+    ([tag, tagRuns]) => {
+      const runs = tagRuns.map(mapWorkflowRun)
+      const latest = [...runs].sort(
+        (left, right) =>
+          new Date(right.startedAt).getTime() -
+          new Date(left.startedAt).getTime(),
+      )[0]
+      return {
+        id: latest.id,
+        tag,
+        environment:
+          (stagingTagPattern.exec(tag)?.[1] as
+            | StagingEnvironment
+            | undefined) ?? 'custom',
+        url: latest.url,
+        createdAt: latest.startedAt,
+        buildStatus: aggregateBuildStatus(runs),
+        runs,
+      }
+    },
+  )
+  const stagingReleases = [
+    ...releaseBackedStaging,
+    ...actionOnlyBuilds,
+  ]
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    )
+    .slice(0, limit)
   const productionReleases = await Promise.all(
     production.map(async (release) => {
       const runs = await listReleaseRuns(config, repository, release)
@@ -350,11 +412,17 @@ async function listTrackedReleases(
 export async function getRepositoryReleaseHistory(
   config: ConnectionConfig,
   repository: string,
+  includeAllVReleases = false,
 ): Promise<RepositoryReleaseHistory> {
   assertConnectedRepository(config, repository)
   return {
     repository,
-    ...(await listTrackedReleases(config, repository, 12)),
+    ...(await listTrackedReleases(
+      config,
+      repository,
+      includeAllVReleases ? 30 : 12,
+      includeAllVReleases,
+    )),
   }
 }
 
@@ -767,6 +835,7 @@ async function latestProductionTagDelta(
 async function loadRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
+  includeAllVReleases = false,
 ): Promise<RepositoryReleaseState> {
   assertConnectedRepository(config, repository)
   const metadata = await githubApi<GitHubRepository>(
@@ -774,7 +843,12 @@ async function loadRepositoryReleaseState(
     `/repos/${repositoryPath(repository)}`,
   )
   const [trackedReleases, promotionSteps, backMergeSteps] = await Promise.all([
-    listTrackedReleases(config, repository),
+    listTrackedReleases(
+      config,
+      repository,
+      includeAllVReleases ? 30 : 3,
+      includeAllVReleases,
+    ),
     Promise.all([
       promotionStep(
         config,
@@ -850,13 +924,19 @@ async function loadRepositoryReleaseState(
 export function getRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
+  includeAllVReleases = false,
 ): Promise<RepositoryReleaseState> {
   assertConnectedRepository(config, repository)
-  const key = `${config.githubOrg}:${repository}`.toLowerCase()
+  const baseKey = `${config.githubOrg}:${repository}`.toLowerCase()
+  const key = includeAllVReleases ? `${baseKey}:all-v` : baseKey
   const cached = repositoryStateCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
 
-  const value = loadRepositoryReleaseState(config, repository)
+  const value = loadRepositoryReleaseState(
+    config,
+    repository,
+    includeAllVReleases,
+  )
   repositoryStateCache.set(key, {
     expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
     value,

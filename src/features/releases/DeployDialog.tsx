@@ -10,6 +10,7 @@ type Props = {
   repository: string
   release: TrackedStagingRelease
   services: string[]
+  allowAnyVTag?: boolean
   onClose: () => void
 }
 
@@ -31,10 +32,13 @@ export function DeployDialog({
   repository,
   release,
   services,
+  allowAnyVTag = false,
   onClose,
 }: Props) {
   const initialEnvironment =
-    release.environment === 's6' ? 'qa' : release.environment
+    release.environment === 's6' || release.environment === 'custom'
+      ? 'qa'
+      : release.environment
   const [environment, setEnvironment] =
     useState<DeploymentEnvironment>(initialEnvironment)
   const [service, setService] = useState(services[0] ?? '')
@@ -93,6 +97,7 @@ export function DeployDialog({
           service,
           tag: release.tag,
           environment,
+          ...(allowAnyVTag ? { allowAnyVTag: true } : {}),
         }),
       )
     } catch (reason) {

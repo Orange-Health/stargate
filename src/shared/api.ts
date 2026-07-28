@@ -87,6 +87,10 @@ export const api = {
   releases: () => request<JiraVersion[]>('/api/releases'),
   repositories: () =>
     request<OrganizationRepository[]>('/api/github/repositories'),
+  repositoryBranches: (repository: string) =>
+    request<string[]>(
+      `/api/github/repository-branches?repository=${encodeURIComponent(repository)}`,
+    ),
   repositoryPullRequests: (
     repository: string,
     options: {
@@ -138,13 +142,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  repositoryState: (repository: string) =>
+  repositoryState: (repository: string, includeAllVReleases = false) =>
     request<RepositoryReleaseState>(
-      `/api/github/repository-state?repository=${encodeURIComponent(repository)}`,
+      `/api/github/repository-state?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
     ),
-  releaseHistory: (repository: string) =>
+  releaseHistory: (repository: string, includeAllVReleases = false) =>
     request<RepositoryReleaseHistory>(
-      `/api/github/release-history?repository=${encodeURIComponent(repository)}`,
+      `/api/github/release-history?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
     ),
   releaseBuildStatuses: (
     releases: ReleaseBuildStatusInput[],

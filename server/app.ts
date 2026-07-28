@@ -20,6 +20,7 @@ import {
   createProductionRelease,
   createStagingRelease,
   listOrganizationRepositories,
+  listRepositoryBranches,
   testGitHubConnection,
 } from './providers/github.js'
 import {
@@ -95,6 +96,7 @@ const stagingReleaseSchema = z.object({
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5', 's6']),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  sourceBranch: z.string().trim().min(1).max(255).optional(),
 })
 const repositorySchema = z
   .string()
@@ -144,14 +146,28 @@ const mergeRepositoryPullSchema = z.object({
   pullNumber: z.number().int().positive(),
 })
 
-const deploymentSchema = z.object({
-  repository: repositorySchema,
-  service: z.string().regex(/^[A-Za-z0-9_.-]+$/),
-  tag: z
-    .string()
-    .regex(/^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/),
-  environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5']),
-})
+const deploymentSchema = z
+  .object({
+    repository: repositorySchema,
+    service: z.string().regex(/^[A-Za-z0-9_.-]+$/),
+    tag: z.string().max(255),
+    environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5']),
+    allowAnyVTag: z.boolean().optional(),
+  })
+  .superRefine((input, context) => {
+    const pattern = input.allowAnyVTag
+      ? /^v-[A-Za-z0-9._/-]+$/
+      : /^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/
+    if (!pattern.test(input.tag)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['tag'],
+        message: input.allowAnyVTag
+          ? 'Tag must start with v-.'
+          : 'Tag must use the standard staging release format.',
+      })
+    }
+  })
 
 const productionDeploymentSchema = z
   .object({
@@ -444,6 +460,7 @@ export function createApp() {
       parsed.data.repository,
       parsed.data.environment,
       parsed.data.date,
+      parsed.data.sourceBranch,
     )
     clearRepositoryCaches(config, parsed.data.repository)
     response.status(201).json(release)
@@ -475,6 +492,22 @@ export function createApp() {
 
   app.get('/api/github/repositories', async (_request, response) => {
     response.json(await listOrganizationRepositories(requireConnection()))
+  })
+
+  app.get('/api/github/repository-branches', async (request, response) => {
+    const parsed = repositorySchema.safeParse(request.query.repository)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORY',
+          message: 'Repository must use the owner/name format.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json(
+      await listRepositoryBranches(requireConnection(), parsed.data),
+    )
   })
 
   app.get('/api/github/repository-pull-requests', async (request, response) => {
@@ -536,8 +569,10 @@ export function createApp() {
       return
     }
     const config = requireConnection()
+    const includeAllVReleases =
+      request.query.includeAllVReleases === 'true'
     const [state, deploymentResult] = await Promise.all([
-      getRepositoryReleaseState(config, parsed.data),
+      getRepositoryReleaseState(config, parsed.data, includeAllVReleases),
       currentDeployments(config, parsed.data),
     ])
     response.json({
@@ -559,7 +594,11 @@ export function createApp() {
       return
     }
     response.json(
-      await getRepositoryReleaseHistory(requireConnection(), parsed.data),
+      await getRepositoryReleaseHistory(
+        requireConnection(),
+        parsed.data,
+        request.query.includeAllVReleases === 'true',
+      ),
     )
   })
 

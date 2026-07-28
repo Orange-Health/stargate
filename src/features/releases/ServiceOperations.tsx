@@ -15,6 +15,7 @@ import { ProductionDeployDialog } from './ProductionDeployDialog'
 type Props = {
   repository: string
   productionEnabled?: boolean
+  includeAllVReleases?: boolean
   view?: 'all' | 'releases' | 'branches' | 'hidden'
   onCreateStagingRelease?: () => void
   onCreateProductionRelease?: () => void
@@ -105,6 +106,7 @@ function canForceMergeBackMerge(step: BackMergeStep): boolean {
 export function ServiceOperations({
   repository,
   productionEnabled = false,
+  includeAllVReleases = false,
   view = 'all',
   onCreateStagingRelease,
   onCreateProductionRelease,
@@ -190,7 +192,9 @@ export function ServiceOperations({
       if (!silent) setLoading(true)
       setError('')
       try {
-        const nextState = await api.repositoryState(repository)
+        const nextState = includeAllVReleases
+          ? await api.repositoryState(repository, true)
+          : await api.repositoryState(repository)
         if (sequence !== loadSequence.current) return
         announceCompletedBuilds(nextState)
         setState(nextState)
@@ -206,7 +210,7 @@ export function ServiceOperations({
         if (!silent && sequence === loadSequence.current) setLoading(false)
       }
     },
-    [announceCompletedBuilds, repository],
+    [announceCompletedBuilds, includeAllVReleases, repository],
   )
 
   useEffect(() => {
@@ -360,7 +364,9 @@ export function ServiceOperations({
     setHistoryLoading(true)
     setError('')
     try {
-      const history = await api.releaseHistory(repository)
+      const history = includeAllVReleases
+        ? await api.releaseHistory(repository, true)
+        : await api.releaseHistory(repository)
       setState((current) =>
         current
           ? {
@@ -571,7 +577,9 @@ export function ServiceOperations({
         <div className="operation-heading">
           <div>
             <p className="eyebrow">GitHub Actions</p>
-            <h3>Staging releases</h3>
+            <h3>
+              {includeAllVReleases ? 'Release builds' : 'Staging releases'}
+            </h3>
           </div>
           <div className="operation-heading-actions">
             {onCreateStagingRelease && (
@@ -698,7 +706,9 @@ export function ServiceOperations({
           </div>
         ) : (
           <div className="operation-empty">
-            No staging releases found for this service.
+            {includeAllVReleases
+              ? 'No v- release builds found for this service.'
+              : 'No staging releases found for this service.'}
           </div>
         )}
       </section>
@@ -1046,6 +1056,7 @@ export function ServiceOperations({
           repository={repository}
           release={deployRelease}
           services={state.jenkinsServices}
+          allowAnyVTag={includeAllVReleases}
           onClose={() => setDeployRelease(undefined)}
         />
       )}

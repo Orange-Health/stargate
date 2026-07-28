@@ -142,6 +142,12 @@ describe('ReleaseOverview', () => {
     expect(await screen.findByRole('heading', { name: 'All services' }))
       .toBeVisible()
     expect(screen.getByRole('heading', { name: 'operations' })).toBeVisible()
+    await waitFor(() =>
+      expect(api.repositoryState).toHaveBeenCalledWith(
+        'orange/operations',
+        true,
+      ),
+    )
     expect(screen.getByRole('link', { name: /orange\/operations/ })).toHaveAttribute(
       'href',
       'https://github.test/orange/operations',

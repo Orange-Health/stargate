@@ -651,6 +651,7 @@ export async function createStagingRelease(
   repository: string,
   environment: StagingEnvironment,
   date: string,
+  sourceBranch = 'dev',
 ): Promise<CreatedStagingRelease> {
   const [owner] = repository.split('/')
   if (owner.toLowerCase() !== config.githubOrg.toLowerCase()) {
@@ -658,7 +659,10 @@ export async function createStagingRelease(
   }
 
   const path = repositoryPath(repository)
-  await githubFetch(config, `/repos/${path}/branches/dev`)
+  await githubFetch(
+    config,
+    `/repos/${path}/branches/${encodeURIComponent(sourceBranch)}`,
+  )
   const prefix = stagingTagPrefix(environment, date)
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -676,7 +680,7 @@ export async function createStagingRelease(
         method: 'POST',
         body: JSON.stringify({
           tag_name: tag,
-          target_commitish: 'dev',
+          target_commitish: sourceBranch,
           name: tag,
           draft: false,
           prerelease: true,
@@ -688,7 +692,7 @@ export async function createStagingRelease(
         repository,
         environment,
         tag,
-        sourceBranch: 'dev',
+        sourceBranch,
         url: release.html_url,
         createdAt: release.created_at,
       }
@@ -851,6 +855,31 @@ export async function listOrganizationRepositories(
     if (batch.length < 100) break
   }
   return repositories
+}
+
+export async function listRepositoryBranches(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<string[]> {
+  const [owner] = repository.split('/')
+  if (owner.toLowerCase() !== config.githubOrg.toLowerCase()) {
+    throw new ProviderError(
+      'Repository is outside the connected GitHub organization.',
+      'REPOSITORY_NOT_ALLOWED',
+      'github',
+      403,
+    )
+  }
+  const branches: string[] = []
+  for (let page = 1; ; page += 1) {
+    const batch = await githubFetch<Array<{ name: string }>>(
+      config,
+      `/repos/${repositoryPath(repository)}/branches?per_page=100&page=${page}`,
+    )
+    branches.push(...batch.map((branch) => branch.name))
+    if (batch.length < 100) break
+  }
+  return branches.sort((left, right) => left.localeCompare(right))
 }
 
 export function titleContainsIssueKey(title: string, issueKey: string) {

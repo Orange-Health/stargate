@@ -173,6 +173,7 @@ export type CreateStagingReleaseInput = {
   repository: string
   environment: StagingEnvironment
   date: string
+  sourceBranch?: string
 }
 
 export type CreateProductionReleaseInput = {
@@ -186,7 +187,7 @@ export type CreatedStagingRelease = {
   repository: string
   environment: StagingEnvironment
   tag: string
-  sourceBranch: 'dev'
+  sourceBranch: string
   url: string
   createdAt: string
 }
@@ -231,7 +232,7 @@ export type ReleaseBuildStatusResult = ReleaseBuildStatusInput & {
 export type TrackedStagingRelease = {
   id: number
   tag: string
-  environment: StagingEnvironment
+  environment: StagingEnvironment | 'custom'
   url: string
   createdAt: string
   buildStatus: BuildStatus
@@ -399,6 +400,7 @@ export type TriggerDeploymentInput = {
   service: string
   tag: string
   environment: DeploymentEnvironment
+  allowAnyVTag?: boolean
 }
 
 export type TriggeredDeployment = {

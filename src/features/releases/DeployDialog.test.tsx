@@ -61,4 +61,40 @@ describe('DeployDialog', () => {
       'https://jenkins.test/job/DEV/job/DEV%20Deployer/2152/',
     )
   })
+
+  it('allows an all-services v- tag to be deployed', async () => {
+    const user = userEvent.setup()
+    const trigger = vi.spyOn(api, 'triggerDeployment').mockResolvedValue({
+      queueId: 82,
+      queueUrl: 'https://jenkins.test/queue/item/82/',
+      jobName: 'QA/QA-DEPLOYMENT',
+      service: 'sapphire',
+      tag: 'v-qa-citrus-4',
+      environment: 'qa',
+    })
+
+    render(
+      <DeployDialog
+        repository="Orange-Health/sapphire"
+        release={{
+          ...release,
+          id: 2,
+          tag: 'v-qa-citrus-4',
+          environment: 'custom',
+        }}
+        services={['sapphire']}
+        allowAnyVTag
+        onClose={vi.fn()}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Deploy' }))
+
+    expect(trigger).toHaveBeenCalledWith({
+      repository: 'Orange-Health/sapphire',
+      service: 'sapphire',
+      tag: 'v-qa-citrus-4',
+      environment: 'qa',
+      allowAnyVTag: true,
+    })
+  })
 })

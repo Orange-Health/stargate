@@ -95,6 +95,25 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_DEPLOYMENT')
   })
 
+  it('accepts nonstandard v- tags only for all-services deployments', async () => {
+    const app = createApp()
+    const input = {
+      repository: 'Orange-Health/sapphire',
+      service: 'sapphire',
+      tag: 'v-qa-citrus-4',
+      environment: 'qa',
+    }
+    const regular = await request(app).post('/api/jenkins/deployments').send(input)
+    const allServices = await request(app)
+      .post('/api/jenkins/deployments')
+      .send({ ...input, allowAnyVTag: true })
+
+    expect(regular.status).toBe(400)
+    expect(regular.body.error.code).toBe('INVALID_DEPLOYMENT')
+    expect(allServices.status).toBe(401)
+    expect(allServices.body.error.code).toBe('NOT_CONNECTED')
+  })
+
   it('validates Jenkins queue item identifiers', async () => {
     const response = await request(createApp()).get(
       '/api/jenkins/queue/not-a-number',

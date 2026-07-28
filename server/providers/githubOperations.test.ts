@@ -10,6 +10,7 @@ import {
   comparisonHasAnyFileChanges,
   comparisonHasSourceFileChanges,
   getReleaseBuildStatuses,
+  getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   hasActualMergeConflict,
   listRepositoryPullRequestAuthors,
@@ -187,6 +188,115 @@ describe('repository pull requests', () => {
     expect(decodeURIComponent(String(fetchMock.mock.calls[1][0]))).toContain(
       'author:developer',
     )
+  })
+})
+
+describe('all-services release builds', () => {
+  it('includes every GitHub release whose tag starts with v-', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = String(input)
+        if (url.includes('/releases?')) {
+          return new Response(
+            JSON.stringify([
+              {
+                id: 1,
+                tag_name: 'v-feature-OH-42',
+                html_url: 'https://github.test/releases/1',
+                prerelease: false,
+                created_at: '2026-07-28T10:00:00Z',
+              },
+              {
+                id: 2,
+                tag_name: 'build-without-prefix',
+                html_url: 'https://github.test/releases/2',
+                prerelease: true,
+                created_at: '2026-07-28T09:00:00Z',
+              },
+            ]),
+          )
+        }
+        if (url.includes('/actions/runs?')) {
+          return new Response(JSON.stringify({ workflow_runs: [] }))
+        }
+        throw new Error(`Unexpected GitHub request: ${url}`)
+      }),
+    )
+    const history = await getRepositoryReleaseHistory(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'Orange-Health',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      'Orange-Health/all-release-builds',
+      true,
+    )
+
+    expect(history.stagingReleases).toHaveLength(1)
+    expect(history.stagingReleases[0]).toMatchObject({
+      tag: 'v-feature-OH-42',
+      environment: 'custom',
+    })
+  })
+
+  it('includes v- tags found only in GitHub Actions runs', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = String(input)
+        if (url.includes('/releases?')) {
+          return new Response(JSON.stringify([]))
+        }
+        if (url.includes('/actions/runs?')) {
+          return new Response(
+            JSON.stringify({
+              workflow_runs: [
+                {
+                  id: 44,
+                  name: 'Sapphire build',
+                  event: 'push',
+                  head_branch: 'v-qa-citrus-4',
+                  status: 'in_progress',
+                  conclusion: null,
+                  html_url: 'https://github.test/actions/runs/44',
+                  run_started_at: '2026-07-28T10:00:00Z',
+                  updated_at: '2026-07-28T10:01:00Z',
+                },
+              ],
+            }),
+          )
+        }
+        throw new Error(`Unexpected GitHub request: ${url}`)
+      }),
+    )
+
+    const history = await getRepositoryReleaseHistory(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'Orange-Health',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      'Orange-Health/sapphire',
+      true,
+    )
+
+    expect(history.stagingReleases[0]).toMatchObject({
+      tag: 'v-qa-citrus-4',
+      environment: 'custom',
+      buildStatus: 'running',
+      url: 'https://github.test/actions/runs/44',
+    })
   })
 })
 
