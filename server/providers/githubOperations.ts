@@ -94,6 +94,7 @@ type GitHubChecks = {
 
 const stagingTagPattern =
   /^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/
+const productionTagPattern = /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+$/
 const RISK_CACHE_MS = 45_000
 const REPOSITORY_STATE_CACHE_MS = 30_000
 type BackMergeRiskStatus = {
@@ -315,7 +316,8 @@ async function listTrackedReleases(
     releases.filter(
       (release) =>
         includeAllVReleases
-          ? release.tag_name.startsWith('v-')
+          ? release.tag_name.startsWith('v-') &&
+            !productionTagPattern.test(release.tag_name)
           : release.prerelease && stagingTagPattern.test(release.tag_name),
     ),
   )
@@ -325,7 +327,7 @@ async function listTrackedReleases(
     releases.filter(
       (release) =>
         !release.prerelease &&
-        /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
+        productionTagPattern.test(release.tag_name),
     ),
   )
     .slice(0, limit)
@@ -348,7 +350,10 @@ async function listTrackedReleases(
     }),
   )
   const releaseTags = new Set(
-    releaseBackedStaging.map((release) => release.tag),
+    [
+      ...releaseBackedStaging.map((release) => release.tag),
+      ...production.map((release) => release.tag_name),
+    ],
   )
   const runsByTag = new Map<string, GitHubWorkflowRun[]>()
   if (includeAllVReleases) {
@@ -360,8 +365,9 @@ async function listTrackedReleases(
       runsByTag.set(tag, current)
     }
   }
-  const actionOnlyBuilds: TrackedStagingRelease[] = [...runsByTag].map(
-    ([tag, tagRuns]) => {
+  const actionOnlyBuilds: TrackedStagingRelease[] = [...runsByTag]
+    .filter(([tag]) => !productionTagPattern.test(tag))
+    .map(([tag, tagRuns]) => {
       const runs = tagRuns.map(mapWorkflowRun)
       const latest = [...runs].sort(
         (left, right) =>
@@ -380,8 +386,7 @@ async function listTrackedReleases(
         buildStatus: aggregateBuildStatus(runs),
         runs,
       }
-    },
-  )
+    })
   const stagingReleases = [
     ...releaseBackedStaging,
     ...actionOnlyBuilds,
@@ -392,7 +397,7 @@ async function listTrackedReleases(
         new Date(left.createdAt).getTime(),
     )
     .slice(0, limit)
-  const productionReleases = await Promise.all(
+  const releaseBackedProduction = await Promise.all(
     production.map(async (release) => {
       const runs = await listReleaseRuns(config, repository, release)
       return {
@@ -406,6 +411,34 @@ async function listTrackedReleases(
       }
     }),
   )
+  const actionOnlyProduction: TrackedProductionRelease[] = [...runsByTag]
+    .filter(([tag]) => productionTagPattern.test(tag))
+    .map(([tag, tagRuns]) => {
+      const runs = tagRuns.map(mapWorkflowRun)
+      const latest = [...runs].sort(
+        (left, right) =>
+          new Date(right.startedAt).getTime() -
+          new Date(left.startedAt).getTime(),
+      )[0]
+      return {
+        id: latest.id,
+        tag,
+        url: latest.url,
+        createdAt: latest.startedAt,
+        buildStatus: aggregateBuildStatus(runs),
+        runs,
+      }
+    })
+  const productionReleases = [
+    ...releaseBackedProduction,
+    ...actionOnlyProduction,
+  ]
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    )
+    .slice(0, limit)
   return { stagingReleases, productionReleases }
 }
 

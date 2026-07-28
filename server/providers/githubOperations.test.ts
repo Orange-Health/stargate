@@ -268,6 +268,17 @@ describe('all-services release builds', () => {
                   run_started_at: '2026-07-28T10:00:00Z',
                   updated_at: '2026-07-28T10:01:00Z',
                 },
+                {
+                  id: 45,
+                  name: 'Sapphire web production build',
+                  event: 'push',
+                  head_branch: 'v-prod-26.0728.1',
+                  status: 'in_progress',
+                  conclusion: null,
+                  html_url: 'https://github.test/actions/runs/45',
+                  run_started_at: '2026-07-28T10:02:00Z',
+                  updated_at: '2026-07-28T10:03:00Z',
+                },
               ],
             }),
           )
@@ -296,6 +307,11 @@ describe('all-services release builds', () => {
       environment: 'custom',
       buildStatus: 'running',
       url: 'https://github.test/actions/runs/44',
+    })
+    expect(history.productionReleases[0]).toMatchObject({
+      tag: 'v-prod-26.0728.1',
+      buildStatus: 'running',
+      url: 'https://github.test/actions/runs/45',
     })
   })
 })
