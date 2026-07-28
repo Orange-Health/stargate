@@ -3,6 +3,7 @@ export const FRONTEND_PRODUCTION_REPOSITORIES = [
   'bifrost',
   'occ-web',
   'sapphire-web',
+  'super-crm',
 ] as const
 
 export function usesFrontendProductionTag(repository: string) {

@@ -1023,6 +1023,9 @@ describe('production release tags', () => {
     ).toBe(
       'v-prod-26.0714.',
     )
+    expect(
+      productionTagPrefix('Orange-Health/super-crm', '2026-07-14'),
+    ).toBe('v-prod-26.0714.')
     expect(productionTagPrefix('Orange-Health/sapphire', '2026-07-14')).toBe(
       'v26.0714.',
     )
