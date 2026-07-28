@@ -1114,7 +1114,7 @@ describe('production release tags', () => {
           JSON.stringify([
             {
               id: 101,
-              tag_name: 'v-26.0714.3',
+              tag_name: 'v26.0714.3',
               target_commitish: 'master',
               html_url: 'https://github.test/releases/101',
               created_at: '2026-07-14T12:05:00Z',
@@ -1148,7 +1148,7 @@ describe('production release tags', () => {
       operationId,
     )
 
-    expect(result.tag).toBe('v-26.0714.3')
+    expect(result.tag).toBe('v26.0714.3')
     expect(result.sourceBranch).toBe('master')
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
@@ -1224,7 +1224,7 @@ describe('production release tags', () => {
           JSON.stringify([
             {
               id: 101,
-              tag_name: 'v-26.0716.1',
+              tag_name: 'v26.0716.1',
               target_commitish: 'master',
               html_url: 'https://github.test/releases/101',
               created_at: '2026-07-16T12:05:00Z',
@@ -1266,10 +1266,10 @@ describe('production release tags', () => {
       operationId,
     )
 
-    expect(result.tag).toBe('v-26.0623.1')
+    expect(result.tag).toBe('v26.0623.1')
     expect(fetchMock).toHaveBeenCalledTimes(4)
     expect(String(fetchMock.mock.calls[2][0])).toContain(
-      '/git/matching-refs/tags/v-26.0623.',
+      '/git/matching-refs/tags/v26.0623.',
     )
   })
 
@@ -1287,7 +1287,7 @@ describe('production release tags', () => {
           JSON.stringify([
             {
               id: 101,
-              tag_name: 'v-26.0714.3',
+              tag_name: 'v26.0714.3',
               target_commitish: 'master',
               html_url: 'https://github.test/releases/101',
               created_at: '2026-07-14T12:05:00Z',
@@ -1302,7 +1302,7 @@ describe('production release tags', () => {
           JSON.stringify({
             workflow_runs: [
               {
-                head_branch: 'v-26.0714.3',
+                head_branch: 'v26.0714.3',
                 conclusion: 'cancelled',
               },
             ],
@@ -1312,7 +1312,7 @@ describe('production release tags', () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify([{ ref: 'refs/tags/v-26.0714.3' }]),
+          JSON.stringify([{ ref: 'refs/tags/v26.0714.3' }]),
           { status: 200 },
         ),
       )
@@ -1345,7 +1345,7 @@ describe('production release tags', () => {
       operationId,
     )
 
-    expect(result.tag).toBe('v-26.0714.4')
+    expect(result.tag).toBe('v26.0714.4')
     expect(fetchMock).toHaveBeenCalledTimes(5)
   })
 })
