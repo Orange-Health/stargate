@@ -2,6 +2,7 @@ import Jenkins from "jenkins";
 import type {
   ConnectionConfig,
   DeploymentEnvironment,
+  JenkinsBuildStatus,
   JenkinsDeployedTag,
   JenkinsQueueStatus,
   TriggerProductionDeploymentInput,
@@ -183,10 +184,11 @@ export function productionDeployedTagsFromBuilds(
 ): JenkinsDeployedTag[] {
   const serviceSet = new Set(services.map((service) => service.toLowerCase()));
   const deployments = new Map<string, JenkinsDeployedTag>();
+  const latestServices = new Set<string>();
+  const liveServices = new Set<string>();
   for (const build of [...builds].sort(
     (left, right) => right.number - left.number,
   )) {
-    if (build.result !== "SUCCESS") continue;
     const parameters = buildParameters(build);
     const service = (
       parameters.SERVICE ?? parameters.SERVICE_NAME
@@ -195,19 +197,36 @@ export function productionDeployedTagsFromBuilds(
     if (
       !service ||
       !serviceSet.has(service) ||
-      !tag ||
-      deployments.has(service)
+      !tag
     ) {
       continue;
     }
-    deployments.set(service, {
+    const status =
+      !build.result
+        ? "running"
+        : build.result === "SUCCESS"
+          ? "succeeded"
+          : build.result === "ABORTED"
+            ? "canceled"
+            : "failed";
+    const deployment: JenkinsDeployedTag = {
       service,
       tag,
       environment: "production",
+      status,
       buildNumber: build.number,
       buildUrl: build.url ?? "",
       deployedAt: new Date(build.timestamp ?? 0).toISOString(),
-    });
+    };
+    if (!latestServices.has(service)) {
+      deployments.set(`${service}:latest`, deployment);
+      latestServices.add(service);
+      if (status === "succeeded") liveServices.add(service);
+    }
+    if (status === "succeeded" && !liveServices.has(service)) {
+      deployments.set(`${service}:live`, deployment);
+      liveServices.add(service);
+    }
   }
   return [...deployments.values()];
 }
@@ -518,11 +537,13 @@ export async function triggerProductionDeployment(
       throw new Error("Jenkins did not return a valid queue item.");
     }
     let buildUrl: string | undefined;
+    let buildNumber: number | undefined;
     try {
       const queueItem = (await client.queue.item(queueId)) as {
-        executable?: { url?: string };
+        executable?: { number?: number; url?: string };
       };
       buildUrl = queueItem.executable?.url;
+      buildNumber = queueItem.executable?.number;
     } catch {
       // It is normal for the queue item to take a moment to become available.
     }
@@ -530,6 +551,7 @@ export async function triggerProductionDeployment(
       queueId,
       queueUrl: `${prodConfig.jenkinsUrl.replace(/\/+$/, "")}/queue/item/${queueId}/`,
       buildUrl,
+      buildNumber,
       jobName: spec.jobName,
       service: input.service,
       imageTag: input.imageTag,
@@ -595,4 +617,42 @@ export function getProductionDeploymentQueueStatus(
   queueId: number,
 ) {
   return getDeploymentQueueStatus(productionConfig(config), queueId);
+}
+
+export async function getProductionDeploymentBuildStatus(
+  config: ConnectionConfig,
+  buildNumber: number,
+): Promise<JenkinsBuildStatus> {
+  try {
+    const build = (await jenkinsClient(productionConfig(config)).build.get(
+      "Prod Deployments/Prod-cluster-deployment",
+      buildNumber,
+    )) as {
+      building?: boolean;
+      result?: string | null;
+      url?: string;
+    };
+    const status = build.building || !build.result
+      ? "running"
+      : build.result === "SUCCESS"
+        ? "succeeded"
+        : build.result === "ABORTED"
+          ? "canceled"
+          : "failed";
+    return {
+      buildNumber,
+      status,
+      buildUrl: build.url,
+    };
+  } catch (error) {
+    throw new ProviderError(
+      error instanceof Error
+        ? `Could not resolve production Jenkins build: ${error.message}`
+        : "Could not resolve production Jenkins build.",
+      "JENKINS_PRODUCTION_BUILD_LOOKUP_FAILED",
+      "jenkins",
+      502,
+      true,
+    );
+  }
 }

@@ -3,6 +3,7 @@ import { api } from '../../shared/api'
 import type {
   BackMergeStep,
   BuildStatus,
+  JenkinsDeployedTag,
   PromotionStep,
   RepositoryReleaseData,
   RepositoryReleaseState,
@@ -37,6 +38,20 @@ const buildLabels: Record<BuildStatus, string> = {
   succeeded: 'Succeeded',
   failed: 'Failed',
   canceled: 'Canceled',
+}
+
+function deploymentLabel(deployment: JenkinsDeployedTag) {
+  const environment = deployment.environment.toUpperCase()
+  switch (deployment.status) {
+    case 'running':
+      return `Running in ${environment}`
+    case 'failed':
+      return `Failed in ${environment}`
+    case 'canceled':
+      return `Canceled in ${environment}`
+    default:
+      return `Live in ${environment}`
+  }
 }
 
 function timeAgo(value: string) {
@@ -700,15 +715,15 @@ export function ServiceOperations({
                     <div className="live-deployments">
                       {liveDeployments.map((deployment) => (
                         <a
-                          className="live-deployment"
+                          className={`live-deployment ${deployment.status ?? 'succeeded'}`}
                           href={deployment.buildUrl || undefined}
                           target="_blank"
                           rel="noreferrer"
                           title={`${deployment.service} · Jenkins build #${deployment.buildNumber}`}
-                          key={`${deployment.service}-${deployment.environment}`}
+                          key={`${deployment.service}-${deployment.environment}-${deployment.buildNumber}`}
                         >
-                          <span aria-hidden="true">●</span> Live in{' '}
-                          {deployment.environment.toUpperCase()}
+                          <span aria-hidden="true">●</span>{' '}
+                          {deploymentLabel(deployment)}
                         </a>
                       ))}
                     </div>
@@ -796,6 +811,12 @@ export function ServiceOperations({
                 const liveDeployments = releaseState.deployedTags.filter(
                   (deployment) => deployment.tag === release.tag,
                 )
+                const productionDeploymentRunning =
+                  releaseState.deployedTags.some(
+                    (deployment) =>
+                      deployment.environment === 'production' &&
+                      deployment.status === 'running',
+                  )
                 return (
                   <article className="release-build-row" key={release.id}>
                     <span
@@ -811,15 +832,15 @@ export function ServiceOperations({
                         <div className="live-deployments">
                           {liveDeployments.map((deployment) => (
                             <a
-                              className="live-deployment"
+                              className={`live-deployment ${deployment.status ?? 'succeeded'}`}
                               href={deployment.buildUrl || undefined}
                               target="_blank"
                               rel="noreferrer"
                               title={`${deployment.service} · Jenkins build #${deployment.buildNumber}`}
-                              key={`${deployment.service}-${deployment.environment}`}
+                              key={`${deployment.service}-${deployment.environment}-${deployment.buildNumber}`}
                             >
-                              <span aria-hidden="true">●</span> Live in{' '}
-                              {deployment.environment.toUpperCase()}
+                              <span aria-hidden="true">●</span>{' '}
+                              {deploymentLabel(deployment)}
                             </a>
                           ))}
                         </div>
@@ -833,10 +854,13 @@ export function ServiceOperations({
                       type="button"
                       disabled={
                         release.buildStatus !== 'succeeded' ||
-                        releaseState.jenkinsServices.length === 0
+                        releaseState.jenkinsServices.length === 0 ||
+                        productionDeploymentRunning
                       }
                       title={
-                        releaseState.jenkinsServices.length === 0
+                        productionDeploymentRunning
+                          ? 'A production deployment is already running'
+                          : releaseState.jenkinsServices.length === 0
                           ? 'No Jenkins service mapping for this repository'
                           : release.buildStatus !== 'succeeded'
                             ? 'Deployment is enabled after a successful build'

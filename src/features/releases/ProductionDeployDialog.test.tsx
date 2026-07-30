@@ -76,6 +76,7 @@ describe('ProductionDeployDialog', () => {
 
   it('submits the production Jenkins parameters', async () => {
     const user = userEvent.setup()
+    const onDeploymentUpdated = vi.fn()
     const trigger = vi
       .spyOn(api, 'triggerProductionDeployment')
       .mockResolvedValue({
@@ -92,6 +93,7 @@ describe('ProductionDeployDialog', () => {
         repository="Orange-Health/accounts"
         services={['accounts']}
         sourceTag="v26.0714.2"
+        onDeploymentUpdated={onDeploymentUpdated}
         onClose={vi.fn()}
       />,
     )
@@ -109,6 +111,13 @@ describe('ProductionDeployDialog', () => {
       skipProdMigration: false,
       prodMigrationJob: 'Prod Deployments/Prod-cluster-migration',
     })
+    expect(onDeploymentUpdated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueId: 944,
+        service: 'accounts',
+        imageTag: 'v26.0714.2',
+      }),
+    )
     expect(await screen.findByText('Production deployment')).toBeVisible()
   })
 })

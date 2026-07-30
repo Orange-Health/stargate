@@ -47,6 +47,7 @@ import {
   getCurrentDeployments,
   getCurrentProductionDeployments,
   getDeploymentQueueStatus,
+  getProductionDeploymentBuildStatus,
   getProductionDeploymentQueueStatus,
   servicesForRepository,
   testJenkinsConnection,
@@ -951,6 +952,28 @@ export function createApp() {
         await getProductionDeploymentQueueStatus(
           requireConnection(),
           queueId,
+        ),
+      )
+    },
+  )
+
+  app.get(
+    '/api/jenkins/production-build/:buildNumber',
+    async (request, response) => {
+      const buildNumber = Number(request.params.buildNumber)
+      if (!Number.isInteger(buildNumber) || buildNumber <= 0) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_BUILD_NUMBER',
+            message: 'A valid Jenkins build number is required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        await getProductionDeploymentBuildStatus(
+          requireConnection(),
+          buildNumber,
         ),
       )
     },

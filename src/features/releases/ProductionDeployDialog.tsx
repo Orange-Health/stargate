@@ -8,6 +8,7 @@ type Props = {
   repository: string
   services: string[]
   sourceTag?: string
+  onDeploymentUpdated?: (deployment: TriggeredProductionDeployment) => void
   onClose: () => void
 }
 
@@ -15,6 +16,7 @@ export function ProductionDeployDialog({
   repository,
   services,
   sourceTag = '',
+  onDeploymentUpdated,
   onClose,
 }: Props) {
   const [service, setService] = useState(services[0] ?? '')
@@ -47,9 +49,16 @@ export function ProductionDeployDialog({
         )
         if (!active) return
         if (status.status === 'started' && status.buildUrl) {
-          setDeployment((current) =>
-            current ? { ...current, buildUrl: status.buildUrl } : current,
-          )
+          setDeployment((current) => {
+            if (!current) return current
+            const updated = {
+              ...current,
+              buildUrl: status.buildUrl,
+              buildNumber: status.buildNumber,
+            }
+            onDeploymentUpdated?.(updated)
+            return updated
+          })
           return
         }
         if (status.status === 'canceled') {
@@ -72,7 +81,7 @@ export function ProductionDeployDialog({
       active = false
       if (timeout) window.clearTimeout(timeout)
     }
-  }, [deployment])
+  }, [deployment, onDeploymentUpdated])
 
   function changeTagFormat(frontend: boolean) {
     setFrontendTag(frontend)
@@ -88,17 +97,17 @@ export function ProductionDeployDialog({
     setDeploying(true)
     setError('')
     try {
-      setDeployment(
-        await api.triggerProductionDeployment({
-          repository,
-          service,
-          imageTag,
-          qaApprovalRequired,
-          qaName: qaApprovalRequired ? qaName : undefined,
-          skipProdMigration,
-          prodMigrationJob,
-        }),
-      )
+      const result = await api.triggerProductionDeployment({
+        repository,
+        service,
+        imageTag,
+        qaApprovalRequired,
+        qaName: qaApprovalRequired ? qaName : undefined,
+        skipProdMigration,
+        prodMigrationJob,
+      })
+      setDeployment(result)
+      onDeploymentUpdated?.(result)
     } catch (reason) {
       setError(
         reason instanceof Error

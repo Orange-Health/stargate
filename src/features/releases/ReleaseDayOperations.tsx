@@ -3,11 +3,13 @@ import { api } from '../../shared/api'
 import type {
   BuildStatus,
   CreatedProductionRelease,
+  JenkinsDeployedTag,
   PromotionPullRequest,
   PromotionRoute,
   ReleaseControlRoomState,
   ReleaseDashboard,
   TrackedProductionRelease,
+  TriggeredProductionDeployment,
 } from '../../shared/types'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
 import {
@@ -51,6 +53,9 @@ type OperationLog = {
 type RepositoryProgress = {
   productionRelease?: CreatedProductionRelease
   productionReleaseError?: string
+  productionDeployment?: TriggeredProductionDeployment & {
+    status: 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
+  }
   error?: string
 }
 
@@ -95,6 +100,19 @@ const POLL_INTERVAL = 15_000
 const MAX_CONCURRENCY = 3
 const REPOSITORY_SYNC_CONCURRENCY = 2
 const REPOSITORY_STATE_CACHE_MS = 60_000
+
+function productionDeploymentLabel(deployment: JenkinsDeployedTag) {
+  switch (deployment.status) {
+    case 'running':
+      return `Running: ${deployment.tag}`
+    case 'failed':
+      return `Failed: ${deployment.tag}`
+    case 'canceled':
+      return `Canceled: ${deployment.tag}`
+    default:
+      return `Live: ${deployment.tag}`
+  }
+}
 
 type CachedRepositoryStates = {
   cachedAt: number
@@ -702,6 +720,122 @@ export function ReleaseDayOperations({
     [syncRepository],
   )
 
+  const trackProductionDeployment = useCallback(
+    (repository: string, deployment: TriggeredProductionDeployment) => {
+      setSession((current) => ({
+        ...current,
+        repositories: {
+          ...current.repositories,
+          [repository]: {
+            ...current.repositories[repository],
+            productionDeployment: {
+              ...deployment,
+              status:
+                deployment.buildNumber || deployment.buildUrl
+                  ? 'running'
+                  : 'queued',
+            },
+          },
+        },
+      }))
+    },
+    [],
+  )
+
+  const handleProductionDeploymentUpdated = useCallback(
+    (deployment: TriggeredProductionDeployment) => {
+      if (deployTarget) {
+        trackProductionDeployment(deployTarget.repository, deployment)
+      }
+    },
+    [deployTarget, trackProductionDeployment],
+  )
+
+  useEffect(() => {
+    let active = true
+    let timeout: number | undefined
+    const schedule = () => {
+      if (active) timeout = window.setTimeout(() => void poll(), 3_000)
+    }
+    const poll = async () => {
+      const pending = sessionRef.current.selectedRepositories.flatMap(
+        (repository) => {
+          const deployment =
+            sessionRef.current.repositories[repository]?.productionDeployment
+          return deployment &&
+            (deployment.status === 'queued' ||
+              deployment.status === 'running')
+            ? [{ repository, deployment }]
+            : []
+        },
+      )
+      if (pending.length === 0) {
+        schedule()
+        return
+      }
+      const completedRepositories: string[] = []
+      const updates = await Promise.all(
+        pending.map(async ({ repository, deployment }) => {
+          try {
+            if (deployment.buildNumber) {
+              const status = await api.productionJenkinsBuildStatus(
+                deployment.buildNumber,
+              )
+              if (status.status === 'succeeded') {
+                completedRepositories.push(repository)
+              }
+              return {
+                repository,
+                deployment: {
+                  ...deployment,
+                  ...status,
+                },
+              }
+            }
+            const status = await api.productionJenkinsQueueStatus(
+              deployment.queueId,
+            )
+            return {
+              repository,
+              deployment: {
+                ...deployment,
+                buildNumber: status.buildNumber,
+                buildUrl: status.buildUrl ?? deployment.buildUrl,
+                status:
+                  status.status === 'started' ? ('running' as const) : status.status,
+              },
+            }
+          } catch {
+            return undefined
+          }
+        }),
+      )
+      if (!active) return
+      setSession((current) => {
+        const repositories = { ...current.repositories }
+        for (const update of updates) {
+          if (!update) continue
+          repositories[update.repository] = {
+            ...repositories[update.repository],
+            productionDeployment: update.deployment,
+          }
+        }
+        return { ...current, repositories }
+      })
+      await Promise.all(
+        completedRepositories.map((repository) =>
+          refreshOneRepository(repository),
+        ),
+      )
+      schedule()
+    }
+    void poll()
+    return () => {
+      active = false
+      if (timeout) window.clearTimeout(timeout)
+    }
+  }, [refreshOneRepository])
+
   useEffect(() => {
     let active = true
     let running = false
@@ -739,13 +873,25 @@ export function ReleaseDayOperations({
               ]
         },
       )
-      if (activeReleases.length === 0) {
-        schedule()
-        return
-      }
       running = true
       try {
-        const results = await api.releaseBuildStatuses(activeReleases, true)
+        const [results, deploymentResults] = await Promise.all([
+          activeReleases.length
+            ? api.releaseBuildStatuses(activeReleases, true)
+            : Promise.resolve([]),
+          Promise.all(
+            currentSession.selectedRepositories.map(async (repository) => {
+              try {
+                return {
+                  repository,
+                  result: await api.repositoryDeploymentStatus(repository, true),
+                }
+              } catch {
+                return undefined
+              }
+            }),
+          ),
+        ])
         if (!active) return
         setStates((current) => {
           const next = { ...current }
@@ -773,6 +919,18 @@ export function ReleaseDayOperations({
                     release.tag === result.tag ? updated : release,
                   )
                 : [updated, ...repositoryState.productionReleases],
+              fetchedAt: new Date().toISOString(),
+            }
+          }
+          for (const deploymentResult of deploymentResults) {
+            if (!deploymentResult) continue
+            const repositoryState = next[deploymentResult.repository]
+            if (!repositoryState) continue
+            next[deploymentResult.repository] = {
+              ...repositoryState,
+              deployedTags: deploymentResult.result.deployedTags,
+              deploymentLookupFailed:
+                deploymentResult.result.deploymentLookupFailed,
               fetchedAt: new Date().toISOString(),
             }
           }
@@ -1803,6 +1961,7 @@ export function ReleaseDayOperations({
                   {dashboard.services.map((service) => {
                     const repository = service.repository
                     const progress = session.repositories[repository]
+                    const deploymentProgress = progress?.productionDeployment
                     const syncStatus = repositorySync[repository]
                     const rowSyncing =
                       syncStatus === 'queued' || syncStatus === 'syncing'
@@ -1832,6 +1991,10 @@ export function ReleaseDayOperations({
                         (deployment) =>
                           deployment.environment === 'production',
                       ) ?? []
+                    const productionDeploymentRunning =
+                      productionDeployments.some(
+                        (deployment) => deployment.status === 'running',
+                      ) || deploymentProgress?.status === 'running'
                     const latestTagAlreadyDeployed =
                       Boolean(existingRelease) &&
                       Boolean(repositoryState?.jenkinsServices.length) &&
@@ -1839,7 +2002,9 @@ export function ReleaseDayOperations({
                         productionDeployments.some(
                           (deployment) =>
                             deployment.service === jenkinsService &&
-                            deployment.tag === existingRelease?.tag,
+                            deployment.tag === existingRelease?.tag &&
+                            (deployment.status === undefined ||
+                              deployment.status === 'succeeded'),
                         ),
                       )
                     const dev = phaseState(
@@ -2166,10 +2331,13 @@ export function ReleaseDayOperations({
                                 !existingRelease ||
                                 trackedRelease?.buildStatus !== 'succeeded' ||
                                 !repositoryState?.jenkinsServices.length ||
+                                productionDeploymentRunning ||
                                 latestTagAlreadyDeployed
                               }
                               title={
-                                latestTagAlreadyDeployed
+                                productionDeploymentRunning
+                                  ? 'A production deployment is already running'
+                                  : latestTagAlreadyDeployed
                                   ? `${existingRelease?.tag} is already deployed to production`
                                   : 'Deploy the latest production build'
                               }
@@ -2187,30 +2355,53 @@ export function ReleaseDayOperations({
                                 ? 'Already deployed'
                                 : 'Deploy'}
                             </button>
+                            {deploymentProgress && (
+                              <a
+                                className={`batch-status ${deploymentProgress.status}`}
+                                href={
+                                  deploymentProgress.buildUrl ??
+                                  deploymentProgress.queueUrl
+                                }
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Jenkins:{' '}
+                                {deploymentProgress.status === 'queued'
+                                  ? 'Queued'
+                                  : deploymentProgress.status === 'running'
+                                    ? 'Running'
+                                    : deploymentProgress.status === 'succeeded'
+                                      ? 'Succeeded'
+                                      : deploymentProgress.status === 'canceled'
+                                        ? 'Canceled'
+                                        : 'Failed'}{' '}
+                                ↗
+                              </a>
+                            )}
                             {productionDeployments.length > 0 ? (
                               productionDeployments.map((deployment) => (
                                 <a
-                                  className="release-day-production-live"
+                                  className={`release-day-production-live ${deployment.status ?? 'succeeded'}`}
                                   href={deployment.buildUrl}
                                   target="_blank"
                                   rel="noreferrer"
-                                  key={deployment.service}
+                                  key={`${deployment.service}-${deployment.buildNumber}`}
                                   title={`Jenkins build #${deployment.buildNumber}`}
                                 >
-                                  Live: {deployment.tag}
+                                  {productionDeploymentLabel(deployment)}
                                   {productionDeployments.length > 1
                                     ? ` · ${deployment.service}`
                                     : ''}{' '}
                                   ↗
                                 </a>
                               ))
-                            ) : (
+                            ) : !deploymentProgress ? (
                               <small className="release-day-production-unknown">
                                 {repositoryState?.deploymentLookupFailed
                                   ? 'Production status unavailable'
                                   : 'Production deployment unknown'}
                               </small>
-                            )}
+                            ) : null}
                           </div>
                         </td>
                       </tr>
@@ -2315,6 +2506,7 @@ export function ReleaseDayOperations({
           repository={deployTarget.repository}
           services={deployTarget.services}
           sourceTag={deployTarget.release.tag}
+          onDeploymentUpdated={handleProductionDeploymentUpdated}
           onClose={() => setDeployTarget(undefined)}
         />
       )}

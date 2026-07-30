@@ -2023,6 +2023,19 @@ button:disabled {
   margin: 0;
 }
 
+.release-build-main .live-deployment.running {
+  background: rgb(245 158 11 / 12%);
+  border-color: rgb(245 158 11 / 45%);
+  color: var(--warning);
+}
+
+.release-build-main .live-deployment.failed,
+.release-build-main .live-deployment.canceled {
+  background: rgb(239 68 68 / 12%);
+  border-color: rgb(239 68 68 / 45%);
+  color: var(--danger);
+}
+
 .deployment-lookup-note {
   background: var(--amber-faint);
   border-bottom: 1px solid var(--amber-line);
@@ -3042,6 +3055,7 @@ label {
 }
 
 .batch-status.pending,
+.batch-status.queued,
 .batch-status.starting,
 .batch-status.running {
   background: rgb(245 158 11 / 12%);
@@ -3131,6 +3145,15 @@ label {
   font-size: 9px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.release-day-production-live.running {
+  color: var(--warning);
+}
+
+.release-day-production-live.failed,
+.release-day-production-live.canceled {
+  color: var(--danger);
 }
 
 .release-day-production-unknown {

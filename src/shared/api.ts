@@ -11,6 +11,7 @@ import type {
   DashboardProgress,
   DeploymentFreshness,
   JiraVersion,
+  JenkinsBuildStatus,
   JenkinsQueueStatus,
   MergeFeaturePullRequestInput,
   MergePromotionPullRequestInput,
@@ -271,5 +272,9 @@ export const api = {
   productionJenkinsQueueStatus: (queueId: number) =>
     request<JenkinsQueueStatus>(
       `/api/jenkins/production-queue/${queueId}`,
+    ),
+  productionJenkinsBuildStatus: (buildNumber: number) =>
+    request<JenkinsBuildStatus>(
+      `/api/jenkins/production-build/${buildNumber}`,
     ),
 }

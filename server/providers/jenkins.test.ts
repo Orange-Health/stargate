@@ -168,6 +168,46 @@ describe('deployedTagsFromBuilds', () => {
       }),
     ])
   })
+
+  it('reports the latest external production deployment status', () => {
+    const parameters = (service: string, tag: string) => ({
+      parameters: [
+        { name: 'SERVICE', value: service },
+        { name: 'IMAGE_TAG', value: tag },
+      ],
+    })
+
+    expect(
+      productionDeployedTagsFromBuilds(
+        [
+          {
+            number: 2202,
+            result: null,
+            actions: [parameters('chronos', 'v26.0730.1')],
+          },
+          {
+            number: 2201,
+            result: 'SUCCESS',
+            actions: [parameters('chronos', 'v26.0729.1')],
+          },
+        ],
+        ['chronos'],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        service: 'chronos',
+        tag: 'v26.0730.1',
+        status: 'running',
+        buildNumber: 2202,
+      }),
+      expect.objectContaining({
+        service: 'chronos',
+        tag: 'v26.0729.1',
+        status: 'succeeded',
+        buildNumber: 2201,
+      }),
+    ])
+  })
 })
 
 describe('productionDeploymentSpec', () => {

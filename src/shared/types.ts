@@ -410,6 +410,7 @@ export type JenkinsDeployedTag = {
   service: string
   tag: string
   environment: JenkinsDeploymentEnvironment
+  status?: 'running' | 'succeeded' | 'failed' | 'canceled'
   buildNumber: number
   buildUrl: string
   deployedAt: string
@@ -446,6 +447,12 @@ export type JenkinsQueueStatus = {
   message?: string
 }
 
+export type JenkinsBuildStatus = {
+  buildNumber: number
+  status: 'running' | 'succeeded' | 'failed' | 'canceled'
+  buildUrl?: string
+}
+
 export type TriggerProductionDeploymentInput = {
   repository: string
   service: string
@@ -460,6 +467,7 @@ export type TriggeredProductionDeployment = {
   queueId: number
   queueUrl: string
   buildUrl?: string
+  buildNumber?: number
   jobName: string
   service: string
   imageTag: string

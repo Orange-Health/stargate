@@ -434,6 +434,43 @@ describe('ServiceOperations', () => {
     ).toHaveAttribute('href', 'https://jenkins.test/production/2201/')
   })
 
+  it('shows externally triggered production deployments while running', async () => {
+    const stateWithRunningDeployment: RepositoryReleaseState = {
+      ...repositoryState,
+      deployedTags: [
+        {
+          service: 'accounts',
+          tag: 'v26.0713.1',
+          environment: 'production',
+          status: 'running',
+          buildNumber: 2202,
+          buildUrl: 'https://jenkins.test/production/2202/',
+          deployedAt: '2026-07-13T13:35:00Z',
+        },
+      ],
+    }
+    vi.mocked(api.repositoryReleaseData).mockResolvedValue(
+      releaseData(stateWithRunningDeployment),
+    )
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      stateWithRunningDeployment,
+    )
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        productionEnabled
+      />,
+    )
+
+    expect(
+      await screen.findByRole('link', { name: 'Running in PRODUCTION' }),
+    ).toHaveAttribute('href', 'https://jenkins.test/production/2202/')
+    expect(
+      screen.getByRole('button', { name: 'Deploy production' }),
+    ).toBeDisabled()
+  })
+
   it('force merges a back-merge PR when checks are blocking', async () => {
     const user = userEvent.setup()
     const merge = vi
