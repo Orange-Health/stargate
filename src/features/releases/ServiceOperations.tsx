@@ -253,19 +253,15 @@ export function ServiceOperations({
   useEffect(() => {
     if (view !== 'all' && view !== 'releases') return
     if (!state) return
-    const activeReleases = [
+    const trackedReleases = [
       ...state.stagingReleases,
       ...state.productionReleases,
-    ]
-      .filter((release) =>
-        ['starting', 'running'].includes(release.buildStatus),
-      )
-      .map((release) => ({
-        repository,
-        tag: release.tag,
-        createdAt: release.createdAt,
-      }))
-    if (activeReleases.length === 0) return
+    ].map((release) => ({
+      repository,
+      tag: release.tag,
+      createdAt: release.createdAt,
+    }))
+    if (trackedReleases.length === 0) return
 
     let active = true
     let running = false
@@ -278,8 +274,13 @@ export function ServiceOperations({
       if (!active || running || document.hidden) return
       running = true
       try {
-        const results = await api.releaseBuildStatuses(activeReleases)
+        const [buildResult, deploymentResult] = await Promise.allSettled([
+          api.releaseBuildStatuses(trackedReleases, true),
+          api.repositoryDeploymentStatus(repository, true),
+        ])
         if (!active) return
+        const results =
+          buildResult.status === 'fulfilled' ? buildResult.value : []
         const byTag = new Map(results.map((result) => [result.tag, result]))
         const nextState: RepositoryReleaseState = {
           ...state,
@@ -303,12 +304,20 @@ export function ServiceOperations({
                 }
               : release
           }),
+          deployedTags:
+            deploymentResult.status === 'fulfilled'
+              ? deploymentResult.value.deployedTags
+              : state.deployedTags,
+          deploymentLookupFailed:
+            deploymentResult.status === 'fulfilled'
+              ? deploymentResult.value.deploymentLookupFailed
+              : true,
           fetchedAt: new Date().toISOString(),
         }
-        announceCompletedBuilds(nextState)
+        if (buildResult.status === 'fulfilled') {
+          announceCompletedBuilds(nextState)
+        }
         setState(nextState)
-      } catch {
-        // Keep the last known build state and retry on the next scheduled poll.
       } finally {
         running = false
         schedule()
@@ -740,58 +749,80 @@ export function ServiceOperations({
             </div>
           ) : state?.productionReleases.length ? (
             <div className="release-build-list">
-              {state.productionReleases.map((release) => (
-                <article className="release-build-row" key={release.id}>
-                  <span
-                    className={`build-indicator ${release.buildStatus}`}
-                    aria-hidden="true"
-                  />
-                  <div className="release-build-main">
-                    <a href={release.url} target="_blank" rel="noreferrer">
-                      {release.tag}
-                    </a>
-                    <span>{timeAgo(release.createdAt)}</span>
-                  </div>
-                  <span className={`build-status ${release.buildStatus}`}>
-                    {buildLabels[release.buildStatus]}
-                  </span>
-                  <button
-                    className="production-deploy-button"
-                    type="button"
-                    disabled={
-                      release.buildStatus !== 'succeeded' ||
-                      state.jenkinsServices.length === 0
-                    }
-                    title={
-                      state.jenkinsServices.length === 0
+              {state.productionReleases.map((release) => {
+                const liveDeployments = state.deployedTags.filter(
+                  (deployment) => deployment.tag === release.tag,
+                )
+                return (
+                  <article className="release-build-row" key={release.id}>
+                    <span
+                      className={`build-indicator ${release.buildStatus}`}
+                      aria-hidden="true"
+                    />
+                    <div className="release-build-main">
+                      <a href={release.url} target="_blank" rel="noreferrer">
+                        {release.tag}
+                      </a>
+                      <span>{timeAgo(release.createdAt)}</span>
+                      {liveDeployments.length > 0 && (
+                        <div className="live-deployments">
+                          {liveDeployments.map((deployment) => (
+                            <a
+                              className="live-deployment"
+                              href={deployment.buildUrl || undefined}
+                              target="_blank"
+                              rel="noreferrer"
+                              title={`${deployment.service} · Jenkins build #${deployment.buildNumber}`}
+                              key={`${deployment.service}-${deployment.environment}`}
+                            >
+                              <span aria-hidden="true">●</span> Live in{' '}
+                              {deployment.environment.toUpperCase()}
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <span className={`build-status ${release.buildStatus}`}>
+                      {buildLabels[release.buildStatus]}
+                    </span>
+                    <button
+                      className="production-deploy-button"
+                      type="button"
+                      disabled={
+                        release.buildStatus !== 'succeeded' ||
+                        state.jenkinsServices.length === 0
+                      }
+                      title={
+                        state.jenkinsServices.length === 0
                           ? 'No Jenkins service mapping for this repository'
                           : release.buildStatus !== 'succeeded'
                             ? 'Deployment is enabled after a successful build'
                             : 'Deploy this production release'
-                    }
-                    onClick={() => setProductionDeployRelease(release)}
-                  >
-                    Deploy production
-                  </button>
-                  <div className="workflow-links">
-                    {release.runs.length === 0 ? (
-                      <small>Waiting for workflow</small>
-                    ) : (
-                      release.runs.map((run) => (
-                        <a
-                          href={run.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          key={run.id}
-                          title={`${run.status}${run.conclusion ? ` · ${run.conclusion}` : ''}`}
-                        >
-                          {run.name} ↗
-                        </a>
-                      ))
-                    )}
-                  </div>
-                </article>
-              ))}
+                      }
+                      onClick={() => setProductionDeployRelease(release)}
+                    >
+                      Deploy production
+                    </button>
+                    <div className="workflow-links">
+                      {release.runs.length === 0 ? (
+                        <small>Waiting for workflow</small>
+                      ) : (
+                        release.runs.map((run) => (
+                          <a
+                            href={run.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            key={run.id}
+                            title={`${run.status}${run.conclusion ? ` · ${run.conclusion}` : ''}`}
+                          >
+                            {run.name} ↗
+                          </a>
+                        ))
+                      )}
+                    </div>
+                  </article>
+                )
+              })}
             </div>
           ) : (
             <div className="operation-empty">

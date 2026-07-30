@@ -117,7 +117,10 @@ const repositoryState: RepositoryReleaseState = {
   fetchedAt: '2026-07-13T12:01:00Z',
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 describe('ServiceOperations', () => {
   it('shows loading states while branch data is being resolved', () => {
@@ -211,7 +214,7 @@ describe('ServiceOperations', () => {
     ).toBeVisible()
   })
 
-  it('polls only active build status without reloading repository state', async () => {
+  it('polls displayed build statuses without reloading repository state', async () => {
     const stateRequest = vi
       .spyOn(api, 'repositoryState')
       .mockResolvedValue(repositoryState)
@@ -236,6 +239,12 @@ describe('ServiceOperations', () => {
           ],
         },
       ])
+    const deploymentStatusRequest = vi
+      .spyOn(api, 'repositoryDeploymentStatus')
+      .mockResolvedValue({
+        deployedTags: repositoryState.deployedTags,
+        deploymentLookupFailed: false,
+      })
     render(<ServiceOperations repository="Orange-Health/service-api" />)
     await screen.findByText('v-qa-v26.0713.2')
 
@@ -243,15 +252,88 @@ describe('ServiceOperations', () => {
       document.dispatchEvent(new Event('visibilitychange'))
     })
 
-    expect(buildStatusRequest).toHaveBeenCalledWith([
-      {
-        repository: 'Orange-Health/service-api',
-        tag: 'v-qa-v26.0713.2',
-        createdAt: '2026-07-13T12:00:00Z',
-      },
-    ])
+    expect(buildStatusRequest).toHaveBeenCalledWith(
+      [
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-qa-v26.0713.2',
+          createdAt: '2026-07-13T12:00:00Z',
+        },
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-s1-v26.0713.1',
+          createdAt: '2026-07-13T11:00:00Z',
+        },
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v26.0713.1',
+          createdAt: '2026-07-13T13:00:00Z',
+        },
+      ],
+      true,
+    )
+    expect(deploymentStatusRequest).toHaveBeenCalledWith(
+      'Orange-Health/service-api',
+      true,
+    )
     expect(stateRequest).toHaveBeenCalledTimes(1)
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(1)
+  })
+
+  it('refreshes active build status after 15 seconds', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const buildStatusRequest = vi
+      .spyOn(api, 'releaseBuildStatuses')
+      .mockResolvedValue([
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-qa-v26.0713.2',
+          createdAt: '2026-07-13T12:00:00Z',
+          buildStatus: 'succeeded',
+          runs: [],
+        },
+      ])
+    const deploymentStatusRequest = vi
+      .spyOn(api, 'repositoryDeploymentStatus')
+      .mockResolvedValue({
+        deployedTags: [
+          {
+            service: 'accounts',
+            tag: 'v-qa-v26.0713.2',
+            environment: 'qa',
+            buildNumber: 2153,
+            buildUrl: 'https://jenkins.test/qa/2153/',
+            deployedAt: '2026-07-13T12:03:00Z',
+          },
+        ],
+        deploymentLookupFailed: false,
+      })
+
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+    await act(async () => {})
+    expect(screen.getByText('Running')).toBeVisible()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+
+    expect(buildStatusRequest).toHaveBeenCalledTimes(1)
+    expect(buildStatusRequest).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ tag: 'v-qa-v26.0713.2' }),
+      ]),
+      true,
+    )
+    expect(deploymentStatusRequest).toHaveBeenCalledWith(
+      'Orange-Health/service-api',
+      true,
+    )
+    expect(screen.getAllByText('Succeeded')).toHaveLength(2)
+    expect(screen.getByRole('link', { name: 'Live in QA' })).toHaveAttribute(
+      'href',
+      'https://jenkins.test/qa/2153/',
+    )
   })
 
   it('temporarily allows production deployment while branches differ', async () => {
@@ -288,6 +370,34 @@ describe('ServiceOperations', () => {
     expect(
       screen.getByRole('dialog', { name: 'Deploy to production' }),
     ).toBeVisible()
+  })
+
+  it('shows live production deployments from Jenkins', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue({
+      ...repositoryState,
+      deployedTags: [
+        ...repositoryState.deployedTags,
+        {
+          service: 'accounts',
+          tag: 'v26.0713.1',
+          environment: 'production',
+          buildNumber: 2201,
+          buildUrl: 'https://jenkins.test/production/2201/',
+          deployedAt: '2026-07-13T13:30:00Z',
+        },
+      ],
+    })
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        productionEnabled
+      />,
+    )
+
+    expect(
+      await screen.findByRole('link', { name: 'Live in PRODUCTION' }),
+    ).toHaveAttribute('href', 'https://jenkins.test/production/2201/')
   })
 
   it('force merges a back-merge PR when checks are blocking', async () => {

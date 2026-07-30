@@ -226,10 +226,14 @@ async function recentJobBuilds(
   return job.builds ?? [];
 }
 
-async function recentDeploymentBuilds(config: ConnectionConfig) {
+async function recentDeploymentBuilds(
+  config: ConnectionConfig,
+  forceRefresh = false,
+) {
   const cacheKey = config.jenkinsUrl.toLowerCase();
   const cached = deploymentBuildCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (!forceRefresh && cached && cached.expiresAt > Date.now())
+    return cached.value;
   const value = (async () => {
     const client = jenkinsClient(config);
     const [qa, staging] = await Promise.all([
@@ -249,16 +253,18 @@ async function recentDeploymentBuilds(config: ConnectionConfig) {
 export async function getCurrentDeployments(
   config: ConnectionConfig,
   repository: string,
+  forceRefresh = false,
 ): Promise<JenkinsDeployedTag[]> {
   const services = servicesForRepository(repository);
   if (services.length === 0) return [];
   const cacheKey = repository.toLowerCase();
   const cached = deploymentCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (!forceRefresh && cached && cached.expiresAt > Date.now())
+    return cached.value;
 
   const value = (async () => {
     try {
-      const builds = await recentDeploymentBuilds(config);
+      const builds = await recentDeploymentBuilds(config, forceRefresh);
       return deployedTagsFromBuilds(builds.qa, builds.staging, services);
     } catch (error) {
       throw new ProviderError(
@@ -283,6 +289,7 @@ export async function getCurrentDeployments(
 export async function getCurrentProductionDeployments(
   config: ConnectionConfig,
   repository: string,
+  forceRefresh = false,
 ): Promise<JenkinsDeployedTag[]> {
   if (!config.productionJenkins) return [];
   const services = servicesForRepository(repository);
@@ -291,7 +298,8 @@ export async function getCurrentProductionDeployments(
   const cacheKey =
     `production:${prodConfig.jenkinsUrl}:${repository}`.toLowerCase();
   const cached = deploymentCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  if (!forceRefresh && cached && cached.expiresAt > Date.now())
+    return cached.value;
 
   const value = (async () => {
     try {

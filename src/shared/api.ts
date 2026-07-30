@@ -20,6 +20,7 @@ import type {
   ReleaseBuildStatusInput,
   ReleaseBuildStatusResult,
   ReleaseDashboard,
+  RepositoryDeploymentStatus,
   RepositoryReleaseHistory,
   RepositoryReleaseState,
   RepositoryPullRequestList,
@@ -160,6 +161,10 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ releases, forceRefresh }),
       },
+    ),
+  repositoryDeploymentStatus: (repository: string, forceRefresh = false) =>
+    request<RepositoryDeploymentStatus>(
+      `/api/jenkins/deployment-status?repository=${encodeURIComponent(repository)}${forceRefresh ? '&forceRefresh=true' : ''}`,
     ),
   repositoryRisks: (repositories: string[]) =>
     request<RepositoryRisk[]>('/api/github/repository-risks', {

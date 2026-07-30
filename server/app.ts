@@ -215,10 +215,11 @@ const serviceRefreshSchema = z.object({
 async function currentDeployments(
   config: ConnectionConfig,
   repository: string,
+  forceRefresh = false,
 ) {
   const results = await Promise.allSettled([
-    getCurrentDeployments(config, repository),
-    getCurrentProductionDeployments(config, repository),
+    getCurrentDeployments(config, repository, forceRefresh),
+    getCurrentProductionDeployments(config, repository, forceRefresh),
   ])
   return {
     deployedTags: results.flatMap((result) =>
@@ -577,6 +578,28 @@ export function createApp() {
     ])
     response.json({
       ...state,
+      deployedTags: deploymentResult.deployedTags,
+      deploymentLookupFailed: deploymentResult.failed,
+    })
+  })
+
+  app.get('/api/jenkins/deployment-status', async (request, response) => {
+    const parsed = repositorySchema.safeParse(request.query.repository)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORY',
+          message: 'Repository must use the owner/name format.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    const deploymentResult = await currentDeployments(
+      requireConnection(),
+      parsed.data,
+      request.query.forceRefresh === 'true',
+    )
+    response.json({
       deployedTags: deploymentResult.deployedTags,
       deploymentLookupFailed: deploymentResult.failed,
     })

@@ -395,6 +395,11 @@ export type JenkinsDeployedTag = {
   deployedAt: string
 }
 
+export type RepositoryDeploymentStatus = {
+  deployedTags: JenkinsDeployedTag[]
+  deploymentLookupFailed: boolean
+}
+
 export type TriggerDeploymentInput = {
   repository: string
   service: string

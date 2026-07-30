@@ -95,6 +95,15 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_DEPLOYMENT')
   })
 
+  it('validates Jenkins deployment status repositories', async () => {
+    const response = await request(createApp()).get(
+      '/api/jenkins/deployment-status?repository=not-a-repository',
+    )
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_REPOSITORY')
+  })
+
   it('accepts nonstandard v- tags only for all-services deployments', async () => {
     const app = createApp()
     const input = {
