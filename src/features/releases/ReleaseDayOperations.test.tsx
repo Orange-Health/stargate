@@ -129,6 +129,59 @@ describe('ReleaseDayOperations', () => {
     expect(serviceCheckbox).toBeChecked()
   })
 
+  it('marks every ticket in the Jira release as released', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('up_to_date', 'up_to_date'),
+    )
+    const markReleased = vi
+      .spyOn(api, 'markReleaseIssuesReleased')
+      .mockResolvedValue({
+        versionId: 'release-1',
+        total: 1,
+        transitioned: ['OH-101'],
+        alreadyReleased: [],
+        failed: [],
+      })
+    const dashboardWithTicket: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [
+        {
+          issue: {
+            key: 'OH-101',
+            summary: 'Released feature',
+            status: 'Ready for Release',
+            url: 'https://jira.test/browse/OH-101',
+          },
+          eligible: false,
+          blockingReasons: [],
+          warningReasons: [],
+        },
+      ],
+    }
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboardWithTicket}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Mark Jira tickets released' }),
+    )
+
+    expect(window.confirm).toHaveBeenCalledWith(
+      'Mark all 1 tickets in OH Release 26.0716 as Released in Jira?',
+    )
+    expect(markReleased).toHaveBeenCalledWith('release-1')
+    expect(
+      await screen.findByRole('button', { name: '✓ Jira tickets released' }),
+    ).toBeDisabled()
+  })
+
   it('shows included avatars immediately and caches the detailed modal', async () => {
     const user = userEvent.setup()
     const service = {

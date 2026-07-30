@@ -13,6 +13,7 @@ import type {
   JiraVersion,
   JenkinsBuildStatus,
   JenkinsQueueStatus,
+  MarkReleaseIssuesReleasedResult,
   MergeFeaturePullRequestInput,
   MergePromotionPullRequestInput,
   MergePromotionPullRequestResult,
@@ -89,6 +90,11 @@ export const api = {
       method: 'DELETE',
     }),
   releases: () => request<JiraVersion[]>('/api/releases'),
+  markReleaseIssuesReleased: (versionId: string) =>
+    request<MarkReleaseIssuesReleasedResult>(
+      `/api/releases/${encodeURIComponent(versionId)}/mark-issues-released`,
+      { method: 'POST' },
+    ),
   repositories: () =>
     request<OrganizationRepository[]>('/api/github/repositories'),
   repositoryBranches: (repository: string) =>

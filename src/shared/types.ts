@@ -44,6 +44,14 @@ export type JiraIssue = {
   developmentSummary?: string
 }
 
+export type MarkReleaseIssuesReleasedResult = {
+  versionId: string
+  total: number
+  transitioned: string[]
+  alreadyReleased: string[]
+  failed: Array<{ key: string; message: string }>
+}
+
 export type ReviewDecision =
   | 'approved'
   | 'changes_requested'

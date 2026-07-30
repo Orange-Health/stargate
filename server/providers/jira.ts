@@ -2,6 +2,7 @@ import type {
   ConnectionConfig,
   JiraIssue,
   JiraVersion,
+  MarkReleaseIssuesReleasedResult,
 } from '../../src/shared/types.js'
 import { providerResponseError } from '../errors.js'
 
@@ -66,6 +67,7 @@ async function jiraFetch<T>(
     throw await providerResponseError(response, 'jira')
   }
 
+  if (response.status === 204) return undefined as T
   return (await response.json()) as T
 }
 
@@ -177,4 +179,77 @@ export async function listVersionIssues(
   } while (nextPageToken)
 
   return issues
+}
+
+export async function markVersionIssuesReleased(
+  config: ConnectionConfig,
+  versionId: string,
+): Promise<MarkReleaseIssuesReleasedResult> {
+  const issues = await listVersionIssues(config, versionId)
+  const transitioned: string[] = []
+  const alreadyReleased: string[] = []
+  const failed: Array<{ key: string; message: string }> = []
+  let cursor = 0
+
+  async function worker() {
+    while (cursor < issues.length) {
+      const issue = issues[cursor++]
+      if (issue.status.trim().toLowerCase() === 'released') {
+        alreadyReleased.push(issue.key)
+        continue
+      }
+      try {
+        const response = await jiraFetch<{
+          transitions: Array<{
+            id: string
+            name: string
+            to?: { name?: string }
+          }>
+        }>(
+          config,
+          `/rest/api/3/issue/${encodeURIComponent(issue.key)}/transitions`,
+        )
+        const transition = response.transitions.find(
+          (item) =>
+            item.name.trim().toLowerCase() === 'released' ||
+            item.to?.name?.trim().toLowerCase() === 'released',
+        )
+        if (!transition) {
+          failed.push({
+            key: issue.key,
+            message: 'No transition to Released is available.',
+          })
+          continue
+        }
+        await jiraFetch<void>(
+          config,
+          `/rest/api/3/issue/${encodeURIComponent(issue.key)}/transitions`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ transition: { id: transition.id } }),
+          },
+        )
+        transitioned.push(issue.key)
+      } catch (error) {
+        failed.push({
+          key: issue.key,
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Could not transition this ticket.',
+        })
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(4, issues.length) }, () => worker()),
+  )
+  return {
+    versionId,
+    total: issues.length,
+    transitioned,
+    alreadyReleased,
+    failed,
+  }
 }

@@ -41,6 +41,7 @@ import {
 } from './providers/githubOperations.js'
 import {
   listUnreleasedVersions,
+  markVersionIssuesReleased,
   testJiraConnection,
 } from './providers/jira.js'
 import {
@@ -335,6 +336,25 @@ export function createApp() {
   app.get('/api/releases', async (_request, response) => {
     response.json(await listUnreleasedVersions(requireConnection()))
   })
+
+  app.post(
+    '/api/releases/:versionId/mark-issues-released',
+    async (request, response) => {
+      const { versionId } = request.params
+      if (!/^\d+$/.test(versionId)) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_VERSION',
+            message: 'A numeric Jira version ID is required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(
+        await markVersionIssuesReleased(requireConnection(), versionId),
+      )
+    },
+  )
 
   app.get(
     '/api/releases/dashboard-progress/:progressId',

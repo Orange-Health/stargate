@@ -425,6 +425,10 @@ export function ReleaseDayOperations({
   const [copyNotesStatus, setCopyNotesStatus] = useState<
     'idle' | 'copying' | 'copied' | 'error'
   >('idle')
+  const [jiraReleaseStatus, setJiraReleaseStatus] = useState<
+    'idle' | 'running' | 'success' | 'partial' | 'error'
+  >('idle')
+  const [jiraReleaseMessage, setJiraReleaseMessage] = useState('')
   const [copyNotesMenuOpen, setCopyNotesMenuOpen] = useState(false)
   const copyNotesMenuRef = useRef<HTMLDivElement>(null)
   const [cellOperation, setCellOperation] = useState<CellOperation>()
@@ -450,6 +454,12 @@ export function ReleaseDayOperations({
       ),
   )
   const autoSyncStarted = useRef(false)
+  const releaseIssueCount = new Set([
+    ...dashboard.services.flatMap((service) =>
+      service.items.map((item) => item.issue.key),
+    ),
+    ...dashboard.unmatched.map((item) => item.issue.key),
+  ]).size
 
   useEffect(() => {
     sessionRef.current = session
@@ -1672,6 +1682,42 @@ export function ReleaseDayOperations({
     }
   }
 
+  async function markJiraTicketsReleased() {
+    if (jiraReleaseStatus === 'running' || jiraReleaseStatus === 'success') return
+    if (
+      !window.confirm(
+        `Mark all ${releaseIssueCount} tickets in ${dashboard.version.name} as Released in Jira?`,
+      )
+    ) {
+      return
+    }
+    setJiraReleaseStatus('running')
+    setJiraReleaseMessage('')
+    log('info', 'Marking release tickets as Released in Jira.')
+    try {
+      const result = await api.markReleaseIssuesReleased(dashboard.version.id)
+      if (result.failed.length > 0) {
+        const message = `${result.transitioned.length} transitioned, ${result.alreadyReleased.length} already released, ${result.failed.length} failed.`
+        setJiraReleaseStatus('partial')
+        setJiraReleaseMessage(message)
+        log('warning', message)
+      } else {
+        const message = `${result.transitioned.length} transitioned; ${result.alreadyReleased.length} were already released.`
+        setJiraReleaseStatus('success')
+        setJiraReleaseMessage(message)
+        log('success', `Jira release statuses updated. ${message}`)
+      }
+    } catch (reason) {
+      const message =
+        reason instanceof Error
+          ? reason.message
+          : 'Could not update Jira ticket statuses.'
+      setJiraReleaseStatus('error')
+      setJiraReleaseMessage(message)
+      log('error', message)
+    }
+  }
+
   function resetSession() {
     if (
       hasSavedProgress &&
@@ -1797,12 +1843,45 @@ export function ReleaseDayOperations({
                 <button
                   className="secondary-button"
                   type="button"
+                  disabled={
+                    releaseIssueCount === 0 ||
+                    jiraReleaseStatus === 'running' ||
+                    jiraReleaseStatus === 'success'
+                  }
+                  onClick={() => void markJiraTicketsReleased()}
+                >
+                  {jiraReleaseStatus === 'running'
+                    ? 'Updating Jira…'
+                    : jiraReleaseStatus === 'success'
+                      ? '✓ Jira tickets released'
+                      : jiraReleaseStatus === 'partial'
+                        ? 'Retry Jira release'
+                        : 'Mark Jira tickets released'}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
                   onClick={onClose}
                 >
                   ← Dashboard
                 </button>
               </div>
             </header>
+
+            {jiraReleaseMessage && (
+              <div
+                className={`alert ${
+                  jiraReleaseStatus === 'success'
+                    ? 'success'
+                    : jiraReleaseStatus === 'partial'
+                      ? 'warning'
+                      : 'error'
+                }`}
+                role="status"
+              >
+                {jiraReleaseMessage}
+              </div>
+            )}
 
             {!productionEnabled && (
               <div className="alert warning">
