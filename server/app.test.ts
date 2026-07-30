@@ -92,7 +92,7 @@ describe('local API', () => {
       .send({
         repository: 'Orange-Health/accounts',
         service: 'accounts',
-        tag: 'v-s6-v26.0713.1',
+        tag: 'v-s6-26.0713.1',
         environment: 's6',
       })
     expect(response.status).toBe(400)

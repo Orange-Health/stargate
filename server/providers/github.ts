@@ -576,7 +576,7 @@ export function stagingTagPrefix(
   ) {
     throw new Error('Release date is invalid.')
   }
-  return `v-${environment}-v${year.slice(-2)}.${month}${day}.`
+  return `v-${environment}-${year.slice(-2)}.${month}${day}.`
 }
 
 export function nextStagingTag(

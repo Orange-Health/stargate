@@ -889,18 +889,18 @@ describe('targeted search invalidation', () => {
 
 describe('staging release tags', () => {
   it('formats dates as v-{env}-vYY.MMDD.N', () => {
-    expect(stagingTagPrefix('qa', '2026-07-13')).toBe('v-qa-v26.0713.')
+    expect(stagingTagPrefix('qa', '2026-07-13')).toBe('v-qa-26.0713.')
   })
 
   it('increments only valid matching numeric tag suffixes', () => {
     expect(
       nextStagingTag('s2', '2026-07-13', [
-        'v-s2-v26.0713.1',
-        'v-s2-v26.0713.4',
-        'v-s2-v26.0713.beta',
-        'v-qa-v26.0713.9',
+        'v-s2-26.0713.1',
+        'v-s2-26.0713.4',
+        'v-s2-26.0713.beta',
+        'v-qa-26.0713.9',
       ]),
-    ).toBe('v-s2-v26.0713.5')
+    ).toBe('v-s2-26.0713.5')
   })
 
   it('rejects impossible calendar dates', () => {
@@ -918,8 +918,8 @@ describe('staging release tags', () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify([
-            { ref: 'refs/tags/v-qa-v26.0713.1' },
-            { ref: 'refs/tags/v-qa-v26.0713.2' },
+            { ref: 'refs/tags/v-qa-26.0713.1' },
+            { ref: 'refs/tags/v-qa-26.0713.2' },
           ]),
           { status: 200 },
         ),
@@ -953,14 +953,14 @@ describe('staging release tags', () => {
       '2026-07-13',
     )
 
-    expect(result.tag).toBe('v-qa-v26.0713.3')
+    expect(result.tag).toBe('v-qa-26.0713.3')
     const releaseRequest = fetchMock.mock.calls[2]
     expect(releaseRequest[0]).toBe(
       'https://api.github.com/repos/orange/service-api/releases',
     )
     const releaseBody = JSON.parse(String(releaseRequest[1]?.body))
     expect(releaseBody).toMatchObject({
-      tag_name: 'v-qa-v26.0713.3',
+      tag_name: 'v-qa-26.0713.3',
       target_commitish: 'dev',
       prerelease: true,
       draft: false,

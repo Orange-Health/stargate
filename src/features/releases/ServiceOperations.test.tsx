@@ -11,7 +11,7 @@ const repositoryState: RepositoryReleaseState = {
   stagingReleases: [
     {
       id: 1,
-      tag: 'v-qa-v26.0713.2',
+      tag: 'v-qa-26.0713.2',
       environment: 'qa',
       url: 'https://github.test/release/1',
       createdAt: '2026-07-13T12:00:00Z',
@@ -29,7 +29,7 @@ const repositoryState: RepositoryReleaseState = {
     },
     {
       id: 3,
-      tag: 'v-s1-v26.0713.1',
+      tag: 'v-s1-26.0713.1',
       environment: 's1',
       url: 'https://github.test/release/3',
       createdAt: '2026-07-13T11:00:00Z',
@@ -50,7 +50,7 @@ const repositoryState: RepositoryReleaseState = {
   deployedTags: [
     {
       service: 'accounts',
-      tag: 'v-s1-v26.0713.1',
+      tag: 'v-s1-26.0713.1',
       environment: 's1',
       buildNumber: 2152,
       buildUrl: 'https://jenkins.test/job/DEV/job/DEV%20Deployer/2152/',
@@ -157,7 +157,7 @@ describe('ServiceOperations', () => {
     vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
     render(<ServiceOperations repository="Orange-Health/service-api" />)
 
-    expect(await screen.findByText('v-qa-v26.0713.2')).toBeInTheDocument()
+    expect(await screen.findByText('v-qa-26.0713.2')).toBeInTheDocument()
     expect(screen.getByText('Running')).toBeInTheDocument()
     expect(screen.getByText('Build service ↗')).toHaveAttribute(
       'href',
@@ -188,7 +188,7 @@ describe('ServiceOperations', () => {
 
     render(<ServiceOperations repository="Orange-Health/service-api" />)
 
-    expect(await screen.findByText('v-qa-v26.0713.2')).toBeVisible()
+    expect(await screen.findByText('v-qa-26.0713.2')).toBeVisible()
     expect(screen.getByText('github returned 404. Not Found')).toBeVisible()
   })
 
@@ -229,7 +229,7 @@ describe('ServiceOperations', () => {
       .mockResolvedValue(releaseData(completedState))
     vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
     render(<ServiceOperations repository="Orange-Health/service-api" />)
-    await screen.findByText('v-qa-v26.0713.2')
+    await screen.findByText('v-qa-26.0713.2')
 
     act(() => {
       window.dispatchEvent(
@@ -240,7 +240,7 @@ describe('ServiceOperations', () => {
     })
 
     expect(
-      await screen.findByText('v-qa-v26.0713.2 succeeded'),
+      await screen.findByText('v-qa-26.0713.2 succeeded'),
     ).toBeVisible()
   })
 
@@ -253,7 +253,7 @@ describe('ServiceOperations', () => {
       .mockResolvedValue([
         {
           repository: 'Orange-Health/service-api',
-          tag: 'v-qa-v26.0713.2',
+          tag: 'v-qa-26.0713.2',
           createdAt: '2026-07-13T12:00:00Z',
           buildStatus: 'succeeded',
           runs: [
@@ -276,7 +276,7 @@ describe('ServiceOperations', () => {
         deploymentLookupFailed: false,
       })
     render(<ServiceOperations repository="Orange-Health/service-api" />)
-    await screen.findByText('v-qa-v26.0713.2')
+    await screen.findByText('v-qa-26.0713.2')
 
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'))
@@ -286,12 +286,12 @@ describe('ServiceOperations', () => {
       [
         {
           repository: 'Orange-Health/service-api',
-          tag: 'v-qa-v26.0713.2',
+          tag: 'v-qa-26.0713.2',
           createdAt: '2026-07-13T12:00:00Z',
         },
         {
           repository: 'Orange-Health/service-api',
-          tag: 'v-s1-v26.0713.1',
+          tag: 'v-s1-26.0713.1',
           createdAt: '2026-07-13T11:00:00Z',
         },
         {
@@ -318,7 +318,7 @@ describe('ServiceOperations', () => {
       .mockResolvedValue([
         {
           repository: 'Orange-Health/service-api',
-          tag: 'v-qa-v26.0713.2',
+          tag: 'v-qa-26.0713.2',
           createdAt: '2026-07-13T12:00:00Z',
           buildStatus: 'succeeded',
           runs: [],
@@ -330,7 +330,7 @@ describe('ServiceOperations', () => {
         deployedTags: [
           {
             service: 'accounts',
-            tag: 'v-qa-v26.0713.2',
+            tag: 'v-qa-26.0713.2',
             environment: 'qa',
             buildNumber: 2153,
             buildUrl: 'https://jenkins.test/qa/2153/',
@@ -351,7 +351,7 @@ describe('ServiceOperations', () => {
     expect(buildStatusRequest).toHaveBeenCalledTimes(1)
     expect(buildStatusRequest).toHaveBeenCalledWith(
       expect.arrayContaining([
-        expect.objectContaining({ tag: 'v-qa-v26.0713.2' }),
+        expect.objectContaining({ tag: 'v-qa-26.0713.2' }),
       ]),
       true,
     )

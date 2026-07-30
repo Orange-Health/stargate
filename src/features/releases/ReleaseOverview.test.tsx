@@ -386,7 +386,7 @@ describe('ReleaseOverview', () => {
     expect(screen.getByDisplayValue('orange/service-api')).toBeDisabled()
     expect(screen.getByText(/A pre-release tag will be created/)).toBeVisible()
     expect(screen.queryByLabelText(/release date/i)).not.toBeInTheDocument()
-    expect(screen.getByText('v-qa-v26.0716.N')).toBeVisible()
+    expect(screen.getByText('v-qa-26.0716.N')).toBeVisible()
     expect(
       screen.queryByRole('option', { name: 'Production' }),
     ).not.toBeInTheDocument()
@@ -605,15 +605,15 @@ describe('ReleaseOverview', () => {
     vi.mocked(api.deploymentFreshness).mockResolvedValueOnce([
       {
         repository: 'orange/service-api',
-        latestBuiltQaTag: 'v-qa-v26.0714.2',
-        liveQaTags: ['v-qa-v26.0714.1'],
+        latestBuiltQaTag: 'v-qa-26.0714.2',
+        liveQaTags: ['v-qa-26.0714.1'],
         outdated: true,
         checkFailed: false,
       },
       {
         repository: 'orange/other-api',
-        latestBuiltQaTag: 'v-qa-v26.0714.1',
-        liveQaTags: ['v-qa-v26.0714.1'],
+        latestBuiltQaTag: 'v-qa-26.0714.1',
+        liveQaTags: ['v-qa-26.0714.1'],
         outdated: false,
         checkFailed: false,
       },

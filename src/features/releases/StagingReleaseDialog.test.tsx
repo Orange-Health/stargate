@@ -18,7 +18,7 @@ describe('StagingReleaseDialog', () => {
       id: 100,
       repository: 'Orange-Health/service-api',
       environment: 's2',
-      tag: 'v-s2-v26.0728.1',
+      tag: 'v-s2-26.0728.1',
       sourceBranch: 'feature/OH-42',
       url: 'https://github.test/releases/100',
       createdAt: '2026-07-28T10:00:00Z',

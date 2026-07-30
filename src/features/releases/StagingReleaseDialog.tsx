@@ -36,7 +36,7 @@ function localDate() {
 function tagPreview(environment: StagingEnvironment, date: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date)
   if (!match) return 'Select a valid date'
-  return `v-${environment}-v${match[1].slice(-2)}.${match[2]}${match[3]}.N`
+  return `v-${environment}-${match[1].slice(-2)}.${match[2]}${match[3]}.N`
 }
 
 export function StagingReleaseDialog({

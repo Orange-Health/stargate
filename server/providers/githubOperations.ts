@@ -524,7 +524,7 @@ export async function getLatestSuccessfulQaTag(
     const qaReleases = releases
       .filter(
         (release) =>
-          release.prerelease && /^v-qa-v\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
+          release.prerelease && /^v-qa-\d{2}\.\d{4}\.\d+$/.test(release.tag_name),
       )
       .slice(0, 8)
     for (const release of qaReleases) {

@@ -30,7 +30,7 @@ describe('deploymentSpec', () => {
       deploymentSpec({
         repository: 'Orange-Health/accounts',
         service: 'accounts',
-        tag: 'v-qa-v26.0713.1',
+        tag: 'v-qa-26.0713.1',
         environment: 'qa',
       }),
     ).toEqual({
@@ -38,7 +38,7 @@ describe('deploymentSpec', () => {
       parameters: {
         TEAM: 'QA',
         SERVICE: 'accounts',
-        IMAGE_TAG: 'v-qa-v26.0713.1',
+        IMAGE_TAG: 'v-qa-26.0713.1',
         IS_PROD_TAG: false,
         TRIGGER_PNS_SUITE: false,
         TRIGGER_AUTOMATION_SUITE: false,
@@ -51,7 +51,7 @@ describe('deploymentSpec', () => {
       deploymentSpec({
         repository: 'Orange-Health/gringotts',
         service: 'gringotts',
-        tag: 'v-s2-v26.0713.2',
+        tag: 'v-s2-26.0713.2',
         environment: 's2',
       }),
     ).toEqual({
@@ -59,7 +59,7 @@ describe('deploymentSpec', () => {
       parameters: {
         TEAM: 'D2C CRM',
         SERVICE_NAME: 'gringotts',
-        IMAGE_TAG: 'v-s2-v26.0713.2',
+        IMAGE_TAG: 'v-s2-26.0713.2',
         IS_PROD_TAG: false,
         SKIP_MIGRATION: false,
       },
@@ -71,7 +71,7 @@ describe('deploymentSpec', () => {
       deploymentSpec({
         repository: 'Orange-Health/accounts',
         service: 'gringotts',
-        tag: 'v-qa-v26.0713.1',
+        tag: 'v-qa-26.0713.1',
         environment: 'qa',
       }),
     ).toThrow('is not mapped')
@@ -100,21 +100,21 @@ describe('deployedTagsFromBuilds', () => {
           result: 'SUCCESS',
           url: 'https://jenkins.test/qa/2152/',
           timestamp: Date.parse('2026-07-14T08:00:00Z'),
-          actions: [parameterAction('accounts', 'v-qa-v26.0714.1', 'QA', true)],
+          actions: [parameterAction('accounts', 'v-qa-26.0714.1', 'QA', true)],
         },
       ],
       [
         {
           number: 300,
           result: 'FAILURE',
-          actions: [parameterAction('accounts', 'v-s1-v26.0714.2', 'Doctors')],
+          actions: [parameterAction('accounts', 'v-s1-26.0714.2', 'Doctors')],
         },
         {
           number: 299,
           result: 'SUCCESS',
           url: 'https://jenkins.test/dev/299/',
           timestamp: Date.parse('2026-07-14T07:00:00Z'),
-          actions: [parameterAction('accounts', 'v-s1-v26.0714.1', 'Doctors')],
+          actions: [parameterAction('accounts', 'v-s1-26.0714.1', 'Doctors')],
         },
       ],
       ['accounts'],
@@ -123,12 +123,12 @@ describe('deployedTagsFromBuilds', () => {
     expect(deployments).toEqual([
       expect.objectContaining({
         environment: 'qa',
-        tag: 'v-qa-v26.0714.1',
+        tag: 'v-qa-26.0714.1',
         buildNumber: 2152,
       }),
       expect.objectContaining({
         environment: 's1',
-        tag: 'v-s1-v26.0714.1',
+        tag: 'v-s1-26.0714.1',
         buildNumber: 299,
       }),
     ])

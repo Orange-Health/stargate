@@ -7,7 +7,7 @@ import { DeployDialog } from './DeployDialog'
 
 const release: TrackedStagingRelease = {
   id: 1,
-  tag: 'v-qa-v26.0713.2',
+  tag: 'v-qa-26.0713.2',
   environment: 'qa',
   url: 'https://github.test/release/1',
   createdAt: '2026-07-13T12:00:00Z',
@@ -50,7 +50,7 @@ describe('DeployDialog', () => {
     expect(trigger).toHaveBeenCalledWith({
       repository: 'Orange-Health/clr',
       service: 'clr-web',
-      tag: 'v-qa-v26.0713.2',
+      tag: 'v-qa-26.0713.2',
       environment: 's2',
     })
     expect(await screen.findByText('Jenkins build queued')).toBeInTheDocument()

@@ -824,12 +824,12 @@ describe('feature PR force merge', () => {
 describe('release ordering', () => {
   it('sorts by publication time and uses it for display', () => {
     const older = {
-      tag: 'v-s2-v26.0715.1',
+      tag: 'v-s2-26.0715.1',
       created_at: '2026-07-15T10:00:00Z',
       published_at: '2026-07-15T10:00:00Z',
     }
     const newlyPublished = {
-      tag: 'v-qa-v26.0716.1',
+      tag: 'v-qa-26.0716.1',
       created_at: '2026-07-15T08:00:00Z',
       published_at: '2026-07-16T06:00:00Z',
     }
