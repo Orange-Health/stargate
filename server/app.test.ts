@@ -60,6 +60,9 @@ describe('local API', () => {
     const stateResponse = await request(app)
       .get('/api/github/repository-state')
       .query({ repository: '../outside' })
+    const controlRoomResponse = await request(app)
+      .get('/api/github/release-control-state')
+      .query({ repository: '../outside' })
     const historyResponse = await request(app)
       .get('/api/github/release-history')
       .query({ repository: '../outside' })
@@ -77,6 +80,7 @@ describe('local API', () => {
       })
 
     expect(stateResponse.body.error.code).toBe('INVALID_REPOSITORY')
+    expect(controlRoomResponse.body.error.code).toBe('INVALID_REPOSITORY')
     expect(historyResponse.body.error.code).toBe('INVALID_REPOSITORY')
     expect(createResponse.body.error.code).toBe('INVALID_PROMOTION')
     expect(mergeResponse.body.error.code).toBe('INVALID_PROMOTION_MERGE')

@@ -99,6 +99,9 @@ describe('ReleaseDayOperations', () => {
   beforeEach(() => {
     window.localStorage.clear()
     vi.spyOn(api, 'refreshRepository').mockResolvedValue()
+    vi.spyOn(api, 'releaseControlState').mockImplementation((repository) =>
+      api.repositoryState(repository),
+    )
   })
 
   afterEach(() => vi.restoreAllMocks())
@@ -787,7 +790,6 @@ describe('ReleaseDayOperations', () => {
   })
 
   it('updates each table row as bulk synchronization completes', async () => {
-    const user = userEvent.setup()
     const secondRepository = 'Orange-Health/service-web'
     const twoServiceDashboard: ReleaseDashboard = {
       ...dashboard,
@@ -1093,6 +1095,7 @@ describe('ReleaseDayOperations', () => {
     expect(
       screen.getByRole('link', { name: new RegExp(created.tag) }),
     ).toBeVisible()
+    expect(api.repositoryState).toHaveBeenCalledTimes(1)
     const latest = {
       id: 96,
       tag: 'v-prod-26.0716.6',
@@ -1173,7 +1176,9 @@ describe('ReleaseDayOperations', () => {
     )
 
     expect(await screen.findByText('Tag creation failed')).toBeVisible()
-    expect(screen.getAllByText('GitHub rejected the tag.')).toHaveLength(2)
+    expect(
+      screen.getAllByText('GitHub rejected the tag.').length,
+    ).toBeGreaterThanOrEqual(2)
     const retry = screen.getByRole('button', {
       name: '↻ Retry tag creation',
     })

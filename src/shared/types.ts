@@ -326,6 +326,20 @@ export type RepositoryReleaseState = {
   fetchedAt: string
 }
 
+export type ReleaseControlRoomState = Pick<
+  RepositoryReleaseState,
+  | 'repository'
+  | 'defaultBranch'
+  | 'productionReleases'
+  | 'latestProductionTagDelta'
+  | 'deployedTags'
+  | 'deploymentLookupFailed'
+  | 'productionReady'
+  | 'promotionSteps'
+  | 'jenkinsServices'
+  | 'fetchedAt'
+>
+
 export type RepositoryReleaseHistory = {
   repository: string
   stagingReleases: TrackedStagingRelease[]

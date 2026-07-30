@@ -5,8 +5,8 @@ import type {
   CreatedProductionRelease,
   PromotionPullRequest,
   PromotionRoute,
+  ReleaseControlRoomState,
   ReleaseDashboard,
-  RepositoryReleaseState,
   TrackedProductionRelease,
 } from '../../shared/types'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
@@ -98,12 +98,12 @@ const REPOSITORY_STATE_CACHE_MS = 60_000
 
 type CachedRepositoryStates = {
   cachedAt: number
-  states: Record<string, RepositoryReleaseState>
+  states: Record<string, ReleaseControlRoomState>
 }
 
 type LegacyCachedRepositoryStates = Record<
   string,
-  { syncedAt: number; state: RepositoryReleaseState }
+  { syncedAt: number; state: ReleaseControlRoomState }
 >
 
 type CachedReleaseDevelopers = Record<
@@ -117,7 +117,7 @@ function localDate() {
 }
 
 export function defaultBranchNeedsNewProductionTag(
-  state: RepositoryReleaseState | undefined,
+  state: ReleaseControlRoomState | undefined,
 ) {
   return Boolean(state?.latestProductionTagDelta?.hasSourceChanges)
 }
@@ -188,7 +188,7 @@ export function developersForReleaseService(
 }
 
 function restoreRepositoryStates(dashboard: ReleaseDashboard) {
-  const states: Record<string, RepositoryReleaseState | undefined> = {}
+  const states: Record<string, ReleaseControlRoomState | undefined> = {}
   let cachedAt = 0
   try {
     const raw = window.localStorage.getItem(
@@ -304,7 +304,7 @@ async function mapConcurrent<T>(
   )
 }
 
-function routeStep(state: RepositoryReleaseState | undefined, route: PromotionRoute) {
+function routeStep(state: ReleaseControlRoomState | undefined, route: PromotionRoute) {
   return state?.promotionSteps.find((step) => step.route === route)
 }
 
@@ -334,7 +334,7 @@ function canForceMergePull(pull: PromotionPullRequest) {
 }
 
 function phaseState(
-  state: RepositoryReleaseState | undefined,
+  state: ReleaseControlRoomState | undefined,
   route: PromotionRoute,
   mode: 'create' | 'merge',
   syncStatus?: RepositorySyncStatus,
@@ -385,7 +385,7 @@ export function ReleaseDayOperations({
     restoreRepositoryStates(dashboard),
   ).current
   const [states, setStates] = useState<
-    Record<string, RepositoryReleaseState | undefined>
+    Record<string, ReleaseControlRoomState | undefined>
   >(restoredRepositoryStates.states)
   const [refreshing, setRefreshing] = useState(false)
   const [busyAction, setBusyAction] = useState('')
@@ -422,6 +422,7 @@ export function ReleaseDayOperations({
   )
   const [deployTarget, setDeployTarget] = useState<DeployTarget>()
   const sessionRef = useRef(session)
+  const statesRef = useRef(states)
   const loadSequence = useRef(0)
   const repositoryCacheTimestamp = useRef(restoredRepositoryStates.cachedAt)
   const shouldAutoSync = useRef(
@@ -434,33 +435,45 @@ export function ReleaseDayOperations({
 
   useEffect(() => {
     sessionRef.current = session
-    window.localStorage.setItem(
-      sessionKey(session.versionId),
-      JSON.stringify(session),
-    )
+    const timeout = window.setTimeout(() => {
+      window.localStorage.setItem(
+        sessionKey(session.versionId),
+        JSON.stringify(session),
+      )
+    }, 300)
+    return () => window.clearTimeout(timeout)
   }, [session])
 
   useEffect(() => {
-    const cachedStates = Object.fromEntries(
-      Object.entries(states).filter(
-        (entry): entry is [string, RepositoryReleaseState] =>
-          entry[1] !== undefined,
-      ),
-    )
-    if (
-      Object.keys(cachedStates).length === 0 ||
-      !repositoryCacheTimestamp.current
-    ) {
-      window.localStorage.removeItem(repositoryStateCacheKey(dashboard.version.id))
-      return
-    }
-    window.localStorage.setItem(
-      repositoryStateCacheKey(dashboard.version.id),
-      JSON.stringify({
-        cachedAt: repositoryCacheTimestamp.current,
-        states: cachedStates,
-      } satisfies CachedRepositoryStates),
-    )
+    statesRef.current = states
+  }, [states])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      const cachedStates = Object.fromEntries(
+        Object.entries(states).filter(
+          (entry): entry is [string, ReleaseControlRoomState] =>
+            entry[1] !== undefined,
+        ),
+      )
+      if (
+        Object.keys(cachedStates).length === 0 ||
+        !repositoryCacheTimestamp.current
+      ) {
+        window.localStorage.removeItem(
+          repositoryStateCacheKey(dashboard.version.id),
+        )
+        return
+      }
+      window.localStorage.setItem(
+        repositoryStateCacheKey(dashboard.version.id),
+        JSON.stringify({
+          cachedAt: repositoryCacheTimestamp.current,
+          states: cachedStates,
+        } satisfies CachedRepositoryStates),
+      )
+    }, 300)
+    return () => window.clearTimeout(timeout)
   }, [dashboard.version.id, states])
 
   const selected = session.selectedRepositories
@@ -581,36 +594,23 @@ export function ReleaseDayOperations({
           log('info', 'Invalidating cached repository state.', repository)
           await api.refreshRepository(repository)
         }
-        const repositoryState = await api.repositoryState(repository)
+        const repositoryState = await api.releaseControlState(repository)
         if (sequence !== loadSequence.current) return
         repositoryCacheTimestamp.current = Date.now()
         setStates((current) => ({
           ...current,
           [repository]: repositoryState,
         }))
-        for (const step of repositoryState.promotionSteps) {
+        const discoveries = repositoryState.promotionSteps.map((step) => {
           if (step.state === 'pr_open' && step.pullRequest) {
-            log(
-              'success',
-              `Discovered open ${step.fromBranch} → ${step.toBranch} PR #${step.pullRequest.number}: ${step.pullRequest.title}.`,
-              repository,
-            )
-          } else if (step.state === 'up_to_date') {
-            log(
-              'success',
-              step.filesChanged === 0 && step.commitsAhead > 0
-                ? `Discovered ${step.fromBranch} → ${step.toBranch} has different merge history but identical content.`
-                : `Discovered ${step.fromBranch} → ${step.toBranch} is already up to date.`,
-              repository,
-            )
-          } else {
-            log(
-              'warning',
-              `Discovered ${step.fromBranch} → ${step.toBranch} needs a PR (${step.commitsAhead} commits waiting).`,
-              repository,
-            )
+            return `${step.fromBranch} → ${step.toBranch}: PR #${step.pullRequest.number}`
           }
-        }
+          if (step.state === 'up_to_date') {
+            return `${step.fromBranch} → ${step.toBranch}: up to date`
+          }
+          return `${step.fromBranch} → ${step.toBranch}: ${step.commitsAhead} commits waiting`
+        })
+        log('info', `Promotion state: ${discoveries.join('; ')}.`, repository)
         setRepositorySync((current) => ({
           ...current,
           [repository]: 'synced',
@@ -668,29 +668,6 @@ export function ReleaseDayOperations({
   )
 
   useEffect(() => {
-    const activeReleases = selected.flatMap((repository) => {
-      const release = session.repositories[repository]?.productionRelease
-      if (
-        !release ||
-        !releaseCreatedOnDate(release.createdAt, session.releaseDate)
-      ) {
-        return []
-      }
-      const status = states[repository]?.productionReleases.find(
-        (item) => item.tag === release.tag,
-      )?.buildStatus
-      return status && ['succeeded', 'failed', 'canceled'].includes(status)
-        ? []
-        : [
-            {
-              repository,
-              tag: release.tag,
-              createdAt: release.createdAt,
-            },
-          ]
-    })
-    if (activeReleases.length === 0) return
-
     let active = true
     let running = false
     let timeout: number | undefined
@@ -700,16 +677,48 @@ export function ReleaseDayOperations({
     }
     const poll = async () => {
       if (!active || running || document.hidden) return
+      const currentSession = sessionRef.current
+      const activeReleases = currentSession.selectedRepositories.flatMap(
+        (repository) => {
+          const release =
+            currentSession.repositories[repository]?.productionRelease
+          if (
+            !release ||
+            !releaseCreatedOnDate(release.createdAt, currentSession.releaseDate)
+          ) {
+            return []
+          }
+          const status = statesRef.current[
+            repository
+          ]?.productionReleases.find(
+            (item) => item.tag === release.tag,
+          )?.buildStatus
+          return status && ['succeeded', 'failed', 'canceled'].includes(status)
+            ? []
+            : [
+                {
+                  repository,
+                  tag: release.tag,
+                  createdAt: release.createdAt,
+                },
+              ]
+        },
+      )
+      if (activeReleases.length === 0) {
+        schedule()
+        return
+      }
       running = true
       try {
-        const results = await api.releaseBuildStatuses(activeReleases)
+        const results = await api.releaseBuildStatuses(activeReleases, true)
         if (!active) return
         setStates((current) => {
           const next = { ...current }
           for (const result of results) {
             const repositoryState = next[result.repository]
             const created =
-              session.repositories[result.repository]?.productionRelease
+              sessionRef.current.repositories[result.repository]
+                ?.productionRelease
             if (!repositoryState || !created) continue
             const tracked = repositoryState.productionReleases.find(
               (release) => release.tag === result.tag,
@@ -752,7 +761,7 @@ export function ReleaseDayOperations({
       if (timeout) window.clearTimeout(timeout)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [selected, session.repositories, states])
+  }, [])
 
   const everySelected = useCallback(
     (predicate: (repository: string) => boolean) =>
@@ -1152,6 +1161,68 @@ export function ReleaseDayOperations({
           },
         },
       }))
+      setStates((current) => {
+        const repositoryState = current[repository]
+        if (!repositoryState) return current
+        const tracked = {
+          id: release.id,
+          tag: release.tag,
+          url: release.url,
+          createdAt: release.createdAt,
+          buildStatus: 'starting' as const,
+          runs: [],
+        }
+        return {
+          ...current,
+          [repository]: {
+            ...repositoryState,
+            productionReleases: [
+              tracked,
+              ...repositoryState.productionReleases.filter(
+                (item) => item.tag !== release.tag,
+              ),
+            ],
+            latestProductionTagDelta: undefined,
+            fetchedAt: new Date().toISOString(),
+          },
+        }
+      })
+      try {
+        const [build] = await api.releaseBuildStatuses(
+          [
+            {
+              repository,
+              tag: release.tag,
+              createdAt: release.createdAt,
+            },
+          ],
+          true,
+        )
+        if (build) {
+          setStates((current) => {
+            const repositoryState = current[repository]
+            if (!repositoryState) return current
+            return {
+              ...current,
+              [repository]: {
+                ...repositoryState,
+                productionReleases: repositoryState.productionReleases.map(
+                  (item) =>
+                    item.tag === build.tag
+                      ? {
+                          ...item,
+                          buildStatus: build.buildStatus,
+                          runs: build.runs,
+                        }
+                      : item,
+                ),
+              },
+            }
+          })
+        }
+      } catch {
+        // The stable polling loop will retry active builds.
+      }
       log(
         'success',
         `Created ${release.tag} from ${release.sourceBranch}.`,
@@ -1182,7 +1253,9 @@ export function ReleaseDayOperations({
   }
 
   async function createProductionReleases() {
-    await runAction('Create production releases', createProductionRelease)
+    await runAction('Create production releases', createProductionRelease, {
+      reconcile: false,
+    })
   }
 
   async function checkLatestBuild(repository: string) {
@@ -1191,7 +1264,7 @@ export function ReleaseDayOperations({
     log('info', 'Finding the latest eligible production tag.', repository)
     try {
       await api.refreshRepository(repository)
-      const repositoryState = await api.repositoryState(repository)
+      const repositoryState = await api.releaseControlState(repository)
       const latest = latestProductionReleaseOnDate(
         repositoryState.productionReleases,
         sessionRef.current.releaseDate,
@@ -1301,7 +1374,6 @@ export function ReleaseDayOperations({
     )
     try {
       await createProductionRelease(repository)
-      await syncRepository(repository, false, loadSequence.current)
     } catch (reason) {
       const message =
         reason instanceof Error
@@ -1316,8 +1388,9 @@ export function ReleaseDayOperations({
 
   function toggleRepository(repository: string) {
     if (busyAction) return
+    const included =
+      sessionRef.current.selectedRepositories.includes(repository)
     setSession((current) => {
-      const included = current.selectedRepositories.includes(repository)
       return {
         ...current,
         selectedRepositories: included
@@ -1325,6 +1398,13 @@ export function ReleaseDayOperations({
           : [...current.selectedRepositories, repository],
       }
     })
+    if (
+      !included &&
+      !statesRef.current[repository] &&
+      !['queued', 'syncing'].includes(repositorySync[repository])
+    ) {
+      void syncRepository(repository, false, loadSequence.current)
+    }
   }
 
   useEffect(() => {
@@ -1347,21 +1427,25 @@ export function ReleaseDayOperations({
     setCopyNotesStatus('copying')
     const releasesByRepository: Record<string, TrackedProductionRelease[]> = {}
     const failures: string[] = []
+    const selectedServices = dashboard.services.filter((service) =>
+      selectedSet.has(service.repository),
+    )
     try {
       await mapConcurrent(
-        dashboard.services,
+        selectedServices,
         async (service) => {
+          const cached =
+            statesRef.current[service.repository]?.productionReleases
+          if (cached) {
+            releasesByRepository[service.repository] = cached
+            return
+          }
           try {
             const history = await api.releaseHistory(service.repository)
             releasesByRepository[service.repository] =
               history.productionReleases
           } catch {
-            const cached = states[service.repository]?.productionReleases
-            if (cached) {
-              releasesByRepository[service.repository] = cached
-            } else {
-              failures.push(service.repository)
-            }
+            failures.push(service.repository)
           }
         },
         REPOSITORY_SYNC_CONCURRENCY,
@@ -1373,7 +1457,7 @@ export function ReleaseDayOperations({
       }
       await copyReleaseNotesContent(
         releaseNotesForDashboard(
-          dashboard,
+          { ...dashboard, services: selectedServices },
           releasesByRepository,
           sessionRef.current.releaseDate,
         ),
@@ -1382,7 +1466,7 @@ export function ReleaseDayOperations({
       setCopyNotesStatus('copied')
       log(
         'success',
-        `Copied ${format} release notes for ${dashboard.services.length} repositories.`,
+        `Copied ${format} release notes for ${selectedServices.length} repositories.`,
       )
     } catch (reason) {
       setCopyNotesStatus('error')

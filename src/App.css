@@ -1528,6 +1528,60 @@ button:disabled {
   padding: 18px 4px;
 }
 
+.skeleton-list {
+  pointer-events: none;
+}
+
+.skeleton {
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  background: linear-gradient(
+    90deg,
+    var(--line) 25%,
+    var(--line-strong) 50%,
+    var(--line) 75%
+  );
+  background-size: 200% 100%;
+  border-radius: 999px;
+  display: block;
+}
+
+.skeleton-card {
+  cursor: default;
+  min-height: 48px;
+}
+
+.skeleton-service-name {
+  height: 11px;
+  width: min(58%, 150px);
+}
+
+.skeleton-branch {
+  height: 8px;
+  width: 42px;
+}
+
+.skeleton-pin {
+  border-radius: 9px;
+  flex: 0 0 38px;
+  min-height: 48px;
+}
+
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
 .all-service-detail > .detail-heading a {
   display: inline-block;
   font-size: 12px;
@@ -1597,7 +1651,51 @@ button:disabled {
 }
 
 .repository-pr-main {
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+.skeleton-pr-row {
+  min-height: 96px;
+}
+
+.skeleton-pr-row .repository-pr-main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.skeleton-pr-title {
+  height: 12px;
+  width: min(68%, 420px);
+}
+
+.skeleton-pr-branches {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.skeleton-branch-name {
+  border-radius: 4px;
+  height: 18px;
+  width: 82px;
+}
+
+.skeleton-branch-arrow {
+  height: 6px;
+  width: 12px;
+}
+
+.skeleton-pr-meta {
+  height: 8px;
+  width: 150px;
+}
+
+.skeleton-action {
+  border-radius: 8px;
+  flex: 0 0 64px;
+  height: 34px;
 }
 
 .repository-pr-title {

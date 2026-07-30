@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../shared/api'
+import { Skeleton } from '../../shared/Skeleton'
 import type {
   RepositoryPullRequest,
   RepositoryPullRequestList,
@@ -194,7 +195,26 @@ export function RepositoryPullRequests({ repository }: Props) {
       )}
 
       {loading && !result ? (
-        <div className="repositories-message">Loading pull requests…</div>
+        <div
+          className="repository-pr-list skeleton-list"
+          role="status"
+          aria-label="Loading pull requests"
+        >
+          {Array.from({ length: 4 }, (_, index) => (
+            <article className="repository-pr-row skeleton-pr-row" key={index}>
+              <div className="repository-pr-main">
+                <Skeleton className="skeleton-pr-title" />
+                <div className="skeleton-pr-branches">
+                  <Skeleton className="skeleton-branch-name" />
+                  <Skeleton className="skeleton-branch-arrow" />
+                  <Skeleton className="skeleton-branch-name" />
+                </div>
+                <Skeleton className="skeleton-pr-meta" />
+              </div>
+              <Skeleton className="skeleton-action" />
+            </article>
+          ))}
+        </div>
       ) : result?.items.length ? (
         <div className="repository-pr-list">
           {result.items.map((pull) => (

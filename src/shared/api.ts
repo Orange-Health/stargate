@@ -19,6 +19,7 @@ import type {
   PromotionPullRequest,
   ReleaseBuildStatusInput,
   ReleaseBuildStatusResult,
+  ReleaseControlRoomState,
   ReleaseDashboard,
   RepositoryDeploymentStatus,
   RepositoryReleaseData,
@@ -147,6 +148,10 @@ export const api = {
   repositoryState: (repository: string, includeAllVReleases = false) =>
     request<RepositoryReleaseState>(
       `/api/github/repository-state?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
+    ),
+  releaseControlState: (repository: string) =>
+    request<ReleaseControlRoomState>(
+      `/api/github/release-control-state?repository=${encodeURIComponent(repository)}`,
     ),
   releaseHistory: (repository: string, includeAllVReleases = false) =>
     request<RepositoryReleaseHistory>(

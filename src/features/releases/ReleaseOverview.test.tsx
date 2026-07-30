@@ -101,8 +101,34 @@ describe('ReleaseOverview', () => {
     vi.restoreAllMocks()
   })
 
+  it('shows service skeletons while all services are loading', () => {
+    vi.mocked(api.repositories).mockReturnValue(new Promise(() => {}))
+
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="all-services"
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByRole('status', { name: 'Loading services' }),
+    ).toBeVisible()
+    expect(document.querySelectorAll('.skeleton-card')).toHaveLength(7)
+  })
+
   it('offers release operations for repositories outside a Jira release', async () => {
     const user = userEvent.setup()
+    const onSelectRepository = vi.fn()
     vi.spyOn(api, 'repositoryReleaseData').mockReturnValue(new Promise(() => {}))
     vi.mocked(api.repositories).mockResolvedValueOnce([
       {
@@ -134,6 +160,7 @@ describe('ReleaseOverview', () => {
         selectedRepository="orange/operations"
         loading={false}
         onSelectVersion={vi.fn()}
+        onSelectRepository={onSelectRepository}
         onRefresh={vi.fn()}
         onDisconnect={vi.fn()}
       />,
@@ -163,6 +190,13 @@ describe('ReleaseOverview', () => {
       screen.getByRole('button', { name: '↻ Refresh releases' }),
     ).toBeVisible()
 
+    const search = screen.getByRole('searchbox', { name: 'Search all services' })
+    await user.type(search, 'service-api')
+
+    expect(screen.getByRole('heading', { name: 'operations' })).toBeVisible()
+    expect(onSelectRepository).not.toHaveBeenCalled()
+
+    await user.clear(search)
     await user.click(screen.getByRole('tab', { name: 'Branch Ops' }))
 
     expect(

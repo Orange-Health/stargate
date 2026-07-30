@@ -7,6 +7,18 @@ import { RepositoryPullRequests } from './RepositoryPullRequests'
 describe('RepositoryPullRequests', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('shows pull request skeletons during the initial load', () => {
+    vi.spyOn(api, 'repositoryPullRequests').mockReturnValue(new Promise(() => {}))
+    vi.spyOn(api, 'repositoryPullRequestAuthors').mockResolvedValue([])
+
+    render(<RepositoryPullRequests repository="Orange-Health/service-api" />)
+
+    expect(
+      screen.getByRole('status', { name: 'Loading pull requests' }),
+    ).toBeVisible()
+    expect(document.querySelectorAll('.skeleton-pr-row')).toHaveLength(4)
+  })
+
   it('filters, paginates, and merges recent pull requests', async () => {
     const user = userEvent.setup()
     vi.spyOn(api, 'repositoryPullRequests').mockResolvedValue({

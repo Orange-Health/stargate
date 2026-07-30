@@ -10,6 +10,7 @@ import {
   comparisonHasAnyFileChanges,
   comparisonHasSourceFileChanges,
   getReleaseBuildStatuses,
+  getReleaseControlRoomState,
   getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   hasActualMergeConflict,
@@ -484,7 +485,7 @@ describe('back-merge PR merging', () => {
 
   it('force merges via GraphQL when bypassing branch protection', async () => {
     let graphqlCalled = false
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input)
       if (url.endsWith('/repos/Orange-Health/service-api')) {
         return new Response(JSON.stringify({ default_branch: 'main' }), {
@@ -848,6 +849,59 @@ describe('release ordering', () => {
 })
 
 describe('repository state cache', () => {
+  it('loads the control room state within a six-request cold-sync budget', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(
+          JSON.stringify({
+            full_name: 'Orange-Health/service-api',
+            default_branch: 'main',
+          }),
+        )
+      }
+      if (url.includes('/releases?')) return new Response(JSON.stringify([]))
+      if (url.includes('/actions/runs?')) {
+        return new Response(JSON.stringify({ workflow_runs: [] }))
+      }
+      if (url.includes('/pulls?')) return new Response(JSON.stringify([]))
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+
+    const [first, second] = await Promise.all([
+      getReleaseControlRoomState(config, 'Orange-Health/service-api'),
+      getReleaseControlRoomState(config, 'Orange-Health/service-api'),
+    ])
+
+    expect(first).toBe(second)
+    expect(first.productionReady).toBe(true)
+    expect(first.promotionSteps).toHaveLength(2)
+    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).includes('state=closed'),
+      ),
+    ).toBe(false)
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+  })
+
   it('coalesces reads and treats history-only differences as up to date', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input)
@@ -899,7 +953,7 @@ describe('repository state cache', () => {
         (step) => step.state === 'up_to_date' && step.filesChanged === 0,
       ),
     ).toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(12)
+    expect(fetchMock).toHaveBeenCalledTimes(7)
     clearRepositoryCaches(config, 'Orange-Health/service-api')
   })
 
@@ -1036,9 +1090,9 @@ describe('repository state cache', () => {
       if (url.includes('/pulls?')) {
         const requestUrl = new URL(url)
         expect(requestUrl.searchParams.has('head')).toBe(false)
+        expect(requestUrl.searchParams.has('base')).toBe(false)
         const pulls =
-          requestUrl.searchParams.get('state') === 'open' &&
-          requestUrl.searchParams.get('base') === 'main'
+          requestUrl.searchParams.get('state') === 'open'
             ? [sameBranchFromAnotherFork, promotionPull]
             : []
         return new Response(JSON.stringify(pulls), { status: 200 })

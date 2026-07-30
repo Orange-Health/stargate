@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../shared/api'
 import { isClosedWithoutMerge } from '../../shared/pullRequests'
+import { Skeleton } from '../../shared/Skeleton'
 import { ALL_SERVICES_ID } from '../../shared/types'
 import type {
   ConnectionStatus,
@@ -887,7 +888,7 @@ export function ReleaseOverview({
     ]
   }, [organizationRepositories, pinnedRepositories, repositorySearch])
   const selectedOrganizationRepository =
-    filteredOrganizationRepositories.find(
+    organizationRepositories.find(
       (repository) => repository.repository === selectedRepository,
     ) ?? filteredOrganizationRepositories[0]
 
@@ -1088,10 +1089,10 @@ export function ReleaseOverview({
   ])
   const selectedService = useMemo(
     () =>
-      filteredServices.find(
+      visibleServices.find(
         (service) => service.repository === selectedRepository,
       ) ?? filteredServices[0],
-    [filteredServices, selectedRepository],
+    [filteredServices, selectedRepository, visibleServices],
   )
   const mergedIssueKeys = new Set(
     visibleServices.flatMap((service) =>
@@ -1392,16 +1393,27 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                 <input
                   type="search"
                   value={repositorySearch}
-                  onChange={(event) => {
-                    setRepositorySearch(event.target.value)
-                    onSelectRepository('')
-                  }}
+                  onChange={(event) => setRepositorySearch(event.target.value)}
                   placeholder="Search services"
                   aria-label="Search all services"
                 />
               </label>
               {repositoriesLoading ? (
-                <div className="repositories-message">Loading services…</div>
+                <div
+                  className="service-list all-services-list skeleton-list"
+                  role="status"
+                  aria-label="Loading services"
+                >
+                  {Array.from({ length: 7 }, (_, index) => (
+                    <div className="all-service-row" key={index}>
+                      <div className="all-service-card skeleton-card">
+                        <Skeleton className="skeleton-service-name" />
+                        <Skeleton className="skeleton-branch" />
+                      </div>
+                      <Skeleton className="skeleton-pin" />
+                    </div>
+                  ))}
+                </div>
               ) : repositoriesError ? (
                 <div className="alert warning">{repositoriesError}</div>
               ) : (
@@ -1698,10 +1710,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                   <input
                     type="search"
                     value={serviceSearch}
-                    onChange={(event) => {
-                      setServiceSearch(event.target.value)
-                      onSelectRepository('')
-                    }}
+                    onChange={(event) => setServiceSearch(event.target.value)}
                     placeholder="Search services"
                     aria-label="Search services"
                   />

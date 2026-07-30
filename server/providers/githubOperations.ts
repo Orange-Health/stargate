@@ -12,6 +12,7 @@ import type {
   PromotionStep,
   ReleaseBuildStatusInput,
   ReleaseBuildStatusResult,
+  ReleaseControlRoomState,
   RepositoryReleaseHistory,
   RepositoryReleaseState,
   RepositoryPullRequestList,
@@ -113,6 +114,10 @@ const repositoryStateCache = new Map<
   string,
   { expiresAt: number; value: Promise<RepositoryReleaseState> }
 >()
+const controlRoomStateCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<ReleaseControlRoomState> }
+>()
 const terminalBuildCache = new Map<string, WorkflowRun[]>()
 
 export function clearRepositoryCaches(
@@ -127,6 +132,7 @@ export function clearRepositoryCaches(
   qaBuildCache.delete(key)
   repositoryStateCache.delete(key)
   repositoryStateCache.delete(`${key}:all-v`)
+  controlRoomStateCache.delete(key)
   if (includeBuilds) {
     const buildPrefix = `${key}:`
     for (const buildKey of terminalBuildCache.keys()) {
@@ -332,7 +338,7 @@ async function listTrackedReleases(
   )
     .slice(0, limit)
 
-  const releaseBackedStaging = await Promise.all(
+  const releaseBackedStaging: TrackedStagingRelease[] = await Promise.all(
     staging.map(async (release) => {
       const runs = await listReleaseRuns(config, repository, release)
       return {
@@ -440,6 +446,48 @@ async function listTrackedReleases(
     )
     .slice(0, limit)
   return { stagingReleases, productionReleases }
+}
+
+async function listControlRoomProductionReleases(
+  config: ConnectionConfig,
+  repository: string,
+  limit = 3,
+): Promise<TrackedProductionRelease[]> {
+  const [releases, recentRuns] = await Promise.all([
+    githubApi<GitHubRelease[]>(
+      config,
+      `/repos/${repositoryPath(repository)}/releases?per_page=30`,
+    ),
+    githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
+      config,
+      `/repos/${repositoryPath(repository)}/actions/runs?per_page=100`,
+    ).then((response) => response.workflow_runs),
+  ])
+  const production = sortReleasesNewestFirst(
+    releases.filter(
+      (release) =>
+        !release.prerelease && productionTagPattern.test(release.tag_name),
+    ),
+  ).slice(0, limit)
+  const runsByTag = new Map<string, GitHubWorkflowRun[]>()
+  for (const run of recentRuns) {
+    if (!run.head_branch) continue
+    const runs = runsByTag.get(run.head_branch) ?? []
+    runs.push(run)
+    runsByTag.set(run.head_branch, runs)
+  }
+  return production.map((release) => {
+    const runs = (runsByTag.get(release.tag_name) ?? []).map(mapWorkflowRun)
+    return {
+      id: release.id,
+      tag: release.tag_name,
+      url: release.html_url,
+      createdAt: releaseTimestamp(release),
+      description: release.body?.trim() || undefined,
+      buildStatus: aggregateBuildStatus(runs),
+      runs,
+    }
+  })
 }
 
 export async function getRepositoryReleaseHistory(
@@ -588,6 +636,38 @@ async function findPulls(
   )
 }
 
+async function listPullsByState(
+  config: ConnectionConfig,
+  repository: string,
+  state: 'open' | 'closed',
+) {
+  const query = new URLSearchParams({
+    state,
+    sort: 'updated',
+    direction: 'desc',
+    per_page: '100',
+  })
+  return githubApi<GitHubPull[]>(
+    config,
+    `/repos/${repositoryPath(repository)}/pulls?${query}`,
+  )
+}
+
+function pullsForRoute(
+  pulls: GitHubPull[],
+  repository: string,
+  head: string,
+  base: string,
+) {
+  const normalizedRepository = repository.toLowerCase()
+  return pulls.filter(
+    (pull) =>
+      pull.base.ref === base &&
+      pull.head.ref === head &&
+      pull.head.repo?.full_name.toLowerCase() === normalizedRepository,
+  )
+}
+
 export async function listRepositoryPullRequests(
   config: ConnectionConfig,
   repository: string,
@@ -720,19 +800,35 @@ async function promotionStep(
   repository: string,
   route: PromotionRoute,
   defaultBranch: string,
+  sharedOpenPulls?: GitHubPull[],
+  includePreviousTemplate = true,
 ): Promise<PromotionStep> {
   const { fromBranch, toBranch } = promotionBranches(route, defaultBranch)
-  const [comparison, openPulls, closedPulls] = await Promise.all([
+  const [comparison, openPulls] = await Promise.all([
     githubApi<GitHubBranchComparison>(
       config,
       `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
     ),
-    findPulls(config, repository, 'open', fromBranch, toBranch),
-    findPulls(config, repository, 'closed', fromBranch, toBranch),
+    sharedOpenPulls
+      ? Promise.resolve(
+          pullsForRoute(sharedOpenPulls, repository, fromBranch, toBranch),
+        )
+      : findPulls(config, repository, 'open', fromBranch, toBranch),
   ])
   const openPull = openPulls[0]
-  const previous = closedPulls.find((pull) => pull.merged_at)
   const hasFileChanges = comparisonHasSourceFileChanges(comparison)
+  const previous =
+    includePreviousTemplate && hasFileChanges && !openPull
+      ? (
+          await findPulls(
+            config,
+            repository,
+            'closed',
+            fromBranch,
+            toBranch,
+          )
+        ).find((pull) => pull.merged_at)
+      : undefined
   return {
     route,
     fromBranch,
@@ -816,6 +912,7 @@ async function backMergeStep(
   repository: string,
   route: BackMergeRoute,
   defaultBranch: string,
+  sharedOpenPulls?: GitHubPull[],
 ): Promise<BackMergeStep> {
   const { fromBranch, toBranch } = backMergeBranches(route, defaultBranch)
   const [comparison, openPulls] = await Promise.all([
@@ -823,7 +920,11 @@ async function backMergeStep(
       config,
       `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
     ),
-    findPulls(config, repository, 'open', fromBranch, toBranch),
+    sharedOpenPulls
+      ? Promise.resolve(
+          pullsForRoute(sharedOpenPulls, repository, fromBranch, toBranch),
+        )
+      : findPulls(config, repository, 'open', fromBranch, toBranch),
   ])
   const openPull = openPulls[0]
   const hasFileChanges = comparisonHasSourceFileChanges(comparison)
@@ -875,25 +976,31 @@ async function loadRepositoryReleaseState(
     config,
     `/repos/${repositoryPath(repository)}`,
   )
-  const [trackedReleases, promotionSteps, backMergeSteps] = await Promise.all([
+  const openPullsPromise = listPullsByState(config, repository, 'open')
+  const [trackedReleases, openPulls] = await Promise.all([
     listTrackedReleases(
       config,
       repository,
       includeAllVReleases ? 30 : 3,
       includeAllVReleases,
     ),
+    openPullsPromise,
+  ])
+  const [promotionSteps, backMergeSteps] = await Promise.all([
     Promise.all([
       promotionStep(
         config,
         repository,
         'dev-to-release',
         metadata.default_branch,
+        openPulls,
       ),
       promotionStep(
         config,
         repository,
         'release-to-default',
         metadata.default_branch,
+        openPulls,
       ),
     ]),
     Promise.all([
@@ -902,12 +1009,14 @@ async function loadRepositoryReleaseState(
         repository,
         'default-to-release',
         metadata.default_branch,
+        openPulls,
       ),
       backMergeStep(
         config,
         repository,
         'release-to-dev',
         metadata.default_branch,
+        openPulls,
       ),
     ]),
   ])
@@ -975,6 +1084,81 @@ export function getRepositoryReleaseState(
     value,
   })
   value.catch(() => repositoryStateCache.delete(key))
+  return value
+}
+
+async function loadReleaseControlRoomState(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<ReleaseControlRoomState> {
+  assertConnectedRepository(config, repository)
+  const [metadata, productionReleases, openPulls] = await Promise.all([
+    githubApi<GitHubRepository>(
+      config,
+      `/repos/${repositoryPath(repository)}`,
+    ),
+    listControlRoomProductionReleases(config, repository),
+    listPullsByState(config, repository, 'open'),
+  ])
+  const promotionSteps = await Promise.all([
+    promotionStep(
+      config,
+      repository,
+      'dev-to-release',
+      metadata.default_branch,
+      openPulls,
+      false,
+    ),
+    promotionStep(
+      config,
+      repository,
+      'release-to-default',
+      metadata.default_branch,
+      openPulls,
+      false,
+    ),
+  ])
+  const tagDelta = await latestProductionTagDelta(
+    config,
+    repository,
+    metadata.default_branch,
+    productionReleases,
+  )
+  return {
+    repository,
+    defaultBranch: metadata.default_branch,
+    productionReleases,
+    latestProductionTagDelta: tagDelta,
+    deployedTags: [],
+    deploymentLookupFailed: false,
+    productionReady: promotionSteps.some(
+      (step) =>
+        step.route === 'release-to-default' &&
+        (step.filesChanged === 0 ||
+          (step.filesChanged === undefined &&
+            step.commitsAhead === 0 &&
+            step.commitsBehind === 0)),
+    ),
+    promotionSteps,
+    jenkinsServices: servicesForRepository(repository),
+    fetchedAt: new Date().toISOString(),
+  }
+}
+
+export function getReleaseControlRoomState(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<ReleaseControlRoomState> {
+  assertConnectedRepository(config, repository)
+  const key = `${config.githubOrg}:${repository}`.toLowerCase()
+  const cached = controlRoomStateCache.get(key)
+  if (cached && cached.expiresAt > Date.now()) return cached.value
+  const value = loadReleaseControlRoomState(config, repository)
+  controlRoomStateCache.set(key, {
+    expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
+    value,
+  })
+  value.catch(() => controlRoomStateCache.delete(key))
   return value
 }
 

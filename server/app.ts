@@ -28,6 +28,7 @@ import {
   createBackMergePullRequest,
   createPromotionPullRequest,
   getReleaseBuildStatuses,
+  getReleaseControlRoomState,
   getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   getRepositoryRisks,
@@ -575,6 +576,29 @@ export function createApp() {
       request.query.includeAllVReleases === 'true'
     const [state, deploymentResult] = await Promise.all([
       getRepositoryReleaseState(config, parsed.data, includeAllVReleases),
+      currentDeployments(config, parsed.data),
+    ])
+    response.json({
+      ...state,
+      deployedTags: deploymentResult.deployedTags,
+      deploymentLookupFailed: deploymentResult.failed,
+    })
+  })
+
+  app.get('/api/github/release-control-state', async (request, response) => {
+    const parsed = repositorySchema.safeParse(request.query.repository)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORY',
+          message: 'Repository must use the owner/name format.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    const config = requireConnection()
+    const [state, deploymentResult] = await Promise.all([
+      getReleaseControlRoomState(config, parsed.data),
       currentDeployments(config, parsed.data),
     ])
     response.json({
