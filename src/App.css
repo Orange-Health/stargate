@@ -3421,6 +3421,10 @@ label {
     padding-right: 0;
   }
 
+  .all-services-list {
+    max-height: none;
+  }
+
   .service-list-wrap {
     display: block;
     flex: none;
