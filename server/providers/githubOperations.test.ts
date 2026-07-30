@@ -849,6 +849,72 @@ describe('release ordering', () => {
 })
 
 describe('repository state cache', () => {
+  it('includes production tags found only in GitHub Actions', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(
+          JSON.stringify({
+            full_name: 'Orange-Health/service-api',
+            default_branch: 'main',
+          }),
+        )
+      }
+      if (url.includes('/releases?')) return new Response(JSON.stringify([]))
+      if (url.includes('/actions/runs?')) {
+        return new Response(
+          JSON.stringify({
+            workflow_runs: [
+              {
+                id: 94,
+                name: 'Production build',
+                event: 'push',
+                head_branch: 'v26.0716.1',
+                status: 'completed',
+                conclusion: 'success',
+                html_url: 'https://github.test/actions/runs/94',
+                run_started_at: '2026-07-16T08:05:00Z',
+                updated_at: '2026-07-16T08:10:00Z',
+              },
+            ],
+          }),
+        )
+      }
+      if (url.includes('/pulls?')) return new Response(JSON.stringify([]))
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+
+    const state = await getReleaseControlRoomState(
+      config,
+      'Orange-Health/service-api',
+    )
+
+    expect(state.productionReleases[0]).toMatchObject({
+      id: 94,
+      tag: 'v26.0716.1',
+      url: 'https://github.test/actions/runs/94',
+      buildStatus: 'succeeded',
+    })
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+  })
+
   it('loads the control room state within a six-request cold-sync budget', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input)

@@ -601,6 +601,41 @@ export function ReleaseDayOperations({
           ...current,
           [repository]: repositoryState,
         }))
+        const discoveredRelease = latestProductionReleaseOnDate(
+          repositoryState.productionReleases.filter(
+            (release) => release.buildStatus !== 'canceled',
+          ),
+          sessionRef.current.releaseDate,
+        )
+        if (discoveredRelease) {
+          setSession((current) => {
+            const saved = current.repositories[repository]?.productionRelease
+            if (
+              saved &&
+              releaseCreatedOnDate(saved.createdAt, current.releaseDate)
+            ) {
+              return current
+            }
+            return {
+              ...current,
+              repositories: {
+                ...current.repositories,
+                [repository]: {
+                  ...current.repositories[repository],
+                  productionRelease: {
+                    id: discoveredRelease.id,
+                    repository,
+                    tag: discoveredRelease.tag,
+                    sourceBranch: repositoryState.defaultBranch,
+                    url: discoveredRelease.url,
+                    createdAt: discoveredRelease.createdAt,
+                  },
+                  productionReleaseError: undefined,
+                },
+              },
+            }
+          })
+        }
         const discoveries = repositoryState.promotionSteps.map((step) => {
           if (step.state === 'pr_open' && step.pullRequest) {
             return `${step.fromBranch} → ${step.toBranch}: PR #${step.pullRequest.number}`

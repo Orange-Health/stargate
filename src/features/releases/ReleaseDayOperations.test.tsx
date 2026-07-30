@@ -320,6 +320,37 @@ describe('ReleaseDayOperations', () => {
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled()
   })
 
+  it('adopts a production build discovered from GitHub Actions', async () => {
+    const state = {
+      ...repositoryState('up_to_date', 'up_to_date'),
+      productionReleases: [
+        {
+          id: 94,
+          tag: 'v26.0716.1',
+          url: 'https://github.test/actions/runs/94',
+          createdAt: '2026-07-16T08:05:00Z',
+          buildStatus: 'succeeded' as const,
+          runs: [],
+        },
+      ],
+    }
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(state)
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByRole('link', { name: 'v26.0716.1 ↗' }),
+    ).toHaveAttribute('href', 'https://github.test/actions/runs/94')
+    expect(screen.getByText('Build succeeded')).toBeVisible()
+    expect(screen.queryByText('Not created')).not.toBeInTheDocument()
+  })
+
   it('offers a new production tag when default is ahead of the latest tag', async () => {
     const user = userEvent.setup()
     const existing = {

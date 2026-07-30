@@ -476,7 +476,7 @@ async function listControlRoomProductionReleases(
     runs.push(run)
     runsByTag.set(run.head_branch, runs)
   }
-  return production.map((release) => {
+  const releaseBackedProduction = production.map((release) => {
     const runs = (runsByTag.get(release.tag_name) ?? []).map(mapWorkflowRun)
     return {
       id: release.id,
@@ -488,6 +488,34 @@ async function listControlRoomProductionReleases(
       runs,
     }
   })
+  const releaseTags = new Set(production.map((release) => release.tag_name))
+  const actionOnlyProduction: TrackedProductionRelease[] = [...runsByTag]
+    .filter(
+      ([tag]) => productionTagPattern.test(tag) && !releaseTags.has(tag),
+    )
+    .map(([tag, tagRuns]) => {
+      const runs = tagRuns.map(mapWorkflowRun)
+      const latest = [...runs].sort(
+        (left, right) =>
+          new Date(right.startedAt).getTime() -
+          new Date(left.startedAt).getTime(),
+      )[0]
+      return {
+        id: latest.id,
+        tag,
+        url: latest.url,
+        createdAt: latest.startedAt,
+        buildStatus: aggregateBuildStatus(runs),
+        runs,
+      }
+    })
+  return [...releaseBackedProduction, ...actionOnlyProduction]
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() -
+        new Date(left.createdAt).getTime(),
+    )
+    .slice(0, limit)
 }
 
 export async function getRepositoryReleaseHistory(
