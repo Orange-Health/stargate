@@ -103,7 +103,7 @@ describe('ReleaseOverview', () => {
 
   it('offers release operations for repositories outside a Jira release', async () => {
     const user = userEvent.setup()
-    vi.spyOn(api, 'repositoryState').mockReturnValue(new Promise(() => {}))
+    vi.spyOn(api, 'repositoryReleaseData').mockReturnValue(new Promise(() => {}))
     vi.mocked(api.repositories).mockResolvedValueOnce([
       {
         repository: 'orange/service-api',
@@ -143,7 +143,7 @@ describe('ReleaseOverview', () => {
       .toBeVisible()
     expect(screen.getByRole('heading', { name: 'operations' })).toBeVisible()
     await waitFor(() =>
-      expect(api.repositoryState).toHaveBeenCalledWith(
+      expect(api.repositoryReleaseData).toHaveBeenCalledWith(
         'orange/operations',
         true,
       ),
@@ -450,6 +450,9 @@ describe('ReleaseOverview', () => {
 
   it('lazy-loads operations once and redistributes content across tabs', async () => {
     const user = userEvent.setup()
+    const releaseHistory = vi
+      .spyOn(api, 'repositoryReleaseData')
+      .mockReturnValue(new Promise(() => {}))
     const repositoryState = vi
       .spyOn(api, 'repositoryState')
       .mockReturnValue(new Promise(() => {}))
@@ -477,6 +480,7 @@ describe('ReleaseOverview', () => {
     expect(
       screen.queryByRole('button', { name: /Create staging release/ }),
     ).not.toBeInTheDocument()
+    expect(releaseHistory).not.toHaveBeenCalled()
     expect(repositoryState).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('tab', { name: 'Releases' }))
@@ -490,7 +494,8 @@ describe('ReleaseOverview', () => {
     expect(
       screen.queryByText(/Checking dev, release, and default branches/),
     ).not.toBeInTheDocument()
-    expect(repositoryState).toHaveBeenCalledTimes(1)
+    expect(releaseHistory).toHaveBeenCalledTimes(1)
+    expect(repositoryState).not.toHaveBeenCalled()
 
     await user.click(screen.getByRole('tab', { name: 'Branch Ops' }))
     expect(

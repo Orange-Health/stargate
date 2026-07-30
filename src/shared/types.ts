@@ -332,6 +332,12 @@ export type RepositoryReleaseHistory = {
   productionReleases: TrackedProductionRelease[]
 }
 
+export type RepositoryReleaseData = RepositoryReleaseHistory &
+  RepositoryDeploymentStatus & {
+    jenkinsServices: string[]
+    fetchedAt: string
+  }
+
 export type ServiceRefreshResult = {
   service: ServiceRelease
   repositoryState?: RepositoryReleaseState

@@ -4,6 +4,7 @@ import type {
   BackMergeStep,
   BuildStatus,
   PromotionStep,
+  RepositoryReleaseData,
   RepositoryReleaseState,
   TrackedStagingRelease,
   TrackedProductionRelease,
@@ -112,7 +113,9 @@ export function ServiceOperations({
   onCreateProductionRelease,
 }: Props) {
   const [state, setState] = useState<RepositoryReleaseState>()
-  const [loading, setLoading] = useState(true)
+  const [releaseState, setReleaseState] = useState<RepositoryReleaseData>()
+  const [branchLoading, setBranchLoading] = useState(true)
+  const [releaseLoading, setReleaseLoading] = useState(true)
   const [error, setError] = useState('')
   const [busyRoute, setBusyRoute] = useState('')
   const [refreshing, setRefreshing] = useState(false)
@@ -143,7 +146,7 @@ export function ServiceOperations({
   }, [browserNotifications])
 
   const announceCompletedBuilds = useCallback(
-    (nextState: RepositoryReleaseState) => {
+    (nextState: RepositoryReleaseData) => {
       const nextBuilds = new Map(
         nextState.stagingReleases.map((release) => [
           release.tag,
@@ -186,19 +189,15 @@ export function ServiceOperations({
     [repository],
   )
 
-  const load = useCallback(
+  const loadBranches = useCallback(
     async (silent = false) => {
       const sequence = ++loadSequence.current
-      if (!silent) setLoading(true)
+      if (!silent) setBranchLoading(true)
       setError('')
       try {
-        const nextState = includeAllVReleases
-          ? await api.repositoryState(repository, true)
-          : await api.repositoryState(repository)
+        const nextState = await api.repositoryState(repository)
         if (sequence !== loadSequence.current) return
-        announceCompletedBuilds(nextState)
         setState(nextState)
-        setHistoryLoaded(false)
       } catch (reason) {
         if (sequence !== loadSequence.current) return
         setError(
@@ -207,15 +206,56 @@ export function ServiceOperations({
             : 'Could not load repository operations.',
         )
       } finally {
-        if (!silent && sequence === loadSequence.current) setLoading(false)
+        if (!silent && sequence === loadSequence.current) setBranchLoading(false)
+      }
+    },
+    [repository],
+  )
+
+  const loadReleases = useCallback(
+    async (silent = false) => {
+      if (!silent) setReleaseLoading(true)
+      setError('')
+      try {
+        const nextState = await api.repositoryReleaseData(
+          repository,
+          includeAllVReleases,
+        )
+        announceCompletedBuilds(nextState)
+        setReleaseState(nextState)
+        setHistoryLoaded(false)
+      } catch (reason) {
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : 'Could not load repository releases.',
+        )
+      } finally {
+        if (!silent) setReleaseLoading(false)
       }
     },
     [announceCompletedBuilds, includeAllVReleases, repository],
   )
 
+  const load = useCallback(
+    async (silent = false) => {
+      const requests: Promise<void>[] = []
+      if (view === 'all' || view === 'releases') {
+        requests.push(loadReleases(silent))
+      }
+      if (view === 'all' || view === 'branches') {
+        requests.push(loadBranches(silent))
+      }
+      await Promise.allSettled(requests)
+    },
+    [loadBranches, loadReleases, view],
+  )
+
   useEffect(() => {
     setState(undefined)
-    setLoading(true)
+    setReleaseState(undefined)
+    setBranchLoading(view === 'all' || view === 'branches')
+    setReleaseLoading(view === 'all' || view === 'releases')
     setError('')
     setHistoryLoaded(false)
     previousBuilds.current = new Map()
@@ -231,9 +271,20 @@ export function ServiceOperations({
       if (!detail?.repository || detail.repository === repository) {
         if (detail?.state) {
           loadSequence.current += 1
-          announceCompletedBuilds(detail.state)
+          const releases: RepositoryReleaseData = {
+            repository: detail.state.repository,
+            stagingReleases: detail.state.stagingReleases,
+            productionReleases: detail.state.productionReleases,
+            deployedTags: detail.state.deployedTags,
+            deploymentLookupFailed: detail.state.deploymentLookupFailed,
+            jenkinsServices: detail.state.jenkinsServices,
+            fetchedAt: detail.state.fetchedAt,
+          }
+          announceCompletedBuilds(releases)
+          setReleaseState(releases)
           setState(detail.state)
-          setLoading(false)
+          setReleaseLoading(false)
+          setBranchLoading(false)
           setError('')
           return
         }
@@ -248,14 +299,14 @@ export function ServiceOperations({
       window.removeEventListener('production-release-created', refresh)
       window.removeEventListener('service-refresh-requested', refresh)
     }
-  }, [announceCompletedBuilds, load, repository])
+  }, [announceCompletedBuilds, load, repository, view])
 
   useEffect(() => {
     if (view !== 'all' && view !== 'releases') return
-    if (!state) return
+    if (!releaseState) return
     const trackedReleases = [
-      ...state.stagingReleases,
-      ...state.productionReleases,
+      ...releaseState.stagingReleases,
+      ...releaseState.productionReleases,
     ].map((release) => ({
       repository,
       tag: release.tag,
@@ -282,9 +333,9 @@ export function ServiceOperations({
         const results =
           buildResult.status === 'fulfilled' ? buildResult.value : []
         const byTag = new Map(results.map((result) => [result.tag, result]))
-        const nextState: RepositoryReleaseState = {
-          ...state,
-          stagingReleases: state.stagingReleases.map((release) => {
+        const nextState: RepositoryReleaseData = {
+          ...releaseState,
+          stagingReleases: releaseState.stagingReleases.map((release) => {
             const result = byTag.get(release.tag)
             return result
               ? {
@@ -294,7 +345,7 @@ export function ServiceOperations({
                 }
               : release
           }),
-          productionReleases: state.productionReleases.map((release) => {
+          productionReleases: releaseState.productionReleases.map((release) => {
             const result = byTag.get(release.tag)
             return result
               ? {
@@ -307,7 +358,7 @@ export function ServiceOperations({
           deployedTags:
             deploymentResult.status === 'fulfilled'
               ? deploymentResult.value.deployedTags
-              : state.deployedTags,
+              : releaseState.deployedTags,
           deploymentLookupFailed:
             deploymentResult.status === 'fulfilled'
               ? deploymentResult.value.deploymentLookupFailed
@@ -317,7 +368,7 @@ export function ServiceOperations({
         if (buildResult.status === 'fulfilled') {
           announceCompletedBuilds(nextState)
         }
-        setState(nextState)
+        setReleaseState(nextState)
       } finally {
         running = false
         schedule()
@@ -334,7 +385,7 @@ export function ServiceOperations({
       if (timeout) window.clearTimeout(timeout)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [announceCompletedBuilds, repository, state, view])
+  }, [announceCompletedBuilds, releaseState, repository, view])
 
   useEffect(() => {
     if (!notificationToast) return
@@ -374,17 +425,9 @@ export function ServiceOperations({
     setError('')
     try {
       const history = includeAllVReleases
-        ? await api.releaseHistory(repository, true)
-        : await api.releaseHistory(repository)
-      setState((current) =>
-        current
-          ? {
-              ...current,
-              stagingReleases: history.stagingReleases,
-              productionReleases: history.productionReleases,
-            }
-          : current,
-      )
+        ? await api.repositoryReleaseData(repository, true)
+        : await api.repositoryReleaseData(repository)
+      setReleaseState(history)
       setHistoryLoaded(true)
     } catch (reason) {
       setError(
@@ -623,20 +666,20 @@ export function ServiceOperations({
             <span className="auto-refresh">Live · 15s</span>
           </div>
         </div>
-        {state?.deploymentLookupFailed && (
+        {releaseState?.deploymentLookupFailed && (
           <p className="deployment-lookup-note">
             Jenkins deployment status is temporarily unavailable.
           </p>
         )}
 
-        {loading && !state ? (
+        {releaseLoading && !releaseState ? (
           <div className="operation-loading">
             <span className="spinner" /> Loading release builds…
           </div>
-        ) : state?.stagingReleases.length ? (
+        ) : releaseState?.stagingReleases.length ? (
           <div className="release-build-list">
-            {state.stagingReleases.map((release) => {
-              const liveDeployments = state.deployedTags.filter(
+            {releaseState.stagingReleases.map((release) => {
+              const liveDeployments = releaseState.deployedTags.filter(
                 (deployment) => deployment.tag === release.tag,
               )
               return (
@@ -679,10 +722,10 @@ export function ServiceOperations({
                   type="button"
                   disabled={
                     release.buildStatus !== 'succeeded' ||
-                    state.jenkinsServices.length === 0
+                    releaseState.jenkinsServices.length === 0
                   }
                   title={
-                    state.jenkinsServices.length === 0
+                    releaseState.jenkinsServices.length === 0
                       ? 'No Jenkins service mapping for this repository'
                       : release.buildStatus !== 'succeeded'
                         ? 'Deployment is enabled after a successful build'
@@ -743,14 +786,14 @@ export function ServiceOperations({
             </div>
           </div>
 
-          {loading && !state ? (
+          {releaseLoading && !releaseState ? (
             <div className="operation-loading">
               <span className="spinner" /> Loading production builds…
             </div>
-          ) : state?.productionReleases.length ? (
+          ) : releaseState?.productionReleases.length ? (
             <div className="release-build-list">
-              {state.productionReleases.map((release) => {
-                const liveDeployments = state.deployedTags.filter(
+              {releaseState.productionReleases.map((release) => {
+                const liveDeployments = releaseState.deployedTags.filter(
                   (deployment) => deployment.tag === release.tag,
                 )
                 return (
@@ -790,10 +833,10 @@ export function ServiceOperations({
                       type="button"
                       disabled={
                         release.buildStatus !== 'succeeded' ||
-                        state.jenkinsServices.length === 0
+                        releaseState.jenkinsServices.length === 0
                       }
                       title={
-                        state.jenkinsServices.length === 0
+                        releaseState.jenkinsServices.length === 0
                           ? 'No Jenkins service mapping for this repository'
                           : release.buildStatus !== 'succeeded'
                             ? 'Deployment is enabled after a successful build'
@@ -848,7 +891,7 @@ export function ServiceOperations({
             </span>
           </div>
         </div>
-        {loading && !state ? (
+        {branchLoading && !state ? (
           <div className="operation-loading">
             <span className="spinner" /> Checking dev, release, and default
             branches…
@@ -963,7 +1006,7 @@ export function ServiceOperations({
           )}
         </div>
 
-        {loading && !state ? (
+        {branchLoading && !state ? (
           <div className="operation-loading">
             <span className="spinner" /> Loading Dev → Release → Default
             journey…
@@ -1082,19 +1125,19 @@ export function ServiceOperations({
       </section>
         </>
       )}
-      {deployRelease && state && (
+      {deployRelease && releaseState && (
         <DeployDialog
           repository={repository}
           release={deployRelease}
-          services={state.jenkinsServices}
+          services={releaseState.jenkinsServices}
           allowAnyVTag={includeAllVReleases}
           onClose={() => setDeployRelease(undefined)}
         />
       )}
-      {productionDeployRelease && state && (
+      {productionDeployRelease && releaseState && (
         <ProductionDeployDialog
           repository={repository}
-          services={state.jenkinsServices}
+          services={releaseState.jenkinsServices}
           sourceTag={productionDeployRelease.tag}
           onClose={() => setProductionDeployRelease(undefined)}
         />

@@ -21,6 +21,7 @@ import type {
   ReleaseBuildStatusResult,
   ReleaseDashboard,
   RepositoryDeploymentStatus,
+  RepositoryReleaseData,
   RepositoryReleaseHistory,
   RepositoryReleaseState,
   RepositoryPullRequestList,
@@ -149,6 +150,10 @@ export const api = {
     ),
   releaseHistory: (repository: string, includeAllVReleases = false) =>
     request<RepositoryReleaseHistory>(
+      `/api/github/release-history?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
+    ),
+  repositoryReleaseData: (repository: string, includeAllVReleases = false) =>
+    request<RepositoryReleaseData>(
       `/api/github/release-history?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
     ),
   releaseBuildStatuses: (

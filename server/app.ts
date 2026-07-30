@@ -47,6 +47,7 @@ import {
   getCurrentProductionDeployments,
   getDeploymentQueueStatus,
   getProductionDeploymentQueueStatus,
+  servicesForRepository,
   testJenkinsConnection,
   triggerDeployment,
   triggerProductionDeployment,
@@ -616,13 +617,22 @@ export function createApp() {
       } satisfies ApiErrorBody)
       return
     }
-    response.json(
-      await getRepositoryReleaseHistory(
-        requireConnection(),
+    const config = requireConnection()
+    const [history, deploymentResult] = await Promise.all([
+      getRepositoryReleaseHistory(
+        config,
         parsed.data,
         request.query.includeAllVReleases === 'true',
       ),
-    )
+      currentDeployments(config, parsed.data),
+    ])
+    response.json({
+      ...history,
+      deployedTags: deploymentResult.deployedTags,
+      deploymentLookupFailed: deploymentResult.failed,
+      jenkinsServices: servicesForRepository(parsed.data),
+      fetchedAt: new Date().toISOString(),
+    })
   })
 
   app.post('/api/github/release-build-statuses', async (request, response) => {

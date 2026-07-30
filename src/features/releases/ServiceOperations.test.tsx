@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { RepositoryReleaseState } from '../../shared/types'
 import { ServiceOperations } from './ServiceOperations'
@@ -117,6 +117,24 @@ const repositoryState: RepositoryReleaseState = {
   fetchedAt: '2026-07-13T12:01:00Z',
 }
 
+function releaseData(state: RepositoryReleaseState) {
+  return {
+    repository: state.repository,
+    stagingReleases: state.stagingReleases,
+    productionReleases: state.productionReleases,
+    deployedTags: state.deployedTags,
+    deploymentLookupFailed: state.deploymentLookupFailed,
+    jenkinsServices: state.jenkinsServices,
+    fetchedAt: state.fetchedAt,
+  }
+}
+
+beforeEach(() => {
+  vi.spyOn(api, 'repositoryReleaseData').mockResolvedValue(
+    releaseData(repositoryState),
+  )
+})
+
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -163,6 +181,17 @@ describe('ServiceOperations', () => {
     expect(deployButtons[1]).toBeEnabled()
   })
 
+  it('shows releases when branch operations fail', async () => {
+    vi.spyOn(api, 'repositoryState').mockRejectedValue(
+      new Error('github returned 404. Not Found'),
+    )
+
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+
+    expect(await screen.findByText('v-qa-v26.0713.2')).toBeVisible()
+    expect(screen.getByText('github returned 404. Not Found')).toBeVisible()
+  })
+
   it('creates a missing promotion PR and merges an eligible existing PR', async () => {
     const user = userEvent.setup()
     vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
@@ -195,9 +224,10 @@ describe('ServiceOperations', () => {
         index === 0 ? { ...release, buildStatus: 'succeeded' } : release,
       ),
     }
-    vi.spyOn(api, 'repositoryState')
-      .mockResolvedValueOnce(repositoryState)
-      .mockResolvedValue(completedState)
+    vi.mocked(api.repositoryReleaseData)
+      .mockResolvedValueOnce(releaseData(repositoryState))
+      .mockResolvedValue(releaseData(completedState))
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
     render(<ServiceOperations repository="Orange-Health/service-api" />)
     await screen.findByText('v-qa-v26.0713.2')
 
@@ -373,7 +403,7 @@ describe('ServiceOperations', () => {
   })
 
   it('shows live production deployments from Jenkins', async () => {
-    vi.spyOn(api, 'repositoryState').mockResolvedValue({
+    const stateWithProductionDeployment: RepositoryReleaseState = {
       ...repositoryState,
       deployedTags: [
         ...repositoryState.deployedTags,
@@ -386,7 +416,11 @@ describe('ServiceOperations', () => {
           deployedAt: '2026-07-13T13:30:00Z',
         },
       ],
-    })
+    }
+    vi.mocked(api.repositoryReleaseData).mockResolvedValue(
+      releaseData(stateWithProductionDeployment),
+    )
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
 
     render(
       <ServiceOperations
