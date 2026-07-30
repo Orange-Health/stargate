@@ -28,7 +28,7 @@ export function ProductionDeployDialog({
   const [qaName, setQaName] = useState('')
   const [skipProdMigration, setSkipProdMigration] = useState(false)
   const [prodMigrationJob, setProdMigrationJob] = useState(
-    'Prod-new-cluster-migration',
+    'Prod Deployments/Prod-cluster-migration',
   )
   const [deploying, setDeploying] = useState(false)
   const [error, setError] = useState('')

@@ -107,7 +107,7 @@ describe('ProductionDeployDialog', () => {
       qaApprovalRequired: false,
       qaName: undefined,
       skipProdMigration: false,
-      prodMigrationJob: 'Prod-new-cluster-migration',
+      prodMigrationJob: 'Prod Deployments/Prod-cluster-migration',
     })
     expect(await screen.findByText('Production deployment')).toBeVisible()
   })
