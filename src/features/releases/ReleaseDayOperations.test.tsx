@@ -131,7 +131,6 @@ describe('ReleaseDayOperations', () => {
 
   it('marks every ticket in the Jira release as released', async () => {
     const user = userEvent.setup()
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     vi.spyOn(api, 'repositoryState').mockResolvedValue(
       repositoryState('up_to_date', 'up_to_date'),
     )
@@ -146,19 +145,17 @@ describe('ReleaseDayOperations', () => {
       })
     const dashboardWithTicket: ReleaseDashboard = {
       ...dashboard,
-      unmatched: [
-        {
+      unmatched: [101, 102].map((number) => ({
           issue: {
-            key: 'OH-101',
-            summary: 'Released feature',
+            key: `OH-${number}`,
+            summary: `Release ticket ${number}`,
             status: 'Ready for Release',
-            url: 'https://jira.test/browse/OH-101',
+            url: `https://jira.test/browse/OH-${number}`,
           },
           eligible: false,
           blockingReasons: [],
           warningReasons: [],
-        },
-      ],
+        })),
     }
 
     render(
@@ -170,13 +167,27 @@ describe('ReleaseDayOperations', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: 'Mark Jira tickets released' }),
+      screen.getByRole('button', { name: 'Mark all tickets as released' }),
     )
 
-    expect(window.confirm).toHaveBeenCalledWith(
-      'Mark all 1 tickets in OH Release 26.0716 as Released in Jira?',
+    expect(
+      screen.getByRole('dialog', { name: 'Mark tickets as released' }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('checkbox', { name: /OH-101 Release ticket 101/ }),
+    ).toBeChecked()
+    expect(
+      screen.getByRole('checkbox', { name: /OH-102 Release ticket 102/ }),
+    ).toBeChecked()
+
+    await user.click(
+      screen.getByRole('checkbox', { name: /OH-102 Release ticket 102/ }),
     )
-    expect(markReleased).toHaveBeenCalledWith('release-1')
+    await user.click(
+      screen.getByRole('button', { name: 'Mark 1 selected as released' }),
+    )
+
+    expect(markReleased).toHaveBeenCalledWith('release-1', ['OH-101'])
     expect(
       await screen.findByRole('button', { name: '✓ Jira tickets released' }),
     ).toBeDisabled()

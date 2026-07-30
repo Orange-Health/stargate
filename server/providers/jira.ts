@@ -184,11 +184,27 @@ export async function listVersionIssues(
 export async function markVersionIssuesReleased(
   config: ConnectionConfig,
   versionId: string,
+  issueKeys?: string[],
 ): Promise<MarkReleaseIssuesReleasedResult> {
-  const issues = await listVersionIssues(config, versionId)
+  const versionIssues = await listVersionIssues(config, versionId)
+  const issuesByKey = new Map(
+    versionIssues.map((issue) => [issue.key.toUpperCase(), issue]),
+  )
+  const requestedKeys = issueKeys
+    ? [...new Set(issueKeys.map((key) => key.toUpperCase()))]
+    : versionIssues.map((issue) => issue.key)
+  const issues = requestedKeys.flatMap((key) => {
+    const issue = issuesByKey.get(key)
+    return issue ? [issue] : []
+  })
   const transitioned: string[] = []
   const alreadyReleased: string[] = []
-  const failed: Array<{ key: string; message: string }> = []
+  const failed: Array<{ key: string; message: string }> = requestedKeys
+    .filter((key) => !issuesByKey.has(key))
+    .map((key) => ({
+      key,
+      message: 'This ticket is not part of the Jira release.',
+    }))
   let cursor = 0
 
   async function worker() {
@@ -247,7 +263,7 @@ export async function markVersionIssuesReleased(
   )
   return {
     versionId,
-    total: issues.length,
+    total: requestedKeys.length,
     transitioned,
     alreadyReleased,
     failed,

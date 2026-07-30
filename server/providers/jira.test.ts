@@ -16,7 +16,7 @@ const config: ConnectionConfig = {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('markVersionIssuesReleased', () => {
-  it('transitions eligible tickets and skips tickets already released', async () => {
+  it('transitions only the selected release tickets', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input)
       if (url.endsWith('/rest/api/3/search/jql')) {
@@ -64,13 +64,13 @@ describe('markVersionIssuesReleased', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await markVersionIssuesReleased(config, '123')
+    const result = await markVersionIssuesReleased(config, '123', ['OH-101'])
 
     expect(result).toEqual({
       versionId: '123',
-      total: 2,
+      total: 1,
       transitioned: ['OH-101'],
-      alreadyReleased: ['OH-102'],
+      alreadyReleased: [],
       failed: [],
     })
   })

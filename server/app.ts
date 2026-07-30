@@ -199,7 +199,7 @@ const releaseBuildStatusesSchema = z.object({
         tag: z
           .string()
           .regex(
-            /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+|v-(?:qa|s[1-6])-v\d{2}\.\d{4}\.\d+$/,
+            /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+|v-(?:qa|s[1-6])-\d{2}\.\d{4}\.\d+$/,
           ),
         createdAt: z.iso.datetime(),
       }),
@@ -214,6 +214,12 @@ const serviceRefreshSchema = z.object({
     .min(1)
     .max(200),
   includeRepositoryState: z.boolean().optional().default(true),
+})
+const markReleaseIssuesSchema = z.object({
+  issueKeys: z
+    .array(z.string().regex(/^[A-Z][A-Z0-9]+-\d+$/i))
+    .min(1)
+    .max(500),
 })
 
 async function currentDeployments(
@@ -341,17 +347,24 @@ export function createApp() {
     '/api/releases/:versionId/mark-issues-released',
     async (request, response) => {
       const { versionId } = request.params
-      if (!/^\d+$/.test(versionId)) {
+      const parsed = markReleaseIssuesSchema.safeParse(request.body)
+      if (!/^\d+$/.test(versionId) || !parsed.success) {
         response.status(400).json({
           error: {
             code: 'INVALID_VERSION',
-            message: 'A numeric Jira version ID is required.',
+            message: !/^\d+$/.test(versionId)
+              ? 'A numeric Jira version ID is required.'
+              : 'Select at least one valid Jira ticket.',
           },
         } satisfies ApiErrorBody)
         return
       }
       response.json(
-        await markVersionIssuesReleased(requireConnection(), versionId),
+        await markVersionIssuesReleased(
+          requireConnection(),
+          versionId,
+          parsed.data.issueKeys,
+        ),
       )
     },
   )

@@ -3162,6 +3162,73 @@ label {
   line-height: 1.35;
 }
 
+.jira-release-dialog {
+  max-width: 680px;
+}
+
+.jira-release-select-all {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  font-weight: 700;
+  gap: 8px;
+  justify-content: flex-start;
+  margin: 18px 0 10px;
+}
+
+.jira-release-dialog input[type="checkbox"] {
+  accent-color: var(--green);
+  appearance: auto;
+  flex: 0 0 18px;
+  height: 18px;
+  margin: 1px 0 0;
+  padding: 0;
+  width: 18px;
+}
+
+.jira-release-ticket-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  max-height: min(52vh, 440px);
+  overflow-y: auto;
+}
+
+.jira-release-ticket-list > label {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.jira-release-ticket-list > label:last-child {
+  border-bottom: 0;
+}
+
+.jira-release-ticket-list > label > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.jira-release-ticket-list strong {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.jira-release-ticket-list span span {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.jira-release-ticket-list small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .release-day-developers-cell {
   align-items: flex-start;
   display: flex;

@@ -4,6 +4,7 @@ import type {
   BuildStatus,
   CreatedProductionRelease,
   JenkinsDeployedTag,
+  JiraIssue,
   PromotionPullRequest,
   PromotionRoute,
   ReleaseControlRoomState,
@@ -429,6 +430,10 @@ export function ReleaseDayOperations({
     'idle' | 'running' | 'success' | 'partial' | 'error'
   >('idle')
   const [jiraReleaseMessage, setJiraReleaseMessage] = useState('')
+  const [jiraReleaseDialogOpen, setJiraReleaseDialogOpen] = useState(false)
+  const [selectedJiraIssueKeys, setSelectedJiraIssueKeys] = useState<string[]>(
+    [],
+  )
   const [copyNotesMenuOpen, setCopyNotesMenuOpen] = useState(false)
   const copyNotesMenuRef = useRef<HTMLDivElement>(null)
   const [cellOperation, setCellOperation] = useState<CellOperation>()
@@ -454,12 +459,17 @@ export function ReleaseDayOperations({
       ),
   )
   const autoSyncStarted = useRef(false)
-  const releaseIssueCount = new Set([
-    ...dashboard.services.flatMap((service) =>
-      service.items.map((item) => item.issue.key),
-    ),
-    ...dashboard.unmatched.map((item) => item.issue.key),
-  ]).size
+  const releaseIssues = useMemo(() => {
+    const issues = [
+      ...dashboard.services.flatMap((service) =>
+        service.items.map((item) => item.issue),
+      ),
+      ...dashboard.unmatched.map((item) => item.issue),
+    ]
+    return [...new Map<string, JiraIssue>(
+      issues.map((issue) => [issue.key, issue]),
+    ).values()]
+  }, [dashboard])
 
   useEffect(() => {
     sessionRef.current = session
@@ -1682,20 +1692,23 @@ export function ReleaseDayOperations({
     }
   }
 
+  function openJiraReleaseDialog() {
+    setSelectedJiraIssueKeys(releaseIssues.map((issue) => issue.key))
+    setJiraReleaseDialogOpen(true)
+  }
+
   async function markJiraTicketsReleased() {
     if (jiraReleaseStatus === 'running' || jiraReleaseStatus === 'success') return
-    if (
-      !window.confirm(
-        `Mark all ${releaseIssueCount} tickets in ${dashboard.version.name} as Released in Jira?`,
-      )
-    ) {
-      return
-    }
+    if (selectedJiraIssueKeys.length === 0) return
     setJiraReleaseStatus('running')
     setJiraReleaseMessage('')
     log('info', 'Marking release tickets as Released in Jira.')
     try {
-      const result = await api.markReleaseIssuesReleased(dashboard.version.id)
+      const result = await api.markReleaseIssuesReleased(
+        dashboard.version.id,
+        selectedJiraIssueKeys,
+      )
+      setJiraReleaseDialogOpen(false)
       if (result.failed.length > 0) {
         const message = `${result.transitioned.length} transitioned, ${result.alreadyReleased.length} already released, ${result.failed.length} failed.`
         setJiraReleaseStatus('partial')
@@ -1844,11 +1857,11 @@ export function ReleaseDayOperations({
                   className="secondary-button"
                   type="button"
                   disabled={
-                    releaseIssueCount === 0 ||
+                    releaseIssues.length === 0 ||
                     jiraReleaseStatus === 'running' ||
                     jiraReleaseStatus === 'success'
                   }
-                  onClick={() => void markJiraTicketsReleased()}
+                  onClick={openJiraReleaseDialog}
                 >
                   {jiraReleaseStatus === 'running'
                     ? 'Updating Jira…'
@@ -1856,7 +1869,7 @@ export function ReleaseDayOperations({
                       ? '✓ Jira tickets released'
                       : jiraReleaseStatus === 'partial'
                         ? 'Retry Jira release'
-                        : 'Mark Jira tickets released'}
+                        : 'Mark all tickets as released'}
                 </button>
                 <button
                   className="secondary-button"
@@ -2513,6 +2526,102 @@ export function ReleaseDayOperations({
             </section>
             </div>
       </section>
+
+      {jiraReleaseDialogOpen && (
+        <div
+          className="dialog-backdrop"
+          role="presentation"
+          onMouseDown={() => {
+            if (jiraReleaseStatus !== 'running') setJiraReleaseDialogOpen(false)
+          }}
+        >
+          <section
+            className="release-dialog jira-release-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="jira-release-dialog-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="dialog-close"
+              type="button"
+              disabled={jiraReleaseStatus === 'running'}
+              onClick={() => setJiraReleaseDialogOpen(false)}
+              aria-label="Close"
+            >
+              ×
+            </button>
+            <p className="eyebrow">Jira · {dashboard.version.name}</p>
+            <h2 id="jira-release-dialog-title">Mark tickets as released</h2>
+            <p className="dialog-copy">
+              Uncheck any tickets that should remain in their current status.
+            </p>
+            <label className="jira-release-select-all">
+              <input
+                type="checkbox"
+                checked={
+                  releaseIssues.length > 0 &&
+                  selectedJiraIssueKeys.length === releaseIssues.length
+                }
+                onChange={(event) =>
+                  setSelectedJiraIssueKeys(
+                    event.target.checked
+                      ? releaseIssues.map((issue) => issue.key)
+                      : [],
+                  )
+                }
+              />
+              Select all {releaseIssues.length} tickets
+            </label>
+            <div className="jira-release-ticket-list">
+              {releaseIssues.map((issue) => (
+                <label key={issue.key}>
+                  <input
+                    type="checkbox"
+                    aria-label={`${issue.key} ${issue.summary}`}
+                    checked={selectedJiraIssueKeys.includes(issue.key)}
+                    onChange={(event) =>
+                      setSelectedJiraIssueKeys((current) =>
+                        event.target.checked
+                          ? [...current, issue.key]
+                          : current.filter((key) => key !== issue.key),
+                      )
+                    }
+                  />
+                  <span>
+                    <strong>{issue.key}</strong>
+                    <span>{issue.summary}</span>
+                    <small>{issue.status}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="dialog-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={jiraReleaseStatus === 'running'}
+                onClick={() => setJiraReleaseDialogOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={
+                  selectedJiraIssueKeys.length === 0 ||
+                  jiraReleaseStatus === 'running'
+                }
+                onClick={() => void markJiraTicketsReleased()}
+              >
+                {jiraReleaseStatus === 'running'
+                  ? 'Marking released…'
+                  : `Mark ${selectedJiraIssueKeys.length} selected as released`}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {developerModal && (
         <div

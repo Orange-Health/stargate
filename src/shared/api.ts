@@ -90,10 +90,13 @@ export const api = {
       method: 'DELETE',
     }),
   releases: () => request<JiraVersion[]>('/api/releases'),
-  markReleaseIssuesReleased: (versionId: string) =>
+  markReleaseIssuesReleased: (versionId: string, issueKeys: string[]) =>
     request<MarkReleaseIssuesReleasedResult>(
       `/api/releases/${encodeURIComponent(versionId)}/mark-issues-released`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        body: JSON.stringify({ issueKeys }),
+      },
     ),
   repositories: () =>
     request<OrganizationRepository[]>('/api/github/repositories'),
