@@ -667,8 +667,7 @@ describe('ReleaseDayOperations', () => {
     ).toBeVisible()
   })
 
-  it('waits for manual synchronization and then shows progress', async () => {
-    const user = userEvent.setup()
+  it('automatically synchronizes without a cache and shows progress', async () => {
     let resolveState!: (state: RepositoryReleaseState) => void
     vi.spyOn(api, 'repositoryState').mockReturnValue(
       new Promise((resolve) => {
@@ -684,12 +683,13 @@ describe('ReleaseDayOperations', () => {
       />,
     )
 
-    expect(api.repositoryState).not.toHaveBeenCalled()
-    expect(screen.getAllByText('Refresh pending')).toHaveLength(2)
-    await user.click(
-      screen.getByRole('button', { name: '↻ Refresh status' }),
-    )
+    expect(api.repositoryState).toHaveBeenCalledWith(repository)
     expect(screen.getAllByText('Checking')).toHaveLength(2)
+    expect(
+      screen.getByRole('progressbar', {
+        name: 'Synchronizing release control room',
+      }),
+    ).toHaveAttribute('aria-valuenow', '0')
     expect(
       await screen.findByRole('button', { name: 'Syncing 0/1' }),
     ).toBeDisabled()
@@ -711,6 +711,11 @@ describe('ReleaseDayOperations', () => {
       ).toBeEnabled(),
     )
     expect(screen.getByText('Synced')).toBeVisible()
+    expect(
+      screen.queryByRole('progressbar', {
+        name: 'Synchronizing release control room',
+      }),
+    ).not.toBeInTheDocument()
     expect(syncingRow).not.toHaveClass('sync-in-progress')
     expect(syncingRow).not.toHaveAttribute('inert')
     expect(syncingRow).toHaveAttribute('aria-busy', 'false')
@@ -809,9 +814,6 @@ describe('ReleaseDayOperations', () => {
         onClose={vi.fn()}
       />,
     )
-    await user.click(
-      screen.getByRole('button', { name: '↻ Refresh status' }),
-    )
     await waitFor(() =>
       expect(api.repositoryState).toHaveBeenCalledWith(secondRepository),
     )
@@ -849,9 +851,6 @@ describe('ReleaseDayOperations', () => {
         onClose={vi.fn()}
       />,
     )
-    await user.click(
-      screen.getByRole('button', { name: '↻ Refresh status' }),
-    )
     await screen.findByText('PR #12')
 
     expect(
@@ -873,7 +872,7 @@ describe('ReleaseDayOperations', () => {
       ).toBeEnabled(),
     )
     expect(screen.getByText('Result: merged PR #12 into release.')).toBeVisible()
-    expect(api.refreshRepository).toHaveBeenCalledTimes(1)
+    expect(api.refreshRepository).not.toHaveBeenCalled()
     expect(api.repositoryState).toHaveBeenCalledTimes(1)
   })
 
@@ -904,9 +903,6 @@ describe('ReleaseDayOperations', () => {
         productionEnabled={true}
         onClose={vi.fn()}
       />,
-    )
-    await user.click(
-      screen.getByRole('button', { name: '↻ Refresh status' }),
     )
     await screen.findByText('Checks are pending')
 
@@ -988,9 +984,6 @@ describe('ReleaseDayOperations', () => {
         productionEnabled={true}
         onClose={vi.fn()}
       />,
-    )
-    await user.click(
-      screen.getByRole('button', { name: '↻ Refresh status' }),
     )
     await waitFor(() => expect(repositoryStateRequest).toHaveBeenCalledTimes(2))
     expect(
@@ -1081,9 +1074,6 @@ describe('ReleaseDayOperations', () => {
         productionEnabled={true}
         onClose={vi.fn()}
       />,
-    )
-    await user.click(
-      screen.getByRole('button', { name: '↻ Refresh status' }),
     )
     await screen.findAllByText('Merged')
     await user.click(
@@ -1176,9 +1166,6 @@ describe('ReleaseDayOperations', () => {
         productionEnabled={true}
         onClose={vi.fn()}
       />,
-    )
-    await user.click(
-      screen.getByRole('button', { name: '↻ Refresh status' }),
     )
     await screen.findAllByText('Merged')
     await user.click(

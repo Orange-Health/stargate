@@ -424,6 +424,13 @@ export function ReleaseDayOperations({
   const sessionRef = useRef(session)
   const loadSequence = useRef(0)
   const repositoryCacheTimestamp = useRef(restoredRepositoryStates.cachedAt)
+  const shouldAutoSync = useRef(
+    restoredRepositoryStates.cachedAt === 0 ||
+      session.selectedRepositories.some(
+        (repository) => !restoredRepositoryStates.states[repository],
+      ),
+  )
+  const autoSyncStarted = useRef(false)
 
   useEffect(() => {
     sessionRef.current = session
@@ -647,6 +654,12 @@ export function ReleaseDayOperations({
     [syncRepository],
   )
 
+  useEffect(() => {
+    if (autoSyncStarted.current || !shouldAutoSync.current) return
+    autoSyncStarted.current = true
+    void refreshStates(false)
+  }, [refreshStates])
+
   const refreshOneRepository = useCallback(
     async (repository: string) => {
       await syncRepository(repository, true, loadSequence.current)
@@ -749,6 +762,13 @@ export function ReleaseDayOperations({
   const syncCompleted = selected.filter((repository) =>
     ['synced', 'failed'].includes(repositorySync[repository]),
   ).length
+  const syncInProgress = selected.some((repository) =>
+    ['queued', 'syncing'].includes(repositorySync[repository]),
+  )
+  const syncProgress =
+    selected.length === 0
+      ? 0
+      : Math.round((syncCompleted / selected.length) * 100)
   const devPrsReady = everySelected((repository) => {
     const step = routeStep(states[repository], 'dev-to-release')
     return step?.state === 'pr_open' || step?.state === 'up_to_date'
@@ -1397,6 +1417,18 @@ export function ReleaseDayOperations({
   return (
     <>
       <section className="release-day-page" aria-labelledby="release-day-title">
+            {syncInProgress && (
+              <div
+                className="release-day-sync-progress"
+                role="progressbar"
+                aria-label="Synchronizing release control room"
+                aria-valuemin={0}
+                aria-valuemax={selected.length}
+                aria-valuenow={syncCompleted}
+              >
+                <span style={{ width: `${syncProgress}%` }} />
+              </div>
+            )}
             <header className="release-day-header">
               <div className="release-day-title">
                 <h2 id="release-day-title">{dashboard.version.name}</h2>
