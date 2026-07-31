@@ -171,7 +171,7 @@ const deploymentSchema = z
   .superRefine((input, context) => {
     const pattern = input.allowAnyVTag
       ? /^v-[A-Za-z0-9._/-]+$/
-      : /^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/
+      : /^v-(qa|s1|s2|s3|s4|s5|s6)-\d{2}\.\d{4}\.\d+$/
     if (!pattern.test(input.tag)) {
       context.addIssue({
         code: 'custom',

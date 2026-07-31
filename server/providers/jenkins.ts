@@ -80,6 +80,42 @@ const stagingTeams: Record<Exclude<DeploymentEnvironment, "qa">, string> = {
   s5: "Partnerships",
 };
 
+/** QA uses dashboard service keys; DEV Deployer uses these SERVICE_NAME values. */
+const stagingDeployServiceNames: Record<string, string> = {
+  "asbru-web": "asbru",
+  "bifrost-web": "bifrost",
+  cdp: "cdp-api",
+  "cds-api": "cds",
+  "cerebro-api": "cerebro",
+  consent: "consent-service",
+  "cpms-web": "cpms",
+  ets: "ets-lab",
+  "feedback-web": "feedback",
+  "geomark-api": "geomark",
+  health: "health-api",
+  "hedwig-api": "hedwig",
+  "occ-api": "occ",
+  odin: "odin-api",
+  partner: "partner-api",
+  patients: "patients-service",
+  payment: "payment-api",
+  "porte-api": "porte",
+  "report-rebranding-api": "report-rebranding",
+  "s3wrapper-api": "s3wrapper",
+  sapphire: "sapphire-api",
+  "scheduler-web": "scheduler",
+  "superlab-web": "amethyst",
+  webhook: "webhook-service",
+};
+
+export function stagingDeployServiceName(service: string) {
+  return stagingDeployServiceNames[service] ?? service;
+}
+
+export function dashboardJenkinsServices() {
+  return Object.keys(serviceToRepository);
+}
+
 const teamEnvironments = new Map(
   Object.entries(stagingTeams).map(([environment, team]) => [
     team.toLowerCase(),
@@ -473,7 +509,7 @@ export function deploymentSpec(input: TriggerDeploymentInput): DeploymentSpec {
     jobName: "DEV/DEV Deployer",
     parameters: {
       TEAM: stagingTeams[input.environment],
-      SERVICE_NAME: input.service,
+      SERVICE_NAME: stagingDeployServiceName(input.service),
       IMAGE_TAG: input.tag,
       IS_PROD_TAG: false,
       SKIP_MIGRATION: false,
@@ -606,14 +642,48 @@ export async function triggerDeployment(
   } catch (error) {
     if (error instanceof ProviderError) throw error;
     throw new ProviderError(
-      error instanceof Error
-        ? `Jenkins deployment trigger failed: ${error.message}`
-        : "Jenkins deployment trigger failed.",
+      jenkinsTriggerFailureMessage(error, spec),
       "JENKINS_TRIGGER_FAILED",
       "jenkins",
       502,
     );
   }
+}
+
+function jenkinsResponseBody(error: unknown) {
+  const requestError = error as { res?: { body?: unknown } };
+  const body = requestError.res?.body;
+  if (typeof body === "string") return body;
+  if (body == null) return "";
+  return JSON.stringify(body);
+}
+
+function jenkinsTriggerFailureMessage(error: unknown, spec: DeploymentSpec) {
+  const requestError = error as Error & {
+    message?: string;
+    res?: { statusCode?: number; body?: unknown };
+  };
+  const body = jenkinsResponseBody(error);
+  const description = body.match(
+    /id=["']?error-description["']?[^>]*>\s*([^<]+)/i,
+  )?.[1]?.replace(/\s+/g, " ").trim();
+  const detailMatch = body.match(
+    /(?:IllegalArgumentException|Invalid parameter|is not a valid|Error while serving)[^<]{0,240}/i,
+  );
+  const detail = (description || detailMatch?.[0] || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const service = String(
+    spec.parameters.SERVICE ?? spec.parameters.SERVICE_NAME ?? "",
+  );
+  const base = requestError.message
+    ? `Jenkins deployment trigger failed: ${requestError.message}`
+    : "Jenkins deployment trigger failed.";
+  if (detail) return `${base} ${detail}`;
+  if (requestError.res?.statusCode === 500) {
+    return `${base} Job ${spec.jobName} rejected service "${service}". Confirm it is listed under TEAM "${String(spec.parameters.TEAM ?? "")}" in Jenkins.`;
+  }
+  return base;
 }
 
 export async function triggerProductionDeployment(

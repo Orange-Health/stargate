@@ -1,11 +1,76 @@
 import { describe, expect, it } from 'vitest'
 import {
+  dashboardJenkinsServices,
   deployedTagsFromBuilds,
   deploymentSpec,
   productionDeployedTagsFromBuilds,
   productionDeploymentSpec,
   servicesForRepository,
+  stagingDeployServiceName,
 } from './jenkins.js'
+
+/** SERVICE_NAME choices from Jenkins DEV/DEV Deployer. */
+const jenkinsStagingServiceNames = [
+  'accounts',
+  'amethyst',
+  'asbru',
+  'bifrost',
+  'cdp-api',
+  'cds',
+  'cds-web',
+  'cerebro',
+  'cerebro-go',
+  'chronos',
+  'citadel',
+  'clr-api',
+  'clr-web',
+  'cms-api',
+  'cms-web',
+  'compass',
+  'consent-service',
+  'cpms',
+  'dokumentor',
+  'ets-lab',
+  'feedback',
+  'feedback-api',
+  'geomark',
+  'gringotts',
+  'gringotts-web',
+  'groot',
+  'health-api',
+  'health-web',
+  'hedwig',
+  'gateway-api',
+  'nimbus-api',
+  'occ',
+  'occ-web',
+  'odin-api',
+  'oms',
+  'oms-web',
+  'orange-fusion',
+  'partner-api',
+  'partner-web',
+  'patients-service',
+  'payment-api',
+  'porte',
+  'raven',
+  'report-rebranding',
+  'runestone',
+  's3-nginx',
+  's3wrapper',
+  'sapphire-api',
+  'sapphire-web',
+  'scheduler',
+  'scheduler-api',
+  'sorting-hat',
+  'super-crm',
+  'titan',
+  'vault-api',
+  'vault-web',
+  'web',
+  'webhook-mirror',
+  'webhook-service',
+] as const
 
 describe('Jenkins service mapping', () => {
   it('maps GitHub repositories back to Jenkins service names', () => {
@@ -21,6 +86,20 @@ describe('Jenkins service mapping', () => {
     ])
     expect(servicesForRepository('Orange-Health/citrus')).toEqual(['citrus'])
     expect(servicesForRepository('Orange-Health/unknown')).toEqual([])
+  })
+
+  it('resolves every dashboard service to a DEV Deployer SERVICE_NAME', () => {
+    const stagingNames = new Set<string>(jenkinsStagingServiceNames)
+    const unresolved = dashboardJenkinsServices()
+      .filter((service) => service !== 'citrus')
+      .map((service) => ({
+        service,
+        stagingName: stagingDeployServiceName(service),
+      }))
+      .filter(({ stagingName }) => !stagingNames.has(stagingName))
+
+    expect(unresolved).toEqual([])
+    expect(stagingNames.has(stagingDeployServiceName('citrus'))).toBe(false)
   })
 })
 
@@ -62,6 +141,33 @@ describe('deploymentSpec', () => {
         IMAGE_TAG: 'v-s2-26.0713.2',
         IS_PROD_TAG: false,
         SKIP_MIGRATION: false,
+      },
+    })
+  })
+
+  it('maps dashboard web service keys to DEV Deployer SERVICE_NAME values', () => {
+    expect(
+      deploymentSpec({
+        repository: 'Orange-Health/bifrost',
+        service: 'bifrost-web',
+        tag: 'v-s2-26.0731.1',
+        environment: 's2',
+      }),
+    ).toMatchObject({
+      parameters: {
+        SERVICE_NAME: 'bifrost',
+      },
+    })
+    expect(
+      deploymentSpec({
+        repository: 'Orange-Health/bifrost',
+        service: 'bifrost-web',
+        tag: 'v-s2-26.0731.1',
+        environment: 'qa',
+      }),
+    ).toMatchObject({
+      parameters: {
+        SERVICE: 'bifrost-web',
       },
     })
   })
