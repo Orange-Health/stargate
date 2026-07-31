@@ -1730,6 +1730,17 @@ button:disabled {
   margin-top: 14px;
 }
 
+.release-load-more {
+  display: flex;
+  justify-content: center;
+  margin-block: 10px;
+}
+
+.release-load-more .notification-toggle:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
 .repository-pr-pagination span {
   color: var(--muted);
   font-family: var(--mono);
@@ -1931,10 +1942,6 @@ button:disabled {
     auto minmax(140px, 0.8fr) auto auto
     minmax(130px, 1fr);
   padding: 13px 18px;
-}
-
-.release-build-row:last-child {
-  border-bottom: 0;
 }
 
 .build-indicator {

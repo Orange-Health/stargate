@@ -193,6 +193,64 @@ describe('repository pull requests', () => {
   })
 })
 
+describe('release history pagination', () => {
+  it('limits staging and production releases to 5 and reports hasMore', async () => {
+    const staging = Array.from({ length: 7 }, (_, index) => ({
+      id: index + 1,
+      tag_name: `v-qa-26.0731.${7 - index}`,
+      html_url: `https://github.test/releases/${index + 1}`,
+      prerelease: true,
+      created_at: `2026-07-31T${String(16 - index).padStart(2, '0')}:00:00Z`,
+    }))
+    const production = Array.from({ length: 6 }, (_, index) => ({
+      id: 100 + index,
+      tag_name: `v26.0731.${6 - index}`,
+      html_url: `https://github.test/releases/${100 + index}`,
+      prerelease: false,
+      created_at: `2026-07-31T${String(22 - index).padStart(2, '0')}:00:00Z`,
+    }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = String(input)
+        if (url.includes('/releases?')) {
+          return new Response(JSON.stringify([...staging, ...production]))
+        }
+        if (url.includes('/actions/runs?')) {
+          return new Response(JSON.stringify({ workflow_runs: [] }))
+        }
+        throw new Error(`Unexpected GitHub request: ${url}`)
+      }),
+    )
+
+    const history = await getRepositoryReleaseHistory(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'Orange-Health',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      'Orange-Health/service-api',
+    )
+
+    expect(history.stagingReleases).toHaveLength(5)
+    expect(history.productionReleases).toHaveLength(5)
+    expect(history.hasMoreStaging).toBe(true)
+    expect(history.hasMoreProduction).toBe(true)
+    expect(history.stagingReleases.map((release) => release.tag)).toEqual([
+      'v-qa-26.0731.7',
+      'v-qa-26.0731.6',
+      'v-qa-26.0731.5',
+      'v-qa-26.0731.4',
+      'v-qa-26.0731.3',
+    ])
+  })
+})
+
 describe('all-services release builds', () => {
   it('includes every GitHub release whose tag starts with v-', async () => {
     vi.stubGlobal(

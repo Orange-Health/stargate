@@ -117,11 +117,16 @@ const repositoryState: RepositoryReleaseState = {
   fetchedAt: '2026-07-13T12:01:00Z',
 }
 
-function releaseData(state: RepositoryReleaseState) {
+function releaseData(
+  state: RepositoryReleaseState,
+  options?: { hasMoreStaging?: boolean; hasMoreProduction?: boolean },
+) {
   return {
     repository: state.repository,
     stagingReleases: state.stagingReleases,
     productionReleases: state.productionReleases,
+    hasMoreStaging: options?.hasMoreStaging ?? false,
+    hasMoreProduction: options?.hasMoreProduction ?? false,
     deployedTags: state.deployedTags,
     deploymentLookupFailed: state.deploymentLookupFailed,
     jenkinsServices: state.jenkinsServices,
@@ -551,6 +556,71 @@ describe('ServiceOperations', () => {
       pullNumber: 42,
       bypassBranchProtection: true,
     })
+  })
+
+  it('loads more staging and production releases on demand', async () => {
+    const user = userEvent.setup()
+    const moreStaging = Array.from({ length: 6 }, (_, index) => ({
+      id: 10 + index,
+      tag: `v-qa-26.0731.${6 - index}`,
+      environment: 'qa' as const,
+      url: `https://github.test/release/${10 + index}`,
+      createdAt: `2026-07-31T${String(10 + index).padStart(2, '0')}:00:00Z`,
+      buildStatus: 'succeeded' as const,
+      runs: [],
+    }))
+    const moreProduction = Array.from({ length: 6 }, (_, index) => ({
+      id: 20 + index,
+      tag: `v26.0731.${6 - index}`,
+      url: `https://github.test/release/${20 + index}`,
+      createdAt: `2026-07-31T${String(20 + index).padStart(2, '0')}:00:00Z`,
+      buildStatus: 'succeeded' as const,
+      runs: [],
+    }))
+    const initial = releaseData(
+      {
+        ...repositoryState,
+        stagingReleases: moreStaging.slice(0, 5),
+        productionReleases: moreProduction.slice(0, 5),
+      },
+      { hasMoreStaging: true, hasMoreProduction: true },
+    )
+    const expanded = releaseData(
+      {
+        ...repositoryState,
+        stagingReleases: moreStaging,
+        productionReleases: moreProduction,
+      },
+      { hasMoreStaging: false, hasMoreProduction: false },
+    )
+    vi.mocked(api.repositoryReleaseData)
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(expanded)
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        productionEnabled
+      />,
+    )
+
+    expect(await screen.findByText('v-qa-26.0731.6')).toBeVisible()
+    expect(screen.queryByText('v-qa-26.0731.1')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Load more' })).toHaveLength(2)
+
+    await user.click(screen.getAllByRole('button', { name: 'Load more' })[0])
+
+    expect(api.repositoryReleaseData).toHaveBeenCalledWith(
+      'Orange-Health/service-api',
+      false,
+      10,
+    )
+    expect(await screen.findByText('v-qa-26.0731.1')).toBeVisible()
+    expect(screen.getByText('v26.0731.1')).toBeVisible()
+    expect(
+      screen.queryByRole('button', { name: 'Load more' }),
+    ).not.toBeInTheDocument()
   })
 
   it('creates a missing back-merge PR and switches to its details', async () => {

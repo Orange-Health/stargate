@@ -836,12 +836,18 @@ export function createApp() {
       } satisfies ApiErrorBody)
       return
     }
+    const rawLimit = Number(request.query.limit)
+    const limit =
+      Number.isFinite(rawLimit) && rawLimit > 0
+        ? Math.min(Math.floor(rawLimit), 30)
+        : 5
     const config = requireConnection()
     const [history, deploymentResult] = await Promise.all([
       getRepositoryReleaseHistory(
         config,
         parsed.data,
         request.query.includeAllVReleases === 'true',
+        limit,
       ),
       currentDeployments(config, parsed.data),
     ])

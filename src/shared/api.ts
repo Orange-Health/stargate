@@ -184,13 +184,21 @@ export const api = {
     request<ReleaseControlSyncProgress>(
       `/api/github/release-control-sync-progress/${encodeURIComponent(progressId)}`,
     ),
-  releaseHistory: (repository: string, includeAllVReleases = false) =>
+  releaseHistory: (
+    repository: string,
+    includeAllVReleases = false,
+    limit = 5,
+  ) =>
     request<RepositoryReleaseHistory>(
-      `/api/github/release-history?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
+      `/api/github/release-history?repository=${encodeURIComponent(repository)}&limit=${limit}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
     ),
-  repositoryReleaseData: (repository: string, includeAllVReleases = false) =>
+  repositoryReleaseData: (
+    repository: string,
+    includeAllVReleases = false,
+    limit = 5,
+  ) =>
     request<RepositoryReleaseData>(
-      `/api/github/release-history?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
+      `/api/github/release-history?repository=${encodeURIComponent(repository)}&limit=${limit}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
     ),
   releaseBuildStatuses: (
     releases: ReleaseBuildStatusInput[],

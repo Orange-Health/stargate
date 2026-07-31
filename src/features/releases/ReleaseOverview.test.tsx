@@ -173,6 +173,7 @@ describe('ReleaseOverview', () => {
       expect(api.repositoryReleaseData).toHaveBeenCalledWith(
         'orange/operations',
         true,
+        5,
       ),
     )
     expect(screen.getByRole('link', { name: /orange\/operations/ })).toHaveAttribute(

@@ -134,8 +134,8 @@ export function ServiceOperations({
   const [error, setError] = useState('')
   const [busyRoute, setBusyRoute] = useState('')
   const [refreshing, setRefreshing] = useState(false)
-  const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [releaseLimit, setReleaseLimit] = useState(5)
   const [deployRelease, setDeployRelease] =
     useState<TrackedStagingRelease>()
   const [productionDeployRelease, setProductionDeployRelease] =
@@ -155,10 +155,15 @@ export function ServiceOperations({
   const buildsInitialized = useRef(false)
   const browserNotificationsRef = useRef(browserNotifications)
   const loadSequence = useRef(0)
+  const releaseLimitRef = useRef(releaseLimit)
 
   useEffect(() => {
     browserNotificationsRef.current = browserNotifications
   }, [browserNotifications])
+
+  useEffect(() => {
+    releaseLimitRef.current = releaseLimit
+  }, [releaseLimit])
 
   const announceCompletedBuilds = useCallback(
     (nextState: RepositoryReleaseData) => {
@@ -228,17 +233,18 @@ export function ServiceOperations({
   )
 
   const loadReleases = useCallback(
-    async (silent = false) => {
+    async (silent = false, limit = releaseLimitRef.current) => {
       if (!silent) setReleaseLoading(true)
       setError('')
       try {
         const nextState = await api.repositoryReleaseData(
           repository,
           includeAllVReleases,
+          limit,
         )
         announceCompletedBuilds(nextState)
         setReleaseState(nextState)
-        setHistoryLoaded(false)
+        setReleaseLimit(limit)
       } catch (reason) {
         setError(
           reason instanceof Error
@@ -272,7 +278,8 @@ export function ServiceOperations({
     setBranchLoading(view === 'all' || view === 'branches')
     setReleaseLoading(view === 'all' || view === 'releases')
     setError('')
-    setHistoryLoaded(false)
+    setReleaseLimit(5)
+    releaseLimitRef.current = 5
     previousBuilds.current = new Map()
     buildsInitialized.current = false
     void load()
@@ -290,6 +297,8 @@ export function ServiceOperations({
             repository: detail.state.repository,
             stagingReleases: detail.state.stagingReleases,
             productionReleases: detail.state.productionReleases,
+            hasMoreStaging: false,
+            hasMoreProduction: false,
             deployedTags: detail.state.deployedTags,
             deploymentLookupFailed: detail.state.deploymentLookupFailed,
             jenkinsServices: detail.state.jenkinsServices,
@@ -435,23 +444,27 @@ export function ServiceOperations({
     }
   }
 
-  async function loadReleaseHistory() {
-    setHistoryLoading(true)
+  async function loadMoreReleases() {
+    const nextLimit = Math.min(releaseLimit + 5, 30)
+    if (nextLimit <= releaseLimit) return
+    setLoadingMore(true)
     setError('')
     try {
-      const history = includeAllVReleases
-        ? await api.repositoryReleaseData(repository, true)
-        : await api.repositoryReleaseData(repository)
+      const history = await api.repositoryReleaseData(
+        repository,
+        includeAllVReleases,
+        nextLimit,
+      )
       setReleaseState(history)
-      setHistoryLoaded(true)
+      setReleaseLimit(nextLimit)
     } catch (reason) {
       setError(
         reason instanceof Error
           ? reason.message
-          : 'Could not load release history.',
+          : 'Could not load more releases.',
       )
     } finally {
-      setHistoryLoading(false)
+      setLoadingMore(false)
     }
   }
 
@@ -659,18 +672,6 @@ export function ServiceOperations({
               </button>
             )}
             <button
-              className="notification-toggle"
-              type="button"
-              onClick={() => void loadReleaseHistory()}
-              disabled={historyLoading || historyLoaded}
-            >
-              {historyLoading
-                ? 'Loading history…'
-                : historyLoaded
-                  ? 'History loaded'
-                  : 'Show history'}
-            </button>
-            <button
               className={`notification-toggle ${browserNotifications ? 'active' : ''}`}
               type="button"
               aria-pressed={browserNotifications}
@@ -692,6 +693,7 @@ export function ServiceOperations({
             <span className="spinner" /> Loading release builds…
           </div>
         ) : releaseState?.stagingReleases.length ? (
+          <>
           <div className="release-build-list">
             {releaseState.stagingReleases.map((release) => {
               const liveDeployments = releaseState.deployedTags.filter(
@@ -771,6 +773,19 @@ export function ServiceOperations({
               )
             })}
           </div>
+          {releaseState.hasMoreStaging && (
+            <div className="release-load-more">
+              <button
+                className="notification-toggle"
+                type="button"
+                onClick={() => void loadMoreReleases()}
+                disabled={loadingMore || releaseLoading}
+              >
+                {loadingMore ? 'Loading more…' : 'Load more'}
+              </button>
+            </div>
+          )}
+          </>
         ) : (
           <div className="operation-empty">
             {includeAllVReleases
@@ -806,6 +821,7 @@ export function ServiceOperations({
               <span className="spinner" /> Loading production builds…
             </div>
           ) : releaseState?.productionReleases.length ? (
+            <>
             <div className="release-build-list">
               {releaseState.productionReleases.map((release) => {
                 const liveDeployments = releaseState.deployedTags.filter(
@@ -891,6 +907,19 @@ export function ServiceOperations({
                 )
               })}
             </div>
+            {releaseState.hasMoreProduction && (
+              <div className="release-load-more">
+                <button
+                  className="notification-toggle"
+                  type="button"
+                  onClick={() => void loadMoreReleases()}
+                  disabled={loadingMore || releaseLoading}
+                >
+                  {loadingMore ? 'Loading more…' : 'Load more'}
+                </button>
+              </div>
+            )}
+            </>
           ) : (
             <div className="operation-empty">
               No production releases found for this service.

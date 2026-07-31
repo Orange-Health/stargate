@@ -424,6 +424,8 @@ export type RepositoryReleaseHistory = {
   repository: string
   stagingReleases: TrackedStagingRelease[]
   productionReleases: TrackedProductionRelease[]
+  hasMoreStaging: boolean
+  hasMoreProduction: boolean
 }
 
 export type RepositoryReleaseData = RepositoryReleaseHistory &

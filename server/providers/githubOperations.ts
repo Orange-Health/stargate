@@ -148,7 +148,7 @@ type GitHubChecks = {
 }
 
 const stagingTagPattern =
-  /^v-(qa|s1|s2|s3|s4|s5|s6)-v\d{2}\.\d{4}\.\d+$/
+  /^v-(qa|s1|s2|s3|s4|s5|s6)-\d{2}\.\d{4}\.\d+$/
 const productionTagPattern = /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+$/
 const RISK_CACHE_MS = 45_000
 const REPOSITORY_STATE_CACHE_MS = 30_000
@@ -352,6 +352,9 @@ export async function getReleaseBuildStatuses(
   return results
 }
 
+const RELEASE_PAGE_SIZE = 5
+const RELEASE_FETCH_MAX = 30
+
 async function listTrackedReleases(
   config: ConnectionConfig,
   repository: string,
@@ -360,7 +363,10 @@ async function listTrackedReleases(
 ): Promise<{
   stagingReleases: TrackedStagingRelease[]
   productionReleases: TrackedProductionRelease[]
+  hasMoreStaging: boolean
+  hasMoreProduction: boolean
 }> {
+  const cappedLimit = Math.min(Math.max(limit, 1), RELEASE_FETCH_MAX)
   const [releases, recentRuns] = await Promise.all([
     githubApi<GitHubRelease[]>(
       config,
@@ -373,7 +379,7 @@ async function listTrackedReleases(
         ).then((response) => response.workflow_runs)
       : Promise.resolve([]),
   ])
-  const staging = sortReleasesNewestFirst(
+  const stagingCandidates = sortReleasesNewestFirst(
     releases.filter(
       (release) =>
         includeAllVReleases
@@ -382,16 +388,16 @@ async function listTrackedReleases(
           : release.prerelease && stagingTagPattern.test(release.tag_name),
     ),
   )
-    .slice(0, limit)
+  const staging = stagingCandidates.slice(0, cappedLimit)
 
-  const production = sortReleasesNewestFirst(
+  const productionCandidates = sortReleasesNewestFirst(
     releases.filter(
       (release) =>
         !release.prerelease &&
         productionTagPattern.test(release.tag_name),
     ),
   )
-    .slice(0, limit)
+  const production = productionCandidates.slice(0, cappedLimit)
 
   const releaseBackedStaging: TrackedStagingRelease[] = await Promise.all(
     staging.map(async (release) => {
@@ -457,7 +463,7 @@ async function listTrackedReleases(
         new Date(right.createdAt).getTime() -
         new Date(left.createdAt).getTime(),
     )
-    .slice(0, limit)
+    .slice(0, cappedLimit)
   const releaseBackedProduction = await Promise.all(
     production.map(async (release) => {
       const runs = await listReleaseRuns(config, repository, release)
@@ -499,8 +505,21 @@ async function listTrackedReleases(
         new Date(right.createdAt).getTime() -
         new Date(left.createdAt).getTime(),
     )
-    .slice(0, limit)
-  return { stagingReleases, productionReleases }
+    .slice(0, cappedLimit)
+  const stagingTagCount = new Set([
+    ...stagingCandidates.map((release) => release.tag_name),
+    ...actionOnlyBuilds.map((release) => release.tag),
+  ]).size
+  const productionTagCount = new Set([
+    ...productionCandidates.map((release) => release.tag_name),
+    ...actionOnlyProduction.map((release) => release.tag),
+  ]).size
+  return {
+    stagingReleases,
+    productionReleases,
+    hasMoreStaging: stagingTagCount > cappedLimit,
+    hasMoreProduction: productionTagCount > cappedLimit,
+  }
 }
 
 function controlRoomProductionReleases(
@@ -585,6 +604,7 @@ export async function getRepositoryReleaseHistory(
   config: ConnectionConfig,
   repository: string,
   includeAllVReleases = false,
+  limit = RELEASE_PAGE_SIZE,
 ): Promise<RepositoryReleaseHistory> {
   assertConnectedRepository(config, repository)
   return {
@@ -592,7 +612,7 @@ export async function getRepositoryReleaseHistory(
     ...(await listTrackedReleases(
       config,
       repository,
-      includeAllVReleases ? 30 : 12,
+      limit,
       includeAllVReleases,
     )),
   }

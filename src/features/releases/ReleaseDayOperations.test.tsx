@@ -751,6 +751,8 @@ describe('ReleaseDayOperations', () => {
       repository,
       stagingReleases: [],
       productionReleases: [productionRelease],
+      hasMoreStaging: false,
+      hasMoreProduction: false,
     })
 
     const notes = releaseNotesForDashboard(
