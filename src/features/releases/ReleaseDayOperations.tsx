@@ -8,6 +8,7 @@ import type {
   PromotionPullRequest,
   PromotionRoute,
   ReleaseControlRoomState,
+  ReleaseControlSyncProgress,
   ReleaseDashboard,
   TrackedProductionRelease,
   TriggeredProductionDeployment,
@@ -101,6 +102,8 @@ const POLL_INTERVAL = 15_000
 const MAX_CONCURRENCY = 3
 const REPOSITORY_SYNC_CONCURRENCY = 2
 const REPOSITORY_STATE_CACHE_MS = 60_000
+const SYNC_PROGRESS_POLL_MS = 500
+const SYNC_TIMEOUT_MS = 90_000
 
 function productionDeploymentLabel(deployment: JenkinsDeployedTag) {
   switch (deployment.status) {
@@ -407,6 +410,8 @@ export function ReleaseDayOperations({
     Record<string, ReleaseControlRoomState | undefined>
   >(restoredRepositoryStates.states)
   const [refreshing, setRefreshing] = useState(false)
+  const [batchSyncProgress, setBatchSyncProgress] =
+    useState<ReleaseControlSyncProgress>()
   const [busyAction, setBusyAction] = useState('')
   const [activeProductionRelease, setActiveProductionRelease] =
     useState('')
@@ -619,6 +624,119 @@ export function ReleaseDayOperations({
     [dashboard.services, dashboard.version.id, developerLists],
   )
 
+  const applyRepositoryState = useCallback(
+    (
+      repository: string,
+      repositoryState: ReleaseControlRoomState,
+      sequence: number,
+    ) => {
+      if (sequence !== loadSequence.current) return
+      repositoryCacheTimestamp.current = Date.now()
+      setStates((current) => ({
+        ...current,
+        [repository]: repositoryState,
+      }))
+      const discoveredRelease = latestProductionReleaseOnDate(
+        repositoryState.productionReleases.filter(
+          (release) => release.buildStatus !== 'canceled',
+        ),
+        sessionRef.current.releaseDate,
+      )
+      if (discoveredRelease) {
+        setSession((current) => {
+          const saved = current.repositories[repository]?.productionRelease
+          if (
+            saved &&
+            releaseCreatedOnDate(saved.createdAt, current.releaseDate)
+          ) {
+            return current
+          }
+          return {
+            ...current,
+            repositories: {
+              ...current.repositories,
+              [repository]: {
+                ...current.repositories[repository],
+                productionRelease: {
+                  id: discoveredRelease.id,
+                  repository,
+                  tag: discoveredRelease.tag,
+                  sourceBranch: repositoryState.defaultBranch,
+                  url: discoveredRelease.url,
+                  createdAt: discoveredRelease.createdAt,
+                },
+                productionReleaseError: undefined,
+              },
+            },
+          }
+        })
+      }
+      const discoveries = repositoryState.promotionSteps.map((step) => {
+        if (step.state === 'pr_open' && step.pullRequest) {
+          return `${step.fromBranch} → ${step.toBranch}: PR #${step.pullRequest.number}`
+        }
+        if (step.state === 'up_to_date') {
+          return `${step.fromBranch} → ${step.toBranch}: up to date`
+        }
+        return `${step.fromBranch} → ${step.toBranch}: ${step.commitsAhead} commits waiting`
+      })
+      log('info', `Promotion state: ${discoveries.join('; ')}.`, repository)
+      setRepositorySync((current) => ({
+        ...current,
+        [repository]: 'synced',
+      }))
+    },
+    [log],
+  )
+
+  const failRepositorySync = useCallback(
+    (repository: string, reason: unknown, sequence: number) => {
+      if (sequence !== loadSequence.current) return
+      const message =
+        reason instanceof Error
+          ? reason.message
+          : 'Could not refresh repository state.'
+      setRepositoryError(repository, message)
+      setRepositorySync((current) => ({
+        ...current,
+        [repository]: 'failed',
+      }))
+      log('error', `Repository state check failed: ${message}`, repository)
+    },
+    [log, setRepositoryError],
+  )
+
+  const loadLegacyRepositoryState = useCallback(
+    async (repository: string, force: boolean) => {
+      if (force) await api.refreshRepository(repository)
+      return api.releaseControlState(repository)
+    },
+    [],
+  )
+
+  const monitorSyncProgress = useCallback(
+    async (
+      progressId: string,
+      sequence: number,
+      isActive: () => boolean,
+    ) => {
+      while (isActive() && sequence === loadSequence.current) {
+        try {
+          const progress = await api.releaseControlSyncProgress(progressId)
+          if (!isActive() || sequence !== loadSequence.current) return
+          setBatchSyncProgress(progress)
+          if (progress.status === 'completed') return
+        } catch {
+          // The POST may not have initialized progress yet; retry briefly.
+        }
+        await new Promise<void>((resolve) =>
+          window.setTimeout(resolve, SYNC_PROGRESS_POLL_MS),
+        )
+      }
+    },
+    [],
+  )
+
   const syncRepository = useCallback(
     async (repository: string, force: boolean, sequence: number) => {
       setRepositoryError(repository)
@@ -626,83 +744,69 @@ export function ReleaseDayOperations({
         ...current,
         [repository]: 'syncing',
       }))
+      log('info', 'Checking repository promotion and release state.', repository)
+      const progressId = crypto.randomUUID()
+      const controller = new AbortController()
+      const timeout = window.setTimeout(
+        () => controller.abort(),
+        SYNC_TIMEOUT_MS,
+      )
+      let progressActive = true
+      setBatchSyncProgress(undefined)
       try {
-        log('info', 'Checking repository promotion and release state.', repository)
-        if (force) {
-          log('info', 'Invalidating cached repository state.', repository)
-          await api.refreshRepository(repository)
-        }
-        const repositoryState = await api.releaseControlState(repository)
-        if (sequence !== loadSequence.current) return
-        repositoryCacheTimestamp.current = Date.now()
-        setStates((current) => ({
-          ...current,
-          [repository]: repositoryState,
-        }))
-        const discoveredRelease = latestProductionReleaseOnDate(
-          repositoryState.productionReleases.filter(
-            (release) => release.buildStatus !== 'canceled',
-          ),
-          sessionRef.current.releaseDate,
-        )
-        if (discoveredRelease) {
-          setSession((current) => {
-            const saved = current.repositories[repository]?.productionRelease
-            if (
-              saved &&
-              releaseCreatedOnDate(saved.createdAt, current.releaseDate)
-            ) {
-              return current
-            }
-            return {
-              ...current,
-              repositories: {
-                ...current.repositories,
-                [repository]: {
-                  ...current.repositories[repository],
-                  productionRelease: {
-                    id: discoveredRelease.id,
-                    repository,
-                    tag: discoveredRelease.tag,
-                    sourceBranch: repositoryState.defaultBranch,
-                    url: discoveredRelease.url,
-                    createdAt: discoveredRelease.createdAt,
-                  },
-                  productionReleaseError: undefined,
-                },
-              },
-            }
-          })
-        }
-        const discoveries = repositoryState.promotionSteps.map((step) => {
-          if (step.state === 'pr_open' && step.pullRequest) {
-            return `${step.fromBranch} → ${step.toBranch}: PR #${step.pullRequest.number}`
+        let repositoryState: ReleaseControlRoomState | undefined
+        let batchResponse
+        try {
+          const request = api.releaseControlStates(
+            [repository],
+            force,
+            progressId,
+            controller.signal,
+          )
+          void monitorSyncProgress(
+            progressId,
+            sequence,
+            () => progressActive,
+          )
+          batchResponse = await request
+        } catch {
+          if (controller.signal.aborted) {
+            throw new Error('Repository sync timed out after 90 seconds.')
           }
-          if (step.state === 'up_to_date') {
-            return `${step.fromBranch} → ${step.toBranch}: up to date`
+          log(
+            'warning',
+            'Batch sync transport failed; using legacy repository sync.',
+            repository,
+          )
+          repositoryState = await loadLegacyRepositoryState(repository, force)
+        }
+        if (batchResponse) {
+          const result = batchResponse.results[0]
+          if (!result?.state) {
+            throw new Error(
+              result?.error?.message ?? 'Repository sync returned no state.',
+            )
           }
-          return `${step.fromBranch} → ${step.toBranch}: ${step.commitsAhead} commits waiting`
-        })
-        log('info', `Promotion state: ${discoveries.join('; ')}.`, repository)
-        setRepositorySync((current) => ({
-          ...current,
-          [repository]: 'synced',
-        }))
+          repositoryState = result.state
+        }
+        if (!repositoryState) throw new Error('Repository sync returned no state.')
+        applyRepositoryState(repository, repositoryState, sequence)
       } catch (reason) {
-        if (sequence !== loadSequence.current) return
-        const message =
-          reason instanceof Error
-            ? reason.message
-            : 'Could not refresh repository state.'
-        setRepositoryError(repository, message)
-        setRepositorySync((current) => ({
-          ...current,
-          [repository]: 'failed',
-        }))
-        log('error', `Repository state check failed: ${message}`, repository)
+        failRepositorySync(repository, reason, sequence)
+      } finally {
+        progressActive = false
+        window.clearTimeout(timeout)
+        if (sequence === loadSequence.current) setBatchSyncProgress(undefined)
       }
     },
-    [log, setRepositoryError],
+    [
+      applyRepositoryState,
+      failRepositorySync,
+      loadLegacyRepositoryState,
+      log,
+      monitorSyncProgress,
+      setRepositoryError,
+    ],
   )
 
   const refreshStates = useCallback(
@@ -714,17 +818,92 @@ export function ReleaseDayOperations({
       setRepositorySync((current) => ({
         ...current,
         ...Object.fromEntries(
-          repositories.map((repository) => [repository, 'queued' as const]),
+          repositories.map((repository) => [repository, 'syncing' as const]),
         ),
       }))
-      await mapConcurrent(
-        repositories,
-        (repository) => syncRepository(repository, force, sequence),
-        REPOSITORY_SYNC_CONCURRENCY,
+      for (const repository of repositories) {
+        setRepositoryError(repository)
+        log('info', 'Checking repository promotion and release state.', repository)
+      }
+      const progressId = crypto.randomUUID()
+      const controller = new AbortController()
+      const timeout = window.setTimeout(
+        () => controller.abort(),
+        SYNC_TIMEOUT_MS,
       )
-      if (!silent && sequence === loadSequence.current) setRefreshing(false)
+      let progressActive = true
+      setBatchSyncProgress(undefined)
+      try {
+        const request = api.releaseControlStates(
+          repositories,
+          force,
+          progressId,
+          controller.signal,
+        )
+        void monitorSyncProgress(progressId, sequence, () => progressActive)
+        const response = await request
+        for (const result of response.results) {
+          if (result.state) {
+            applyRepositoryState(result.repository, result.state, sequence)
+          } else {
+            failRepositorySync(
+              result.repository,
+              new Error(result.error?.message ?? 'Repository sync failed.'),
+              sequence,
+            )
+          }
+        }
+      } catch {
+        if (controller.signal.aborted) {
+          const timeoutError = new Error(
+            'Control-room sync timed out after 90 seconds.',
+          )
+          for (const repository of repositories) {
+            failRepositorySync(repository, timeoutError, sequence)
+          }
+          log(
+            'error',
+            'Control-room synchronization timed out. Retry failed services.',
+          )
+        } else {
+          log(
+            'warning',
+            'Batch sync transport failed; using bounded repository sync.',
+          )
+          await mapConcurrent(
+            repositories,
+            async (repository) => {
+              setRepositorySync((current) => ({
+                ...current,
+                [repository]: 'syncing',
+              }))
+              try {
+                const state = await loadLegacyRepositoryState(repository, force)
+                applyRepositoryState(repository, state, sequence)
+              } catch (reason) {
+                failRepositorySync(repository, reason, sequence)
+              }
+            },
+            REPOSITORY_SYNC_CONCURRENCY,
+          )
+        }
+      } finally {
+        progressActive = false
+        window.clearTimeout(timeout)
+        if (sequence === loadSequence.current) {
+          setBatchSyncProgress(undefined)
+          if (!silent) setRefreshing(false)
+        }
+      }
     },
-    [syncRepository],
+    [
+      applyRepositoryState,
+      failRepositorySync,
+      loadLegacyRepositoryState,
+      log,
+      monitorSyncProgress,
+      setRepositoryError,
+    ],
   )
 
   useEffect(() => {
@@ -899,18 +1078,34 @@ export function ReleaseDayOperations({
           activeReleases.length
             ? api.releaseBuildStatuses(activeReleases, true)
             : Promise.resolve([]),
-          Promise.all(
-            currentSession.selectedRepositories.map(async (repository) => {
-              try {
-                return {
-                  repository,
-                  result: await api.repositoryDeploymentStatus(repository, true),
-                }
-              } catch {
-                return undefined
-              }
-            }),
-          ),
+          api
+            .repositoryDeploymentStatuses(
+              currentSession.selectedRepositories,
+              false,
+            )
+            .then((response) =>
+              response.results.map((result) => ({
+                repository: result.repository,
+                result,
+              })),
+            )
+            .catch(() =>
+              Promise.all(
+                currentSession.selectedRepositories.map(async (repository) => {
+                  try {
+                    return {
+                      repository,
+                      result: await api.repositoryDeploymentStatus(
+                        repository,
+                        false,
+                      ),
+                    }
+                  } catch {
+                    return undefined
+                  }
+                }),
+              ),
+            ),
         ])
         if (!active) return
         setStates((current) => {
@@ -981,16 +1176,24 @@ export function ReleaseDayOperations({
       selected.length > 0 && selected.every(predicate),
     [selected],
   )
-  const syncCompleted = selected.filter((repository) =>
+  const rowSyncCompleted = selected.filter((repository) =>
     ['synced', 'failed'].includes(repositorySync[repository]),
   ).length
   const syncInProgress = selected.some((repository) =>
     ['queued', 'syncing'].includes(repositorySync[repository]),
   )
-  const syncProgress =
+  const syncCompleted =
+    syncInProgress && batchSyncProgress
+      ? Math.max(batchSyncProgress.completed, rowSyncCompleted)
+      : rowSyncCompleted
+  const rowSyncPercent =
     selected.length === 0
       ? 0
-      : Math.round((syncCompleted / selected.length) * 100)
+      : Math.round((rowSyncCompleted / selected.length) * 100)
+  const syncProgress =
+    syncInProgress && batchSyncProgress
+      ? Math.max(batchSyncProgress.percent, rowSyncPercent)
+      : rowSyncPercent
   const devPrsReady = everySelected((repository) => {
     const step = routeStep(states[repository], 'dev-to-release')
     return step?.state === 'pr_open' || step?.state === 'up_to_date'
@@ -1476,8 +1679,24 @@ export function ReleaseDayOperations({
     setCheckingBuildRepository(repository)
     log('info', 'Finding the latest eligible production tag.', repository)
     try {
-      await api.refreshRepository(repository)
-      const repositoryState = await api.releaseControlState(repository)
+      let repositoryState: ReleaseControlRoomState | undefined
+      let batchResponse
+      try {
+        batchResponse = await api.releaseControlStates([repository], true)
+      } catch {
+        await api.refreshRepository(repository)
+        repositoryState = await api.releaseControlState(repository)
+      }
+      if (batchResponse) {
+        const result = batchResponse.results[0]
+        if (!result?.state) {
+          throw new Error(
+            result?.error?.message ?? 'Repository sync returned no state.',
+          )
+        }
+        repositoryState = result.state
+      }
+      if (!repositoryState) throw new Error('Repository sync returned no state.')
       const latest = latestProductionReleaseOnDate(
         repositoryState.productionReleases,
         sessionRef.current.releaseDate,
@@ -1759,8 +1978,8 @@ export function ReleaseDayOperations({
                 role="progressbar"
                 aria-label="Synchronizing release control room"
                 aria-valuemin={0}
-                aria-valuemax={selected.length}
-                aria-valuenow={syncCompleted}
+                aria-valuemax={100}
+                aria-valuenow={syncProgress}
               >
                 <span style={{ width: `${syncProgress}%` }} />
               </div>
@@ -1869,7 +2088,7 @@ export function ReleaseDayOperations({
                       ? '✓ Jira tickets released'
                       : jiraReleaseStatus === 'partial'
                         ? 'Retry Jira release'
-                        : 'Mark all tickets as released'}
+                        : 'Mark tickets as released'}
                 </button>
                 <button
                   className="secondary-button"
@@ -2055,6 +2274,10 @@ export function ReleaseDayOperations({
                     const progress = session.repositories[repository]
                     const deploymentProgress = progress?.productionDeployment
                     const syncStatus = repositorySync[repository]
+                    const serviceSyncProgress =
+                      batchSyncProgress?.services.find(
+                        (item) => item.repository === repository,
+                      )
                     const rowSyncing =
                       syncStatus === 'queued' || syncStatus === 'syncing'
                     const repositoryState = states[repository]
@@ -2164,11 +2387,13 @@ export function ReleaseDayOperations({
                               '↻ Sync'
                             )}
                           </button>
-                          {syncStatus && syncStatus !== 'syncing' && (
+                          {syncStatus && (
                             <span
                               className={`release-day-repository-sync ${syncStatus}`}
                             >
-                              {syncStatus === 'queued'
+                              {syncStatus === 'syncing'
+                                ? serviceSyncProgress?.message ?? 'Syncing'
+                                : syncStatus === 'queued'
                                 ? 'Queued'
                                 : syncStatus === 'synced'
                                   ? 'Synced'

@@ -22,8 +22,11 @@ import type {
   ReleaseBuildStatusInput,
   ReleaseBuildStatusResult,
   ReleaseControlRoomState,
+  ReleaseControlSyncProgress,
+  ReleaseControlSyncResponse,
   ReleaseDashboard,
   RepositoryDeploymentStatus,
+  RepositoryDeploymentStatusResponse,
   RepositoryReleaseData,
   RepositoryReleaseHistory,
   RepositoryReleaseState,
@@ -163,6 +166,24 @@ export const api = {
     request<ReleaseControlRoomState>(
       `/api/github/release-control-state?repository=${encodeURIComponent(repository)}`,
     ),
+  releaseControlStates: (
+    repositories: string[],
+    forceRefresh = false,
+    progressId?: string,
+    signal?: AbortSignal,
+  ) =>
+    request<ReleaseControlSyncResponse>(
+      '/api/github/release-control-states',
+      {
+        method: 'POST',
+        body: JSON.stringify({ repositories, forceRefresh, progressId }),
+        signal,
+      },
+    ),
+  releaseControlSyncProgress: (progressId: string) =>
+    request<ReleaseControlSyncProgress>(
+      `/api/github/release-control-sync-progress/${encodeURIComponent(progressId)}`,
+    ),
   releaseHistory: (repository: string, includeAllVReleases = false) =>
     request<RepositoryReleaseHistory>(
       `/api/github/release-history?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
@@ -185,6 +206,17 @@ export const api = {
   repositoryDeploymentStatus: (repository: string, forceRefresh = false) =>
     request<RepositoryDeploymentStatus>(
       `/api/jenkins/deployment-status?repository=${encodeURIComponent(repository)}${forceRefresh ? '&forceRefresh=true' : ''}`,
+    ),
+  repositoryDeploymentStatuses: (
+    repositories: string[],
+    forceRefresh = false,
+  ) =>
+    request<RepositoryDeploymentStatusResponse>(
+      '/api/jenkins/deployment-statuses',
+      {
+        method: 'POST',
+        body: JSON.stringify({ repositories, forceRefresh }),
+      },
     ),
   repositoryRisks: (repositories: string[]) =>
     request<RepositoryRisk[]>('/api/github/repository-risks', {

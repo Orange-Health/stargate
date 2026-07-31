@@ -5,6 +5,7 @@ import type {
   JenkinsBuildStatus,
   JenkinsDeployedTag,
   JenkinsQueueStatus,
+  RepositoryDeploymentStatusResult,
   TriggerProductionDeploymentInput,
   TriggeredProductionDeployment,
   TriggerDeploymentInput,
@@ -96,6 +97,10 @@ const deploymentBuildCache = new Map<
     expiresAt: number;
     value: Promise<{ qa: JenkinsBuild[]; staging: JenkinsBuild[] }>;
   }
+>();
+const productionDeploymentBuildCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<JenkinsBuild[]> }
 >();
 
 type JenkinsBuild = {
@@ -269,6 +274,28 @@ async function recentDeploymentBuilds(
   return value;
 }
 
+async function recentProductionDeploymentBuilds(
+  config: ConnectionConfig,
+  forceRefresh = false,
+) {
+  const prodConfig = productionConfig(config);
+  const cacheKey = prodConfig.jenkinsUrl.toLowerCase();
+  const cached = productionDeploymentBuildCache.get(cacheKey);
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+  const value = recentJobBuilds(
+    jenkinsClient(prodConfig),
+    "Prod Deployments/Prod-cluster-deployment",
+  );
+  productionDeploymentBuildCache.set(cacheKey, {
+    expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
+    value,
+  });
+  value.catch(() => productionDeploymentBuildCache.delete(cacheKey));
+  return value;
+}
+
 export async function getCurrentDeployments(
   config: ConnectionConfig,
   repository: string,
@@ -322,9 +349,9 @@ export async function getCurrentProductionDeployments(
 
   const value = (async () => {
     try {
-      const builds = await recentJobBuilds(
-        jenkinsClient(prodConfig),
-        "Prod Deployments/Prod-cluster-deployment",
+      const builds = await recentProductionDeploymentBuilds(
+        config,
+        forceRefresh,
       );
       return productionDeployedTagsFromBuilds(builds, services);
     } catch (error) {
@@ -345,6 +372,76 @@ export async function getCurrentProductionDeployments(
   });
   value.catch(() => deploymentCache.delete(cacheKey));
   return value;
+}
+
+export async function getCurrentDeploymentsBatch(
+  config: ConnectionConfig,
+  requestedRepositories: string[],
+  forceRefresh = false,
+): Promise<RepositoryDeploymentStatusResult[]> {
+  const repositories = [...new Set(requestedRepositories)];
+  const hasMappedServices = repositories.some(
+    (repository) => servicesForRepository(repository).length > 0,
+  );
+  if (!hasMappedServices) {
+    return repositories.map((repository) => ({
+      repository,
+      deployedTags: [],
+      deploymentLookupFailed: false,
+    }));
+  }
+
+  const [stagingResult, productionResult] = await Promise.allSettled([
+    recentDeploymentBuilds(config, forceRefresh),
+    config.productionJenkins
+      ? recentProductionDeploymentBuilds(config, forceRefresh)
+      : Promise.resolve([]),
+  ]);
+
+  return repositories.map((repository) => {
+    const services = servicesForRepository(repository);
+    if (services.length === 0) {
+      return {
+        repository,
+        deployedTags: [],
+        deploymentLookupFailed: false,
+      };
+    }
+    const stagingTags =
+      stagingResult.status === "fulfilled"
+        ? deployedTagsFromBuilds(
+            stagingResult.value.qa,
+            stagingResult.value.staging,
+            services,
+          )
+        : [];
+    const productionTags =
+      productionResult.status === "fulfilled"
+        ? productionDeployedTagsFromBuilds(productionResult.value, services)
+        : [];
+    const deployedTags = [...stagingTags, ...productionTags];
+    const stagingKey = repository.toLowerCase();
+    deploymentCache.set(stagingKey, {
+      expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
+      value: Promise.resolve(stagingTags),
+    });
+    if (config.productionJenkins) {
+      const prodKey =
+        `production:${config.productionJenkins.jenkinsUrl}:${repository}`.toLowerCase();
+      deploymentCache.set(prodKey, {
+        expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
+        value: Promise.resolve(productionTags),
+      });
+    }
+    return {
+      repository,
+      deployedTags,
+      deploymentLookupFailed:
+        stagingResult.status === "rejected" ||
+        (Boolean(config.productionJenkins) &&
+          productionResult.status === "rejected"),
+    };
+  });
 }
 
 export function deploymentSpec(input: TriggerDeploymentInput): DeploymentSpec {

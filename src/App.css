@@ -481,7 +481,7 @@ button:disabled {
 .topbar-actions {
   color: var(--muted);
   font-size: 12px;
-  gap: 9px;
+  gap: 20px;
 }
 
 .topbar-release-button {

@@ -348,6 +348,78 @@ export type ReleaseControlRoomState = Pick<
   | 'fetchedAt'
 >
 
+export type ReleaseControlSyncError = {
+  code: string
+  message: string
+  provider?: 'jira' | 'github' | 'jenkins'
+  retryable: boolean
+}
+
+export type ReleaseControlSyncResult = {
+  repository: string
+  state?: ReleaseControlRoomState
+  error?: ReleaseControlSyncError
+}
+
+export type ReleaseControlSyncStats = {
+  durationMs: number
+  cacheHits: number
+  graphqlRequests: number
+  restRequests: number
+  fallbackCount: number
+}
+
+export type ReleaseControlSyncResponse = {
+  results: ReleaseControlSyncResult[]
+  fetchedAt: string
+  stats: ReleaseControlSyncStats
+  githubRateLimit?: RateLimit
+}
+
+export type ReleaseControlProviderSyncStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+
+export type ReleaseControlSyncStep =
+  | 'queued'
+  | 'github-metadata'
+  | 'github-branches'
+  | 'github-fallback'
+  | 'github-ready'
+  | 'github-failed'
+  | 'jenkins-loading'
+  | 'jenkins-ready'
+  | 'jenkins-failed'
+  | 'complete'
+
+export type ReleaseControlServiceSyncProgress = {
+  repository: string
+  status: 'queued' | 'syncing' | 'synced' | 'failed'
+  stage: 'queued' | 'github' | 'jenkins' | 'complete'
+  step: ReleaseControlSyncStep
+  githubStep: ReleaseControlSyncStep
+  jenkinsStep: ReleaseControlSyncStep
+  message: string
+  /** Fractional completion for this service, from 0 to 1. */
+  weight: number
+  github: ReleaseControlProviderSyncStatus
+  jenkins: ReleaseControlProviderSyncStatus
+  updatedAt: string
+}
+
+export type ReleaseControlSyncProgress = {
+  progressId: string
+  status: 'running' | 'completed'
+  total: number
+  completed: number
+  /** Aggregate 0–100 progress across weighted service steps. */
+  percent: number
+  services: ReleaseControlServiceSyncProgress[]
+  updatedAt: string
+}
+
 export type RepositoryReleaseHistory = {
   repository: string
   stagingReleases: TrackedStagingRelease[]
@@ -427,6 +499,15 @@ export type JenkinsDeployedTag = {
 export type RepositoryDeploymentStatus = {
   deployedTags: JenkinsDeployedTag[]
   deploymentLookupFailed: boolean
+}
+
+export type RepositoryDeploymentStatusResult = RepositoryDeploymentStatus & {
+  repository: string
+}
+
+export type RepositoryDeploymentStatusResponse = {
+  results: RepositoryDeploymentStatusResult[]
+  fetchedAt: string
 }
 
 export type TriggerDeploymentInput = {

@@ -7,6 +7,8 @@ import type {
   ApiErrorBody,
   ConnectionConfig,
   ConnectionStatus,
+  ReleaseControlSyncResponse,
+  RepositoryDeploymentStatusResponse,
 } from '../src/shared/types.js'
 import {
   clearConnection,
@@ -29,6 +31,7 @@ import {
   createPromotionPullRequest,
   getReleaseBuildStatuses,
   getReleaseControlRoomState,
+  getReleaseControlRoomStatesBatch,
   getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   getRepositoryRisks,
@@ -46,6 +49,7 @@ import {
 } from './providers/jira.js'
 import {
   getCurrentDeployments,
+  getCurrentDeploymentsBatch,
   getCurrentProductionDeployments,
   getDeploymentQueueStatus,
   getProductionDeploymentBuildStatus,
@@ -65,6 +69,12 @@ import {
   getDashboardProgress,
   setDashboardProgress,
 } from './services/dashboardProgress.js'
+import {
+  completeControlRoomSyncProgress,
+  createControlRoomSyncProgress,
+  getControlRoomSyncProgress,
+  updateControlRoomProviderProgress,
+} from './services/controlRoomSyncProgress.js'
 
 const connectionSchema = z.object({
   jiraSite: z
@@ -190,6 +200,14 @@ const productionDeploymentSchema = z
 
 const repositoryRisksSchema = z.object({
   repositories: z.array(repositorySchema).max(100),
+})
+const repositoryBatchSchema = z.object({
+  repositories: z.array(repositorySchema).min(1).max(100),
+  forceRefresh: z.boolean().optional().default(false),
+  progressId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{8,80}$/)
+    .optional(),
 })
 const releaseBuildStatusesSchema = z.object({
   releases: z
@@ -642,6 +660,128 @@ export function createApp() {
     })
   })
 
+  app.get(
+    '/api/github/release-control-sync-progress/:progressId',
+    (request, response) => {
+      const { progressId } = request.params
+      if (!/^[A-Za-z0-9_-]{8,80}$/.test(progressId)) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_PROGRESS_ID',
+            message: 'A valid control-room progress ID is required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      const current = getControlRoomSyncProgress(progressId)
+      if (!current) {
+        response.status(404).json({
+          error: {
+            code: 'SYNC_PROGRESS_NOT_FOUND',
+            message: 'Control-room synchronization progress was not found.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json(current)
+    },
+  )
+
+  app.post('/api/github/release-control-states', async (request, response) => {
+    const parsed = repositoryBatchSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORIES',
+          message: 'Provide between 1 and 100 valid repositories.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    const startedAt = performance.now()
+    const config = requireConnection()
+    const repositories = [...new Set(parsed.data.repositories)]
+    const progressId = parsed.data.progressId
+    if (progressId) {
+      createControlRoomSyncProgress(progressId, repositories)
+      for (const repository of repositories) {
+        updateControlRoomProviderProgress(
+          progressId,
+          repository,
+          'jenkins',
+          'running',
+          'Loading deployment status from Jenkins.',
+          'jenkins-loading',
+        )
+      }
+    }
+    const [github, deployments] = await Promise.all([
+      getReleaseControlRoomStatesBatch(
+        config,
+        repositories,
+        parsed.data.forceRefresh,
+        progressId
+          ? (repository, status, message, step) =>
+              updateControlRoomProviderProgress(
+                progressId,
+                repository,
+                'github',
+                status,
+                message,
+                step,
+              )
+          : undefined,
+      ),
+      getCurrentDeploymentsBatch(
+        config,
+        repositories,
+        parsed.data.forceRefresh,
+      ).then((results) => {
+        if (progressId) {
+          for (const result of results) {
+            updateControlRoomProviderProgress(
+              progressId,
+              result.repository,
+              'jenkins',
+              result.deploymentLookupFailed ? 'failed' : 'succeeded',
+              result.deploymentLookupFailed
+                ? 'Jenkins deployment status is unavailable.'
+                : 'Jenkins deployment status is ready.',
+              result.deploymentLookupFailed
+                ? 'jenkins-failed'
+                : 'jenkins-ready',
+            )
+          }
+        }
+        return results
+      }),
+    ])
+    const deploymentsByRepository = new Map(
+      deployments.map((deployment) => [deployment.repository, deployment]),
+    )
+    if (progressId) completeControlRoomSyncProgress(progressId)
+    const durationMs = Math.round(performance.now() - startedAt)
+    response.setHeader('Server-Timing', `release-control-sync;dur=${durationMs}`)
+    response.json({
+      results: github.results.map((result) => {
+        if (!result.state) return result
+        const deployment = deploymentsByRepository.get(result.repository)
+        return {
+          repository: result.repository,
+          state: {
+            ...result.state,
+            deployedTags: deployment?.deployedTags ?? [],
+            deploymentLookupFailed:
+              deployment?.deploymentLookupFailed ?? true,
+          },
+        }
+      }),
+      fetchedAt: new Date().toISOString(),
+      stats: { ...github.stats, durationMs },
+      githubRateLimit: github.githubRateLimit,
+    } satisfies ReleaseControlSyncResponse)
+  })
+
   app.get('/api/jenkins/deployment-status', async (request, response) => {
     const parsed = repositorySchema.safeParse(request.query.repository)
     if (!parsed.success) {
@@ -662,6 +802,27 @@ export function createApp() {
       deployedTags: deploymentResult.deployedTags,
       deploymentLookupFailed: deploymentResult.failed,
     })
+  })
+
+  app.post('/api/jenkins/deployment-statuses', async (request, response) => {
+    const parsed = repositoryBatchSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORIES',
+          message: 'Provide between 1 and 100 valid repositories.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json({
+      results: await getCurrentDeploymentsBatch(
+        requireConnection(),
+        parsed.data.repositories,
+        parsed.data.forceRefresh,
+      ),
+      fetchedAt: new Date().toISOString(),
+    } satisfies RepositoryDeploymentStatusResponse)
   })
 
   app.get('/api/github/release-history', async (request, response) => {

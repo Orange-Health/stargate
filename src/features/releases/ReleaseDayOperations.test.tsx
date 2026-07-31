@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type {
   PromotionStep,
+  ReleaseControlSyncResponse,
   ReleaseDashboard,
   RepositoryReleaseState,
 } from '../../shared/types'
@@ -102,6 +103,37 @@ describe('ReleaseDayOperations', () => {
     vi.spyOn(api, 'releaseControlState').mockImplementation((repository) =>
       api.repositoryState(repository),
     )
+    vi.spyOn(api, 'releaseControlStates').mockImplementation(
+      async (repositories) => ({
+        results: await Promise.all(
+          repositories.map(async (repositoryName) => ({
+            repository: repositoryName,
+            state: await api.repositoryState(repositoryName),
+          })),
+        ),
+        fetchedAt: new Date().toISOString(),
+        stats: {
+          durationMs: 1,
+          cacheHits: 0,
+          graphqlRequests: 1,
+          restRequests: repositories.length * 3,
+          fallbackCount: 0,
+        },
+      }),
+    )
+    vi.spyOn(api, 'releaseControlSyncProgress').mockResolvedValue({
+      progressId: 'test-progress',
+      status: 'completed',
+      total: 0,
+      completed: 0,
+      percent: 100,
+      services: [],
+      updatedAt: new Date().toISOString(),
+    })
+    vi.spyOn(api, 'repositoryDeploymentStatuses').mockResolvedValue({
+      results: [],
+      fetchedAt: new Date().toISOString(),
+    })
   })
 
   afterEach(() => vi.restoreAllMocks())
@@ -167,7 +199,7 @@ describe('ReleaseDayOperations', () => {
     )
 
     await user.click(
-      screen.getByRole('button', { name: 'Mark all tickets as released' }),
+      screen.getByRole('button', { name: 'Mark tickets as released' }),
     )
 
     expect(
@@ -843,7 +875,13 @@ describe('ReleaseDayOperations', () => {
     await waitFor(() =>
       expect(within(row as HTMLElement).getAllByText('Merged')).toHaveLength(2),
     )
-    expect(refreshRepository).toHaveBeenCalledWith(repository)
+    expect(api.releaseControlStates).toHaveBeenCalledWith(
+      [repository],
+      true,
+      expect.any(String),
+      expect.any(AbortSignal),
+    )
+    expect(refreshRepository).not.toHaveBeenCalled()
   })
 
   it('restores repository state from the one-minute local cache', async () => {
@@ -884,7 +922,7 @@ describe('ReleaseDayOperations', () => {
     expect(repositoryStateRequest).not.toHaveBeenCalled()
   })
 
-  it('updates each table row as bulk synchronization completes', async () => {
+  it('updates all rows from one bulk synchronization response', async () => {
     const secondRepository = 'Orange-Health/service-web'
     const twoServiceDashboard: ReleaseDashboard = {
       ...dashboard,
@@ -919,7 +957,9 @@ describe('ReleaseDayOperations', () => {
     const secondRow = screen.getByText(secondRepository).closest('tr')
     expect(firstRow).not.toBeNull()
     expect(secondRow).not.toBeNull()
-    expect(within(firstRow as HTMLElement).getAllByText('Ready')).toHaveLength(2)
+    expect(
+      within(firstRow as HTMLElement).getAllByText('Checking'),
+    ).toHaveLength(2)
     expect(
       within(secondRow as HTMLElement).getAllByText('Checking'),
     ).toHaveLength(2)
@@ -929,6 +969,152 @@ describe('ReleaseDayOperations', () => {
         repositoryState('needs_pr', 'needs_pr', secondRepository),
       )
     })
+    await waitFor(() =>
+      expect(within(firstRow as HTMLElement).getAllByText('Ready')).toHaveLength(
+        2,
+      ),
+    )
+    expect(api.releaseControlStates).toHaveBeenCalledWith(
+      [repository, secondRepository],
+      false,
+      expect.any(String),
+      expect.any(AbortSignal),
+    )
+    expect(api.releaseControlStates).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows granular per-service progress while the batch is running', async () => {
+    const secondRepository = 'Orange-Health/service-web'
+    const twoServiceDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        dashboard.services[0],
+        { ...dashboard.services[0], repository: secondRepository },
+      ],
+    }
+    let resolveBatch!: (response: ReleaseControlSyncResponse) => void
+    vi.spyOn(api, 'releaseControlStates').mockReturnValue(
+      new Promise((resolve) => {
+        resolveBatch = resolve
+      }),
+    )
+    vi.spyOn(api, 'releaseControlSyncProgress').mockResolvedValue({
+      progressId: 'progress-granular-test',
+      status: 'running',
+      total: 2,
+      completed: 1,
+      percent: 74,
+      services: [
+        {
+          repository,
+          status: 'synced',
+          stage: 'complete',
+          step: 'complete',
+          githubStep: 'github-ready',
+          jenkinsStep: 'jenkins-ready',
+          weight: 1,
+          message: 'Repository state is ready.',
+          github: 'succeeded',
+          jenkins: 'succeeded',
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          repository: secondRepository,
+          status: 'syncing',
+          stage: 'github',
+          step: 'github-branches',
+          githubStep: 'github-branches',
+          jenkinsStep: 'jenkins-ready',
+          weight: 0.48,
+          message: 'Checking branches, workflows, and release state.',
+          github: 'running',
+          jenkins: 'succeeded',
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      updatedAt: new Date().toISOString(),
+    })
+
+    render(
+      <ReleaseDayOperations
+        dashboard={twoServiceDashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByText('Checking branches, workflows, and release state.'),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('progressbar', {
+        name: 'Synchronizing release control room',
+      }),
+    ).toHaveAttribute('aria-valuenow', '74')
+    expect(
+      screen.getByRole('button', { name: 'Syncing 1/2' }),
+    ).toBeDisabled()
+
+    await act(async () => {
+      resolveBatch({
+        results: [
+          {
+            repository,
+            state: repositoryState('up_to_date', 'up_to_date', repository),
+          },
+          {
+            repository: secondRepository,
+            state: repositoryState(
+              'needs_pr',
+              'needs_pr',
+              secondRepository,
+            ),
+          },
+        ],
+        fetchedAt: new Date().toISOString(),
+        stats: {
+          durationMs: 10,
+          cacheHits: 0,
+          graphqlRequests: 1,
+          restRequests: 6,
+          fallbackCount: 0,
+        },
+      })
+    })
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('progressbar', {
+          name: 'Synchronizing release control room',
+        }),
+      ).not.toBeInTheDocument(),
+    )
+    expect(screen.getByRole('button', { name: '↻ Refresh status' })).toBeEnabled()
+  })
+
+  it('falls back to bounded repository sync when batch transport fails', async () => {
+    vi.spyOn(api, 'releaseControlStates').mockRejectedValue(
+      new Error('Batch endpoint unavailable'),
+    )
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('up_to_date', 'up_to_date'),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => expect(screen.getAllByText('Merged')).toHaveLength(2))
+    expect(api.releaseControlState).toHaveBeenCalledWith(repository)
+    expect(
+      screen.getByText(
+        'Batch sync transport failed; using bounded repository sync.',
+      ),
+    ).toBeVisible()
   })
 
   it('logs existing PRs and unlocks the next phase only after merge', async () => {

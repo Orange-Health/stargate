@@ -11,6 +11,7 @@ import {
   comparisonHasSourceFileChanges,
   getReleaseBuildStatuses,
   getReleaseControlRoomState,
+  getReleaseControlRoomStatesBatch,
   getRepositoryReleaseHistory,
   getRepositoryReleaseState,
   hasActualMergeConflict,
@@ -966,6 +967,190 @@ describe('repository state cache', () => {
       ),
     ).toBe(false)
     clearRepositoryCaches(config, 'Orange-Health/service-api')
+  })
+
+  it('batches GraphQL state and falls back only a missing repository alias', async () => {
+    const repositories = [
+      'Orange-Health/service-api',
+      'Orange-Health/service-web',
+    ]
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url === 'https://api.github.com/graphql') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              r0: {
+                defaultBranchRef: { name: 'main' },
+                releases: { nodes: [] },
+                pullRequests: {
+                  nodes: [
+                    {
+                      number: 42,
+                      title: 'Promote dev to release',
+                      body: null,
+                      url: 'https://github.test/pull/42',
+                      isDraft: false,
+                      mergeable: 'MERGEABLE',
+                      mergeStateStatus: 'CLEAN',
+                      updatedAt: '2026-07-31T08:00:00Z',
+                      baseRefName: 'release',
+                      headRefName: 'dev',
+                      headRefOid: 'abc123',
+                      headRepository: {
+                        nameWithOwner: repositories[0],
+                      },
+                      reviewDecision: 'APPROVED',
+                      latestReviews: { nodes: [{ state: 'APPROVED' }] },
+                      commits: {
+                        nodes: [
+                          {
+                            commit: {
+                              statusCheckRollup: { state: 'SUCCESS' },
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+              r1: null,
+            },
+          }),
+        )
+      }
+      if (url.endsWith('/repos/Orange-Health/service-web')) {
+        return new Response(
+          JSON.stringify({
+            full_name: repositories[1],
+            default_branch: 'main',
+          }),
+        )
+      }
+      if (url.includes('/releases?')) return new Response(JSON.stringify([]))
+      if (url.includes('/actions/runs?')) {
+        return new Response(JSON.stringify({ workflow_runs: [] }))
+      }
+      if (url.includes('/pulls?')) return new Response(JSON.stringify([]))
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify(
+            url.includes('/service-api/')
+              ? { ahead_by: 1, behind_by: 0, files: [{}] }
+              : { ahead_by: 0, behind_by: 0, files: [] },
+          ),
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    for (const repository of repositories) {
+      clearRepositoryCaches(config, repository)
+    }
+
+    const result = await getReleaseControlRoomStatesBatch(config, repositories)
+
+    expect(result.results.map((item) => item.state?.repository)).toEqual(
+      repositories,
+    )
+    expect(result.results[0].state?.promotionSteps[0].pullRequest).toMatchObject(
+      {
+        number: 42,
+        reviewDecision: 'approved',
+        checks: 'success',
+      },
+    )
+    expect(result.stats).toMatchObject({
+      cacheHits: 0,
+      graphqlRequests: 1,
+      restRequests: 9,
+      fallbackCount: 1,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(10)
+    for (const repository of repositories) {
+      clearRepositoryCaches(config, repository)
+    }
+  })
+
+  it('keeps a twenty-repository cold sync within the hybrid request budget', async () => {
+    const repositories = Array.from(
+      { length: 20 },
+      (_, index) => `Orange-Health/batch-service-${index}`,
+    )
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url === 'https://api.github.com/graphql') {
+        const body = JSON.parse(String(init?.body)) as {
+          variables: Record<string, string>
+        }
+        const names = Object.entries(body.variables)
+          .filter(([key]) => key.startsWith('name'))
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([, value]) => value)
+        return new Response(
+          JSON.stringify({
+            data: Object.fromEntries(
+              names.map((_, index) => [
+                `r${index}`,
+                {
+                  defaultBranchRef: { name: 'main' },
+                  releases: { nodes: [] },
+                  pullRequests: { nodes: [] },
+                },
+              ]),
+            ),
+          }),
+        )
+      }
+      if (url.includes('/actions/runs?')) {
+        return new Response(JSON.stringify({ workflow_runs: [] }))
+      }
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    for (const repository of repositories) {
+      clearRepositoryCaches(config, repository)
+    }
+
+    const result = await getReleaseControlRoomStatesBatch(config, repositories)
+
+    expect(result.results).toHaveLength(20)
+    expect(result.results.every((item) => item.state)).toBe(true)
+    expect(result.stats).toMatchObject({
+      graphqlRequests: 2,
+      restRequests: 60,
+      fallbackCount: 0,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(62)
+    for (const repository of repositories) {
+      clearRepositoryCaches(config, repository)
+    }
   })
 
   it('coalesces reads and treats history-only differences as up to date', async () => {

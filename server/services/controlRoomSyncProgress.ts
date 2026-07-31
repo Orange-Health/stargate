@@ -1,0 +1,284 @@
+import type {
+  ReleaseControlProviderSyncStatus,
+  ReleaseControlServiceSyncProgress,
+  ReleaseControlSyncProgress,
+  ReleaseControlSyncStep,
+} from '../../src/shared/types.js'
+
+const PROGRESS_TTL_MS = 5 * 60_000
+const progress = new Map<string, ReleaseControlSyncProgress>()
+const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** GitHub work is ~70% of a service; Jenkins is the remaining ~30%. */
+const GITHUB_WEIGHT: Partial<Record<ReleaseControlSyncStep, number>> = {
+  queued: 0,
+  'github-metadata': 0.22,
+  'github-branches': 0.48,
+  'github-fallback': 0.48,
+  'github-ready': 0.7,
+  'github-failed': 0.7,
+  complete: 0.7,
+}
+
+const JENKINS_WEIGHT: Partial<Record<ReleaseControlSyncStep, number>> = {
+  queued: 0,
+  'jenkins-loading': 0.12,
+  'jenkins-ready': 0.3,
+  'jenkins-failed': 0.3,
+  complete: 0.3,
+}
+
+function scheduleExpiry(progressId: string) {
+  const currentTimer = expiryTimers.get(progressId)
+  if (currentTimer) clearTimeout(currentTimer)
+  const timer = setTimeout(() => {
+    progress.delete(progressId)
+    expiryTimers.delete(progressId)
+  }, PROGRESS_TTL_MS)
+  timer.unref()
+  expiryTimers.set(progressId, timer)
+}
+
+function providerTerminal(status: ReleaseControlProviderSyncStatus) {
+  return status === 'succeeded' || status === 'failed'
+}
+
+function githubStepFromUpdate(
+  status: ReleaseControlProviderSyncStatus,
+  step?: ReleaseControlSyncStep,
+): ReleaseControlSyncStep {
+  if (status === 'failed') return 'github-failed'
+  if (status === 'succeeded') return 'github-ready'
+  if (
+    step === 'github-metadata' ||
+    step === 'github-branches' ||
+    step === 'github-fallback'
+  ) {
+    return step
+  }
+  return 'github-metadata'
+}
+
+function jenkinsStepFromUpdate(
+  status: ReleaseControlProviderSyncStatus,
+): ReleaseControlSyncStep {
+  if (status === 'failed') return 'jenkins-failed'
+  if (status === 'succeeded') return 'jenkins-ready'
+  return 'jenkins-loading'
+}
+
+function serviceWeight(
+  githubStep: ReleaseControlSyncStep,
+  jenkinsStep: ReleaseControlSyncStep,
+  status: ReleaseControlServiceSyncProgress['status'],
+) {
+  if (status === 'synced' || status === 'failed') return 1
+  return Math.min(
+    1,
+    (GITHUB_WEIGHT[githubStep] ?? 0) + (JENKINS_WEIGHT[jenkinsStep] ?? 0),
+  )
+}
+
+function stageFromStep(
+  step: ReleaseControlSyncStep,
+  status: ReleaseControlServiceSyncProgress['status'],
+): ReleaseControlServiceSyncProgress['stage'] {
+  if (status === 'synced' || status === 'failed' || step === 'complete') {
+    return 'complete'
+  }
+  if (step.startsWith('jenkins')) return 'jenkins'
+  if (step.startsWith('github')) return 'github'
+  return 'queued'
+}
+
+function deriveServiceProgress(
+  current: ReleaseControlServiceSyncProgress,
+  provider: 'github' | 'jenkins',
+  providerStatus: ReleaseControlProviderSyncStatus,
+  message: string,
+  step?: ReleaseControlSyncStep,
+): ReleaseControlServiceSyncProgress {
+  const github =
+    provider === 'github' ? providerStatus : current.github
+  const jenkins =
+    provider === 'jenkins' ? providerStatus : current.jenkins
+  const githubStep =
+    provider === 'github'
+      ? githubStepFromUpdate(providerStatus, step)
+      : current.githubStep
+  const jenkinsStep =
+    provider === 'jenkins'
+      ? jenkinsStepFromUpdate(providerStatus)
+      : current.jenkinsStep
+  const githubDone = providerTerminal(github)
+  const jenkinsDone = providerTerminal(jenkins)
+  const status =
+    github === 'failed'
+      ? 'failed'
+      : githubDone && jenkinsDone
+        ? 'synced'
+        : github === 'running' ||
+            jenkins === 'running' ||
+            githubDone ||
+            jenkinsDone
+          ? 'syncing'
+          : 'queued'
+  const resolvedStep =
+    status === 'synced' || status === 'failed'
+      ? 'complete'
+      : provider === 'github'
+        ? githubStep
+        : jenkinsStep
+  const finalMessage =
+    status === 'synced' && jenkins === 'failed'
+      ? 'Repository synced; Jenkins deployment status is unavailable.'
+      : message
+  return {
+    ...current,
+    github,
+    jenkins,
+    githubStep,
+    jenkinsStep,
+    status,
+    stage: stageFromStep(resolvedStep, status),
+    step: resolvedStep,
+    weight: serviceWeight(githubStep, jenkinsStep, status),
+    message: finalMessage,
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+function summarize(services: ReleaseControlServiceSyncProgress[]) {
+  const completed = services.filter(
+    (service) => service.status === 'synced' || service.status === 'failed',
+  ).length
+  const totalWeight = services.reduce((sum, service) => sum + service.weight, 0)
+  const percent =
+    services.length === 0
+      ? 0
+      : Math.min(100, Math.round((totalWeight / services.length) * 100))
+  return {
+    completed,
+    percent,
+    status: (completed === services.length ? 'completed' : 'running') as
+      | 'running'
+      | 'completed',
+  }
+}
+
+export function createControlRoomSyncProgress(
+  progressId: string,
+  repositories: string[],
+) {
+  const updatedAt = new Date().toISOString()
+  progress.set(progressId, {
+    progressId,
+    status: 'running',
+    total: repositories.length,
+    completed: 0,
+    percent: 0,
+    services: repositories.map((repository) => ({
+      repository,
+      status: 'queued',
+      stage: 'queued',
+      step: 'queued',
+      githubStep: 'queued',
+      jenkinsStep: 'queued',
+      message: 'Queued for synchronization.',
+      weight: 0,
+      github: 'queued',
+      jenkins: 'queued',
+      updatedAt,
+    })),
+    updatedAt,
+  })
+  scheduleExpiry(progressId)
+}
+
+export function updateControlRoomProviderProgress(
+  progressId: string,
+  repository: string,
+  provider: 'github' | 'jenkins',
+  providerStatus: ReleaseControlProviderSyncStatus,
+  message: string,
+  step?: ReleaseControlSyncStep,
+) {
+  const current = progress.get(progressId)
+  if (!current) return
+  const services = current.services.map((service) => {
+    if (service.repository !== repository) return service
+    return deriveServiceProgress(
+      service,
+      provider,
+      providerStatus,
+      message,
+      step,
+    )
+  })
+  const summary = summarize(services)
+  progress.set(progressId, {
+    ...current,
+    ...summary,
+    services,
+    updatedAt: new Date().toISOString(),
+  })
+  scheduleExpiry(progressId)
+}
+
+export function getControlRoomSyncProgress(progressId: string) {
+  return progress.get(progressId)
+}
+
+export function completeControlRoomSyncProgress(progressId: string) {
+  const current = progress.get(progressId)
+  if (!current) return
+  const services = current.services.map((service) => {
+    if (service.status === 'synced' || service.status === 'failed') {
+      return {
+        ...service,
+        weight: 1,
+        step: 'complete' as const,
+        stage: 'complete' as const,
+        githubStep: service.github === 'failed' ? 'github-failed' as const : 'github-ready' as const,
+        jenkinsStep:
+          service.jenkins === 'failed'
+            ? 'jenkins-failed' as const
+            : 'jenkins-ready' as const,
+      }
+    }
+    const github =
+      service.github === 'failed' || service.github === 'succeeded'
+        ? service.github
+        : ('succeeded' as const)
+    const jenkins =
+      service.jenkins === 'failed' || service.jenkins === 'succeeded'
+        ? service.jenkins
+        : ('succeeded' as const)
+    return deriveServiceProgress(
+      {
+        ...service,
+        github,
+        jenkins,
+        githubStep:
+          github === 'failed' ? 'github-failed' : 'github-ready',
+        jenkinsStep:
+          jenkins === 'failed' ? 'jenkins-failed' : 'jenkins-ready',
+      },
+      'github',
+      github,
+      service.github === 'failed'
+        ? service.message
+        : 'Synchronization finished.',
+      github === 'failed' ? 'github-failed' : 'github-ready',
+    )
+  })
+  progress.set(progressId, {
+    ...current,
+    status: 'completed',
+    completed: services.length,
+    percent: 100,
+    services,
+    updatedAt: new Date().toISOString(),
+  })
+  scheduleExpiry(progressId)
+}

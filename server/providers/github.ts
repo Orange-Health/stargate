@@ -422,12 +422,12 @@ function recordGitHubRateLimit(response: Response) {
   }
 }
 
-type GraphqlVariables = Record<
+export type GraphqlVariables = Record<
   string,
   string | number | boolean | null | Record<string, string | number | boolean | null>
 >
 
-async function githubGraphql<T extends Record<string, unknown>>(
+export async function githubGraphql<T extends Record<string, unknown>>(
   config: ConnectionConfig,
   query: string,
   variables: GraphqlVariables,
@@ -472,6 +472,10 @@ async function githubGraphql<T extends Record<string, unknown>>(
     502,
     false,
   )
+}
+
+export function getLatestGitHubRateLimit() {
+  return latestRateLimit
 }
 
 export type GraphqlMergeMethod = 'MERGE' | 'SQUASH' | 'REBASE'

@@ -13,6 +13,9 @@ import type {
   ReleaseBuildStatusInput,
   ReleaseBuildStatusResult,
   ReleaseControlRoomState,
+  ReleaseControlSyncResult,
+  ReleaseControlSyncStats,
+  ReleaseControlSyncStep,
   RepositoryReleaseHistory,
   RepositoryReleaseState,
   RepositoryPullRequestList,
@@ -27,6 +30,8 @@ import { ProviderError } from '../errors.js'
 import {
   clearGitHubProviderCache,
   githubApi,
+  githubGraphql,
+  getLatestGitHubRateLimit,
   mergePullRequestViaGraphql,
   repositoryPath,
 } from './github.js'
@@ -80,6 +85,55 @@ type GitHubPull = {
   }
 }
 
+type ControlRoomGraphqlPull = {
+  number: number
+  title: string
+  body: string | null
+  url: string
+  isDraft: boolean
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
+  mergeStateStatus: string
+  updatedAt: string
+  baseRefName: string
+  headRefName: string
+  headRefOid: string
+  headRepository: { nameWithOwner: string } | null
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+  latestReviews: {
+    nodes: Array<{
+      state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED'
+    }>
+  }
+  commits: {
+    nodes: Array<{
+      commit: { statusCheckRollup: { state: string } | null }
+    }>
+  }
+}
+
+type ControlRoomGraphqlRepository = {
+  defaultBranchRef: { name: string } | null
+  releases: {
+    nodes: Array<{
+      databaseId: number
+      tagName: string
+      url: string
+      isPrerelease: boolean
+      createdAt: string
+      publishedAt: string | null
+      description: string | null
+    }>
+  }
+  pullRequests: { nodes: ControlRoomGraphqlPull[] }
+} | null
+
+type ControlRoomGraphqlSnapshot = {
+  defaultBranch: string
+  releases: GitHubRelease[]
+  openPulls: GitHubPull[]
+  pullDetails: Map<number, PromotionPullRequest>
+}
+
 type GitHubReview = {
   user: { login: string }
   state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
@@ -98,6 +152,7 @@ const stagingTagPattern =
 const productionTagPattern = /^(?:v-prod-|v-?)\d{2}\.\d{4}\.\d+$/
 const RISK_CACHE_MS = 45_000
 const REPOSITORY_STATE_CACHE_MS = 30_000
+const CONTROL_ROOM_GRAPHQL_BATCH_SIZE = 10
 type BackMergeRiskStatus = {
   pendingPulls: PendingBackMerge[]
   outdated: boolean
@@ -448,21 +503,11 @@ async function listTrackedReleases(
   return { stagingReleases, productionReleases }
 }
 
-async function listControlRoomProductionReleases(
-  config: ConnectionConfig,
-  repository: string,
+function controlRoomProductionReleases(
+  releases: GitHubRelease[],
+  recentRuns: GitHubWorkflowRun[],
   limit = 3,
-): Promise<TrackedProductionRelease[]> {
-  const [releases, recentRuns] = await Promise.all([
-    githubApi<GitHubRelease[]>(
-      config,
-      `/repos/${repositoryPath(repository)}/releases?per_page=30`,
-    ),
-    githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
-      config,
-      `/repos/${repositoryPath(repository)}/actions/runs?per_page=100`,
-    ).then((response) => response.workflow_runs),
-  ])
+): TrackedProductionRelease[] {
   const production = sortReleasesNewestFirst(
     releases.filter(
       (release) =>
@@ -516,6 +561,24 @@ async function listControlRoomProductionReleases(
         new Date(left.createdAt).getTime(),
     )
     .slice(0, limit)
+}
+
+async function listControlRoomProductionReleases(
+  config: ConnectionConfig,
+  repository: string,
+  limit = 3,
+): Promise<TrackedProductionRelease[]> {
+  const [releases, recentRuns] = await Promise.all([
+    githubApi<GitHubRelease[]>(
+      config,
+      `/repos/${repositoryPath(repository)}/releases?per_page=30`,
+    ),
+    githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
+      config,
+      `/repos/${repositoryPath(repository)}/actions/runs?per_page=100`,
+    ).then((response) => response.workflow_runs),
+  ])
+  return controlRoomProductionReleases(releases, recentRuns, limit)
 }
 
 export async function getRepositoryReleaseHistory(
@@ -604,6 +667,52 @@ function checksStatus(checks: GitHubChecks): CheckStatus {
   )
     ? 'failure'
     : 'success'
+}
+
+function graphqlReviewDecision(
+  decision: ControlRoomGraphqlPull['reviewDecision'],
+  reviews: ControlRoomGraphqlPull['latestReviews']['nodes'],
+): ReviewDecision {
+  if (decision === 'APPROVED') return 'approved'
+  if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
+  if (decision === 'REVIEW_REQUIRED') return 'review_required'
+  if (reviews.some((review) => review.state === 'CHANGES_REQUESTED')) {
+    return 'changes_requested'
+  }
+  if (reviews.some((review) => review.state === 'APPROVED')) return 'approved'
+  return 'review_required'
+}
+
+function graphqlChecksStatus(state?: string): CheckStatus {
+  if (!state) return 'none'
+  if (state === 'SUCCESS') return 'success'
+  if (state === 'PENDING' || state === 'EXPECTED') return 'pending'
+  if (state === 'FAILURE' || state === 'ERROR') return 'failure'
+  return 'none'
+}
+
+function graphqlPromotionPull(pull: ControlRoomGraphqlPull): PromotionPullRequest {
+  return {
+    number: pull.number,
+    title: pull.title,
+    body: pull.body ?? undefined,
+    url: pull.url,
+    baseBranch: pull.baseRefName,
+    headBranch: pull.headRefName,
+    draft: pull.isDraft,
+    mergeable:
+      pull.mergeable === 'UNKNOWN'
+        ? null
+        : pull.mergeable === 'MERGEABLE',
+    mergeableState: pull.mergeStateStatus.toLowerCase(),
+    reviewDecision: graphqlReviewDecision(
+      pull.reviewDecision,
+      pull.latestReviews.nodes,
+    ),
+    checks: graphqlChecksStatus(
+      pull.commits.nodes[0]?.commit.statusCheckRollup?.state,
+    ),
+  }
 }
 
 async function promotionPullDetails(
@@ -830,6 +939,7 @@ async function promotionStep(
   defaultBranch: string,
   sharedOpenPulls?: GitHubPull[],
   includePreviousTemplate = true,
+  sharedPullDetails?: Map<number, PromotionPullRequest>,
 ): Promise<PromotionStep> {
   const { fromBranch, toBranch } = promotionBranches(route, defaultBranch)
   const [comparison, openPulls] = await Promise.all([
@@ -870,7 +980,8 @@ async function promotionStep(
       ? 'pr_open'
       : 'needs_pr',
     pullRequest: hasFileChanges && openPull
-      ? await promotionPullDetails(config, repository, openPull)
+      ? sharedPullDetails?.get(openPull.number) ??
+        (await promotionPullDetails(config, repository, openPull))
       : undefined,
     previousTemplate: previous
       ? {
@@ -1115,6 +1226,189 @@ export function getRepositoryReleaseState(
   return value
 }
 
+function chunkValues<T>(values: T[], size: number) {
+  const chunks: T[][] = []
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size))
+  }
+  return chunks
+}
+
+async function fetchControlRoomGraphqlBatch(
+  config: ConnectionConfig,
+  repositories: string[],
+): Promise<Map<string, ControlRoomGraphqlSnapshot>> {
+  const declarations: string[] = []
+  const selections: string[] = []
+  const variables: Record<string, string> = {}
+  repositories.forEach((repository, index) => {
+    const [owner, name] = repository.split('/')
+    declarations.push(`$owner${index}: String!`, `$name${index}: String!`)
+    variables[`owner${index}`] = owner
+    variables[`name${index}`] = name
+    selections.push(`
+      r${index}: repository(owner: $owner${index}, name: $name${index}) {
+        defaultBranchRef { name }
+        releases(first: 30, orderBy: { field: CREATED_AT, direction: DESC }) {
+          nodes {
+            databaseId
+            tagName
+            url
+            isPrerelease
+            createdAt
+            publishedAt
+            description
+          }
+        }
+        pullRequests(
+          first: 100
+          states: OPEN
+          orderBy: { field: UPDATED_AT, direction: DESC }
+        ) {
+          nodes {
+            number
+            title
+            body
+            url
+            isDraft
+            mergeable
+            mergeStateStatus
+            updatedAt
+            baseRefName
+            headRefName
+            headRefOid
+            headRepository { nameWithOwner }
+            author { login }
+            reviewDecision
+            latestReviews(first: 50) {
+              nodes { state }
+            }
+            commits(last: 1) {
+              nodes { commit { statusCheckRollup { state } } }
+            }
+          }
+        }
+      }
+    `)
+  })
+  const data = await githubGraphql<Record<string, ControlRoomGraphqlRepository>>(
+    config,
+    `query (${declarations.join(', ')}) { ${selections.join('\n')} }`,
+    variables,
+  )
+  const snapshots = new Map<string, ControlRoomGraphqlSnapshot>()
+  repositories.forEach((repository, index) => {
+    const node = data[`r${index}`]
+    const defaultBranch = node?.defaultBranchRef?.name
+    if (!node || !defaultBranch) return
+    const openPulls: GitHubPull[] = node.pullRequests.nodes.map((pull) => ({
+      number: pull.number,
+      node_id: '',
+      title: pull.title,
+      body: pull.body,
+      html_url: pull.url,
+      draft: pull.isDraft,
+      state: 'open',
+      merged_at: null,
+      mergeable:
+        pull.mergeable === 'UNKNOWN'
+          ? null
+          : pull.mergeable === 'MERGEABLE',
+      mergeable_state: pull.mergeStateStatus.toLowerCase(),
+      updated_at: pull.updatedAt,
+      user: { login: '' },
+      base: { ref: pull.baseRefName },
+      head: {
+        ref: pull.headRefName,
+        sha: pull.headRefOid,
+        repo: pull.headRepository
+          ? { full_name: pull.headRepository.nameWithOwner }
+          : null,
+      },
+    }))
+    snapshots.set(repository, {
+      defaultBranch,
+      releases: node.releases.nodes.map((release) => ({
+        id: release.databaseId,
+        tag_name: release.tagName,
+        html_url: release.url,
+        prerelease: release.isPrerelease,
+        created_at: release.createdAt,
+        published_at: release.publishedAt,
+        body: release.description,
+      })),
+      openPulls,
+      pullDetails: new Map(
+        node.pullRequests.nodes.map((pull) => [
+          pull.number,
+          graphqlPromotionPull(pull),
+        ]),
+      ),
+    })
+  })
+  return snapshots
+}
+
+async function loadReleaseControlRoomStateFromSnapshot(
+  config: ConnectionConfig,
+  repository: string,
+  snapshot: ControlRoomGraphqlSnapshot,
+): Promise<ReleaseControlRoomState> {
+  const recentRuns = await githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
+    config,
+    `/repos/${repositoryPath(repository)}/actions/runs?per_page=100`,
+  ).then((response) => response.workflow_runs)
+  const productionReleases = await controlRoomProductionReleases(
+    snapshot.releases,
+    recentRuns,
+  )
+  const promotionSteps = await Promise.all([
+    promotionStep(
+      config,
+      repository,
+      'dev-to-release',
+      snapshot.defaultBranch,
+      snapshot.openPulls,
+      false,
+      snapshot.pullDetails,
+    ),
+    promotionStep(
+      config,
+      repository,
+      'release-to-default',
+      snapshot.defaultBranch,
+      snapshot.openPulls,
+      false,
+      snapshot.pullDetails,
+    ),
+  ])
+  const tagDelta = await latestProductionTagDelta(
+    config,
+    repository,
+    snapshot.defaultBranch,
+    productionReleases,
+  )
+  return {
+    repository,
+    defaultBranch: snapshot.defaultBranch,
+    productionReleases,
+    latestProductionTagDelta: tagDelta,
+    deployedTags: [],
+    deploymentLookupFailed: false,
+    productionReady: promotionSteps.some(
+      (step) =>
+        step.route === 'release-to-default' &&
+        (step.filesChanged === 0 ||
+          (step.filesChanged === undefined &&
+            step.commitsAhead === 0 &&
+            step.commitsBehind === 0)),
+    ),
+    promotionSteps,
+    jenkinsServices: servicesForRepository(repository),
+    fetchedAt: new Date().toISOString(),
+  }
+}
+
 async function loadReleaseControlRoomState(
   config: ConnectionConfig,
   repository: string,
@@ -1188,6 +1482,188 @@ export function getReleaseControlRoomState(
   })
   value.catch(() => controlRoomStateCache.delete(key))
   return value
+}
+
+function releaseControlSyncError(reason: unknown) {
+  if (reason instanceof ProviderError) {
+    return {
+      code: reason.code,
+      message: reason.message,
+      provider: reason.provider,
+      retryable: reason.retryable,
+    }
+  }
+  return {
+    code: 'INTERNAL_ERROR',
+    message:
+      reason instanceof Error
+        ? reason.message
+        : 'Could not synchronize repository state.',
+    retryable: false,
+  }
+}
+
+export async function getReleaseControlRoomStatesBatch(
+  config: ConnectionConfig,
+  requestedRepositories: string[],
+  forceRefresh = false,
+  reportProgress?: (
+    repository: string,
+    status: 'running' | 'succeeded' | 'failed',
+    message: string,
+    step?: ReleaseControlSyncStep,
+  ) => void,
+): Promise<{
+  results: ReleaseControlSyncResult[]
+  stats: ReleaseControlSyncStats
+  githubRateLimit: ReturnType<typeof getLatestGitHubRateLimit>
+}> {
+  const startedAt = performance.now()
+  const repositories = [...new Set(requestedRepositories)]
+  const results = new Map<string, ReleaseControlSyncResult>()
+  const misses: string[] = []
+  let cacheHits = 0
+  let graphqlRequests = 0
+  let restRequests = 0
+  let fallbackCount = 0
+  const hybridEnabled = process.env.RELEASE_CONTROL_SYNC_MODE !== 'legacy'
+
+  for (const repository of repositories) {
+    assertConnectedRepository(config, repository)
+    if (forceRefresh) clearRepositoryCaches(config, repository, [], true)
+    const key = `${config.githubOrg}:${repository}`.toLowerCase()
+    const cached = controlRoomStateCache.get(key)
+    if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+      try {
+        results.set(repository, {
+          repository,
+          state: await cached.value,
+        })
+        cacheHits += 1
+        reportProgress?.(
+          repository,
+          'succeeded',
+          'GitHub state loaded from the recent cache.',
+          'github-ready',
+        )
+        continue
+      } catch {
+        controlRoomStateCache.delete(key)
+      }
+    }
+    misses.push(repository)
+  }
+
+  await Promise.all(
+    chunkValues(misses, CONTROL_ROOM_GRAPHQL_BATCH_SIZE).map(async (chunk) => {
+      let snapshots = new Map<string, ControlRoomGraphqlSnapshot>()
+      if (hybridEnabled) {
+        for (const repository of chunk) {
+          reportProgress?.(
+            repository,
+            'running',
+            'Loading repository metadata and pull requests from GitHub.',
+            'github-metadata',
+          )
+        }
+        graphqlRequests += 1
+        try {
+          snapshots = await fetchControlRoomGraphqlBatch(config, chunk)
+          for (const repository of chunk) {
+            if (snapshots.has(repository)) {
+              reportProgress?.(
+                repository,
+                'running',
+                'Checking branches, workflows, and release state.',
+                'github-branches',
+              )
+            }
+          }
+        } catch {
+          // Per-repository REST fallback below keeps partial batch progress.
+        }
+      }
+      await Promise.all(
+        chunk.map(async (repository) => {
+          const key = `${config.githubOrg}:${repository}`.toLowerCase()
+          const snapshot = snapshots.get(repository)
+          try {
+            let state: ReleaseControlRoomState
+            if (snapshot) {
+              reportProgress?.(
+                repository,
+                'running',
+                'Checking promotion branches and release workflows.',
+                'github-branches',
+              )
+              state = await loadReleaseControlRoomStateFromSnapshot(
+                config,
+                repository,
+                snapshot,
+              )
+              restRequests += 3 + (state.productionReleases.length ? 1 : 0)
+            } else {
+              fallbackCount += 1
+              reportProgress?.(
+                repository,
+                'running',
+                'Using the compatibility GitHub sync path.',
+                'github-fallback',
+              )
+              state = await loadReleaseControlRoomState(config, repository)
+              restRequests += 6 + (state.productionReleases.length ? 1 : 0)
+            }
+            controlRoomStateCache.set(key, {
+              expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
+              value: Promise.resolve(state),
+            })
+            results.set(repository, { repository, state })
+            reportProgress?.(
+              repository,
+              'succeeded',
+              'GitHub release and promotion state is ready.',
+              'github-ready',
+            )
+          } catch (reason) {
+            results.set(repository, {
+              repository,
+              error: releaseControlSyncError(reason),
+            })
+            reportProgress?.(
+              repository,
+              'failed',
+              reason instanceof Error
+                ? reason.message
+                : 'GitHub synchronization failed.',
+              'github-failed',
+            )
+          }
+        }),
+      )
+    }),
+  )
+
+  return {
+    results: repositories.map(
+      (repository) =>
+        results.get(repository) ?? {
+          repository,
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: 'Repository synchronization did not return a result.',
+            retryable: false,
+          },
+        },
+    ),
+    stats: {
+      durationMs: Math.round(performance.now() - startedAt),
+      cacheHits,
+      graphqlRequests,
+      restRequests,
+      fallbackCount,
+    },
+    githubRateLimit: getLatestGitHubRateLimit(),
+  }
 }
 
 export async function assertProductionBranchesIdentical(

@@ -151,6 +151,36 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_REPOSITORIES')
   })
 
+  it('validates batched control-room and deployment requests', async () => {
+    const app = createApp()
+    const controlRoom = await request(app)
+      .post('/api/github/release-control-states')
+      .send({ repositories: [] })
+    const deployments = await request(app)
+      .post('/api/jenkins/deployment-statuses')
+      .send({ repositories: ['../outside'] })
+
+    expect(controlRoom.status).toBe(400)
+    expect(controlRoom.body.error.code).toBe('INVALID_REPOSITORIES')
+    expect(deployments.status).toBe(400)
+    expect(deployments.body.error.code).toBe('INVALID_REPOSITORIES')
+  })
+
+  it('validates and reports missing control-room sync progress', async () => {
+    const app = createApp()
+    const invalid = await request(app).get(
+      '/api/github/release-control-sync-progress/bad',
+    )
+    const missing = await request(app).get(
+      '/api/github/release-control-sync-progress/progress-test-123',
+    )
+
+    expect(invalid.status).toBe(400)
+    expect(invalid.body.error.code).toBe('INVALID_PROGRESS_ID')
+    expect(missing.status).toBe(404)
+    expect(missing.body.error.code).toBe('SYNC_PROGRESS_NOT_FOUND')
+  })
+
   it('validates lightweight release build status requests', async () => {
     const response = await request(createApp())
       .post('/api/github/release-build-statuses')
