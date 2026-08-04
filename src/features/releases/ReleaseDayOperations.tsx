@@ -2919,6 +2919,9 @@ export function ReleaseDayOperations({
           repository={deployTarget.repository}
           services={deployTarget.services}
           sourceTag={deployTarget.release.tag}
+          deployedTags={
+            states[deployTarget.repository]?.deployedTags ?? []
+          }
           onDeploymentUpdated={handleProductionDeploymentUpdated}
           onClose={() => setDeployTarget(undefined)}
         />

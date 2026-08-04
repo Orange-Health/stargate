@@ -120,4 +120,69 @@ describe('ProductionDeployDialog', () => {
     )
     expect(await screen.findByText('Production deployment')).toBeVisible()
   })
+
+  it('shows a copyable currently deployed tag near the deploy button', async () => {
+    const user = userEvent.setup()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    })
+
+    render(
+      <ProductionDeployDialog
+        repository="Orange-Health/accounts"
+        services={['accounts', 'billing']}
+        sourceTag="v26.0714.2"
+        deployedTags={[
+          {
+            service: 'accounts',
+            tag: 'v26.0713.1',
+            environment: 'production',
+            buildNumber: 2201,
+            buildUrl: 'https://jenkins.test/production/2201/',
+            deployedAt: '2026-07-13T13:30:00Z',
+          },
+          {
+            service: 'billing',
+            tag: 'v26.0712.9',
+            environment: 'production',
+            buildNumber: 2190,
+            buildUrl: 'https://jenkins.test/production/2190/',
+            deployedAt: '2026-07-12T13:30:00Z',
+          },
+        ]}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Copy currently deployed tag v26.0713.1',
+      }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('button', {
+        name: 'Copy currently deployed tag v26.0712.9',
+      }),
+    ).not.toBeInTheDocument()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: /jenkins service/i }),
+      'billing',
+    )
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Copy currently deployed tag v26.0712.9',
+      }),
+    ).toBeVisible()
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Copy currently deployed tag v26.0712.9',
+      }),
+    )
+    expect(writeText).toHaveBeenCalledWith('v26.0712.9')
+  })
 })

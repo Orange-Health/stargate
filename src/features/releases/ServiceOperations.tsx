@@ -1192,6 +1192,7 @@ export function ServiceOperations({
           repository={repository}
           services={releaseState.jenkinsServices}
           sourceTag={productionDeployRelease.tag}
+          deployedTags={releaseState.deployedTags}
           onClose={() => setProductionDeployRelease(undefined)}
         />
       )}

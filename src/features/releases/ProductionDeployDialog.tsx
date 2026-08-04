@@ -1,13 +1,21 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api } from '../../shared/api'
 import { usesFrontendProductionTag } from '../../shared/productionRepositories'
-import type { TriggeredProductionDeployment } from '../../shared/types'
+import type {
+  JenkinsDeployedTag,
+  TriggeredProductionDeployment,
+} from '../../shared/types'
+import {
+  CopyableDeployedTag,
+  liveProductionTags,
+} from './CopyableDeployedTag'
 import { productionTagForFormat } from './productionTags'
 
 type Props = {
   repository: string
   services: string[]
   sourceTag?: string
+  deployedTags?: JenkinsDeployedTag[]
   onDeploymentUpdated?: (deployment: TriggeredProductionDeployment) => void
   onClose: () => void
 }
@@ -16,6 +24,7 @@ export function ProductionDeployDialog({
   repository,
   services,
   sourceTag = '',
+  deployedTags = [],
   onDeploymentUpdated,
   onClose,
 }: Props) {
@@ -266,26 +275,31 @@ export function ProductionDeployDialog({
                   {error}
                 </div>
               )}
-              <div className="dialog-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={onClose}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="primary-button"
-                  type="submit"
-                  disabled={
-                    deploying ||
-                    !service ||
-                    !imageTag ||
-                    (qaApprovalRequired && !qaName.trim())
-                  }
-                >
-                  {deploying ? 'Queuing production…' : 'Deploy production'}
-                </button>
+              <div className="production-deploy-submit">
+                {liveProductionTags(deployedTags, service).map((tag) => (
+                  <CopyableDeployedTag key={tag} tag={tag} />
+                ))}
+                <div className="dialog-actions">
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={onClose}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="primary-button"
+                    type="submit"
+                    disabled={
+                      deploying ||
+                      !service ||
+                      !imageTag ||
+                      (qaApprovalRequired && !qaName.trim())
+                    }
+                  >
+                    {deploying ? 'Queuing production…' : 'Deploy production'}
+                  </button>
+                </div>
               </div>
             </form>
           </>
