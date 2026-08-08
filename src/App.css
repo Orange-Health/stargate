@@ -801,7 +801,6 @@ button:disabled {
   height: auto;
   min-height: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
   position: relative;
   scrollbar-color: var(--line-strong) transparent;
   scrollbar-width: thin;
