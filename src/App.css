@@ -549,12 +549,27 @@ button:disabled {
 .release-picker-chevron {
   color: var(--green);
   flex: 0 0 auto;
-  font-family: var(--sans);
-  font-size: 20px;
-  letter-spacing: 0;
+  transition: transform 180ms ease;
+}
+
+.release-picker-chevron.open {
+  transform: rotate(180deg);
+}
+
+@keyframes release-picker-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .release-picker-menu {
+  animation: release-picker-menu-in 160ms ease-out;
   background: var(--paper);
   border: 1px solid var(--line-strong);
   border-radius: 12px;
@@ -569,6 +584,7 @@ button:disabled {
   padding: 6px;
   position: absolute;
   top: 100%;
+  transform-origin: top left;
   z-index: 20;
 }
 
@@ -1773,6 +1789,53 @@ button:disabled {
   border-radius: 9px;
   flex: 0 0 38px;
   min-height: 48px;
+}
+
+.all-service-detail-skeleton-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.skeleton-detail-title {
+  height: 22px;
+  width: min(42%, 220px);
+}
+
+.skeleton-detail-subtitle {
+  height: 10px;
+  width: min(34%, 180px);
+}
+
+.service-detail-tabs.skeleton-list {
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding-bottom: 10px;
+  padding-top: 10px;
+}
+
+.skeleton-detail-tab {
+  border-radius: 7px;
+  height: 24px;
+  width: 48px;
+}
+
+.skeleton-detail-tab.wide {
+  width: 78px;
+}
+
+.skeleton-detail-filter {
+  border-radius: 8px;
+  height: 34px;
+  width: 140px;
+}
+
+.skeleton-detail-action {
+  border-radius: 8px;
+  height: 34px;
+  width: 108px;
 }
 
 @keyframes skeleton-shimmer {
@@ -3121,7 +3184,29 @@ label {
   position: relative;
 }
 
+.copy-notes-menu .dropdown-chevron {
+  flex: 0 0 auto;
+  transition: transform 180ms ease;
+}
+
+.copy-notes-menu .dropdown-chevron.open {
+  transform: rotate(180deg);
+}
+
+@keyframes copy-notes-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .copy-notes-menu-panel {
+  animation: copy-notes-menu-in 150ms ease-out;
   background: var(--paper);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -3133,6 +3218,7 @@ label {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
+  transform-origin: top right;
   z-index: 20;
 }
 

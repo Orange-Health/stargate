@@ -236,9 +236,22 @@ function ReleasePicker({
             ? 'All services'
             : selected?.name ?? 'Select a release'}
         </span>
-        <span className="release-picker-chevron" aria-hidden="true">
-          {open ? '⌃' : '⌄'}
-        </span>
+        <svg
+          className={`release-picker-chevron${open ? ' open' : ''}`}
+          viewBox="0 0 16 16"
+          width="18"
+          height="18"
+          aria-hidden="true"
+          fill="none"
+        >
+          <path
+            d="M3.5 6 8 10.5 12.5 6"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </button>
       {open && (
         <div className="release-picker-menu" role="listbox">
@@ -1597,13 +1610,57 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                   )}
                 </div>
               </section>
+            ) : repositoriesLoading ? (
+              <section
+                className="detail-panel all-service-detail"
+                aria-busy="true"
+              >
+                <div
+                  className="detail-heading skeleton-list"
+                  role="status"
+                  aria-label="Loading service details"
+                >
+                  <div className="all-service-detail-skeleton-heading">
+                    <Skeleton className="skeleton-detail-title" />
+                    <Skeleton className="skeleton-detail-subtitle" />
+                  </div>
+                </div>
+                <div className="service-detail-tabs skeleton-list" aria-hidden="true">
+                  <Skeleton className="skeleton-detail-tab" />
+                  <Skeleton className="skeleton-detail-tab" />
+                  <Skeleton className="skeleton-detail-tab wide" />
+                </div>
+                <div className="repository-pr-panel skeleton-list" aria-hidden="true">
+                  <div className="repository-pr-toolbar">
+                    <Skeleton className="skeleton-detail-filter" />
+                    <Skeleton className="skeleton-detail-action" />
+                  </div>
+                  <div className="repository-pr-list">
+                    {Array.from({ length: 4 }, (_, index) => (
+                      <article
+                        className="repository-pr-row skeleton-pr-row"
+                        key={index}
+                      >
+                        <div className="repository-pr-main">
+                          <Skeleton className="skeleton-pr-title" />
+                          <div className="skeleton-pr-branches">
+                            <Skeleton className="skeleton-branch-name" />
+                            <Skeleton className="skeleton-branch-arrow" />
+                            <Skeleton className="skeleton-branch-name" />
+                          </div>
+                          <Skeleton className="skeleton-pr-meta" />
+                        </div>
+                        <Skeleton className="skeleton-action" />
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              </section>
             ) : (
-              !repositoriesLoading && (
-                <section className="detail-panel empty-state">
-                  <h2>No service selected</h2>
-                  <p>Choose a repository to manage its release operations.</p>
-                </section>
-              )
+              <section className="detail-panel empty-state">
+                <h2>No service selected</h2>
+                <p>Choose a repository to manage its release operations.</p>
+              </section>
             )}
           </div>
         )}

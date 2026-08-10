@@ -125,6 +125,10 @@ describe('ReleaseOverview', () => {
       screen.getByRole('status', { name: 'Loading services' }),
     ).toBeVisible()
     expect(document.querySelectorAll('.skeleton-card')).toHaveLength(7)
+    expect(
+      screen.getByRole('status', { name: 'Loading service details' }),
+    ).toBeVisible()
+    expect(document.querySelectorAll('.skeleton-pr-row')).toHaveLength(4)
   })
 
   it('offers release operations for repositories outside a Jira release', async () => {
