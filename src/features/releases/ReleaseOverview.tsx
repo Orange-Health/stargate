@@ -44,6 +44,41 @@ type PendingFeatureMerge = {
 
 const PINNED_REPOSITORIES_KEY = 'release-desk-pinned-repositories'
 
+function OverviewViewToggle({
+  value,
+  onChange,
+}: {
+  value: 'services' | 'tickets'
+  onChange: (view: 'services' | 'tickets') => void
+}) {
+  return (
+    <div
+      className="overview-view-toggle"
+      role="tablist"
+      aria-label="Release overview view"
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={value === 'services'}
+        className={value === 'services' ? 'active' : ''}
+        onClick={() => onChange('services')}
+      >
+        Services
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={value === 'tickets'}
+        className={value === 'tickets' ? 'active' : ''}
+        onClick={() => onChange('tickets')}
+      >
+        Tickets
+      </button>
+    </div>
+  )
+}
+
 function loadPinnedRepositories() {
   try {
     const value = JSON.parse(
@@ -1709,34 +1744,6 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               </div>
             ))}
 
-            <div
-              className="overview-view-toggle"
-              role="tablist"
-              aria-label="Release overview view"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={overviewView === 'services'}
-                className={overviewView === 'services' ? 'active' : ''}
-                onClick={() => setOverviewView('services')}
-              >
-                Services
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={overviewView === 'tickets'}
-                className={overviewView === 'tickets' ? 'active' : ''}
-                onClick={() => {
-                  setRemoveTicketError('')
-                  setOverviewView('tickets')
-                }}
-              >
-                Tickets
-              </button>
-            </div>
-
             {overviewView === 'tickets' ? (
               <ReleaseTicketsView
                 tickets={releaseTickets}
@@ -1744,6 +1751,15 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                 ticketSearch={ticketSearch}
                 selectedIssueKey={selectedIssueKey}
                 removeError={removeTicketError}
+                viewToggle={
+                  <OverviewViewToggle
+                    value={overviewView}
+                    onChange={(view) => {
+                      setRemoveTicketError('')
+                      setOverviewView(view)
+                    }}
+                  />
+                }
                 onFilterChange={setTicketFilter}
                 onSearchChange={setTicketSearch}
                 onSelectTicket={(issueKey) => {
@@ -1760,8 +1776,15 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             <div className="dashboard-grid">
               <section className="services-panel">
                 <div className="section-heading">
-                  <div>
+                  <div className="section-heading-start">
                     <h2>Services</h2>
+                    <OverviewViewToggle
+                      value={overviewView}
+                      onChange={(view) => {
+                        setRemoveTicketError('')
+                        setOverviewView(view)
+                      }}
+                    />
                   </div>
                   <span>
                     {filteredServices.length}/{visibleServices.length}

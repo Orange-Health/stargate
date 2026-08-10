@@ -99,11 +99,30 @@ type DeveloperModalState = {
 }
 
 const POLL_INTERVAL = 15_000
+const BUILD_POLL_TIMEOUT_MS = 30_000
 const MAX_CONCURRENCY = 3
 const REPOSITORY_SYNC_CONCURRENCY = 2
 const REPOSITORY_STATE_CACHE_MS = 60_000
 const SYNC_PROGRESS_POLL_MS = 500
 const SYNC_TIMEOUT_MS = 90_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error('Timed out'))
+    }, ms)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId)
+        resolve(value)
+      },
+      (reason) => {
+        window.clearTimeout(timeoutId)
+        reject(reason)
+      },
+    )
+  })
+}
 
 function productionDeploymentLabel(deployment: JenkinsDeployedTag) {
   switch (deployment.status) {
@@ -1037,76 +1056,91 @@ export function ReleaseDayOperations({
 
   useEffect(() => {
     let active = true
-    let running = false
-    let timeout: number | undefined
-    const schedule = () => {
-      if (!active || document.hidden) return
-      timeout = window.setTimeout(() => void poll(), POLL_INTERVAL)
-    }
+    let inFlight = false
     const poll = async () => {
-      if (!active || running || document.hidden) return
+      if (!active || inFlight || document.hidden) return
       const currentSession = sessionRef.current
-      const activeReleases = currentSession.selectedRepositories.flatMap(
-        (repository) => {
-          const release =
-            currentSession.repositories[repository]?.productionRelease
-          if (
-            !release ||
-            !releaseCreatedOnDate(release.createdAt, currentSession.releaseDate)
-          ) {
-            return []
-          }
-          const status = statesRef.current[
-            repository
-          ]?.productionReleases.find(
-            (item) => item.tag === release.tag,
-          )?.buildStatus
-          return status && ['succeeded', 'failed', 'canceled'].includes(status)
-            ? []
-            : [
-                {
-                  repository,
-                  tag: release.tag,
-                  createdAt: release.createdAt,
-                },
-              ]
-        },
-      )
-      running = true
+      let activeReleases: {
+        repository: string
+        tag: string
+        createdAt: string
+      }[] = []
       try {
-        const [results, deploymentResults] = await Promise.all([
-          activeReleases.length
-            ? api.releaseBuildStatuses(activeReleases, true)
-            : Promise.resolve([]),
-          api
-            .repositoryDeploymentStatuses(
-              currentSession.selectedRepositories,
-              false,
-            )
-            .then((response) =>
-              response.results.map((result) => ({
-                repository: result.repository,
-                result,
-              })),
-            )
-            .catch(() =>
-              Promise.all(
-                currentSession.selectedRepositories.map(async (repository) => {
-                  try {
-                    return {
-                      repository,
-                      result: await api.repositoryDeploymentStatus(
-                        repository,
-                        false,
-                      ),
-                    }
-                  } catch {
-                    return undefined
-                  }
-                }),
+        activeReleases = currentSession.selectedRepositories.flatMap(
+          (repository) => {
+            const release =
+              currentSession.repositories[repository]?.productionRelease
+            if (
+              !release ||
+              !releaseCreatedOnDate(
+                release.createdAt,
+                currentSession.releaseDate,
+              )
+            ) {
+              return []
+            }
+            const status = statesRef.current[
+              repository
+            ]?.productionReleases.find(
+              (item) => item.tag === release.tag,
+            )?.buildStatus
+            return status &&
+              ['succeeded', 'failed', 'canceled'].includes(status)
+              ? []
+              : [
+                  {
+                    repository,
+                    tag: release.tag,
+                    createdAt: release.createdAt,
+                  },
+                ]
+          },
+        )
+      } catch {
+        // Keep the last known build state and retry on the next interval tick.
+        return
+      }
+
+      inFlight = true
+      try {
+        const [results, deploymentResults] = await withTimeout(
+          Promise.all([
+            activeReleases.length
+              ? api.releaseBuildStatuses(activeReleases, true)
+              : Promise.resolve([]),
+            api
+              .repositoryDeploymentStatuses(
+                currentSession.selectedRepositories,
+                false,
+              )
+              .then((response) =>
+                response.results.map((result) => ({
+                  repository: result.repository,
+                  result,
+                })),
+              )
+              .catch(() =>
+                Promise.all(
+                  currentSession.selectedRepositories.map(
+                    async (repository) => {
+                      try {
+                        return {
+                          repository,
+                          result: await api.repositoryDeploymentStatus(
+                            repository,
+                            false,
+                          ),
+                        }
+                      } catch {
+                        return undefined
+                      }
+                    },
+                  ),
+                ),
               ),
-            ),
-        ])
+          ]),
+          BUILD_POLL_TIMEOUT_MS,
+        )
         if (!active) return
         setStates((current) => {
           const next = { ...current }
@@ -1152,21 +1186,19 @@ export function ReleaseDayOperations({
           return next
         })
       } catch {
-        // Keep the last known build state and retry on the next scheduled poll.
+        // Keep the last known build state and retry on the next interval tick.
       } finally {
-        running = false
-        schedule()
+        inFlight = false
       }
     }
     const visibilityChanged = () => {
-      if (timeout) window.clearTimeout(timeout)
       if (!document.hidden) void poll()
     }
     document.addEventListener('visibilitychange', visibilityChanged)
-    schedule()
+    const interval = window.setInterval(() => void poll(), POLL_INTERVAL)
     return () => {
       active = false
-      if (timeout) window.clearTimeout(timeout)
+      window.clearInterval(interval)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
   }, [])

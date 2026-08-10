@@ -1364,6 +1364,22 @@ describe('ReleaseOverview', () => {
     expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
     expect(screen.getByRole('heading', { name: 'OH-123' })).toBeVisible()
     expect(screen.getByText(/service-api #8/)).toBeVisible()
+    expect(screen.getByRole('button', { name: /^Blocked / })).toHaveAttribute(
+      'data-tooltip',
+      'Shows tickets with an open PR blocked by a hard issue such as missing review, merge conflicts, wrong base branch, or draft status.',
+    )
+    expect(
+      screen.getByRole('button', { name: /^Not merge-ready / }),
+    ).toHaveAttribute(
+      'data-tooltip',
+      'Shows tickets whose open PRs are not eligible to merge yet — including hard blockers and softer issues like pending or failed checks.',
+    )
+    expect(
+      screen.getByRole('button', { name: /^Unmatched / }),
+    ).toHaveAttribute(
+      'data-tooltip',
+      'Shows tickets with no matching pull request linked across the release services.',
+    )
 
     await user.click(screen.getByRole('button', { name: /OH-200/ }))
     expect(

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import type { EligibilityReason, ReleaseItem } from '../../shared/types'
 import {
   ticketMatchesFilter,
@@ -98,6 +99,7 @@ type Props = {
   ticketSearch: string
   selectedIssueKey: string
   removeError: string
+  viewToggle?: ReactNode
   onFilterChange: (filter: TicketFilter) => void
   onSearchChange: (value: string) => void
   onSelectTicket: (issueKey: string) => void
@@ -110,6 +112,7 @@ export function ReleaseTicketsView({
   ticketSearch,
   selectedIssueKey,
   removeError,
+  viewToggle,
   onFilterChange,
   onSearchChange,
   onSelectTicket,
@@ -147,8 +150,9 @@ export function ReleaseTicketsView({
     <div className="dashboard-grid">
       <section className="services-panel">
         <div className="section-heading">
-          <div>
+          <div className="section-heading-start">
             <h2>Tickets</h2>
+            {viewToggle}
           </div>
           <span>
             {filtered.length}/{tickets.length}
@@ -170,17 +174,38 @@ export function ReleaseTicketsView({
         <div className="service-filters" aria-label="Filter tickets">
           {(
             [
-              ['all', 'All'],
-              ['blocked', 'Blocked'],
-              ['not-merge-ready', 'Not merge-ready'],
-              ['unmatched', 'Unmatched'],
-              ['merged', 'Merged'],
+              [
+                'all',
+                'All',
+                'Shows every Jira ticket in this release, including ones with and without matching PRs.',
+              ],
+              [
+                'blocked',
+                'Blocked',
+                'Shows tickets with an open PR blocked by a hard issue such as missing review, merge conflicts, wrong base branch, or draft status.',
+              ],
+              [
+                'not-merge-ready',
+                'Not merge-ready',
+                'Shows tickets whose open PRs are not eligible to merge yet — including hard blockers and softer issues like pending or failed checks.',
+              ],
+              [
+                'unmatched',
+                'Unmatched',
+                'Shows tickets with no matching pull request linked across the release services.',
+              ],
+              [
+                'merged',
+                'Merged',
+                'Shows tickets whose linked pull requests are all already merged into dev.',
+              ],
             ] as const
-          ).map(([filter, label]) => (
+          ).map(([filter, label, tooltip]) => (
             <button
               key={filter}
               className={ticketFilter === filter ? 'active' : ''}
               type="button"
+              data-tooltip={tooltip}
               onClick={() => onFilterChange(filter)}
             >
               {label} <span>{counts[filter]}</span>

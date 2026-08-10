@@ -40,6 +40,27 @@ const buildLabels: Record<BuildStatus, string> = {
   canceled: 'Canceled',
 }
 
+const BUILD_POLL_INTERVAL_MS = 15_000
+const BUILD_POLL_TIMEOUT_MS = 30_000
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error('Timed out'))
+    }, ms)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId)
+        resolve(value)
+      },
+      (reason) => {
+        window.clearTimeout(timeoutId)
+        reject(reason)
+      },
+    )
+  })
+}
+
 function deploymentLabel(deployment: JenkinsDeployedTag) {
   const environment = deployment.environment.toUpperCase()
   switch (deployment.status) {
@@ -156,6 +177,7 @@ export function ServiceOperations({
   const browserNotificationsRef = useRef(browserNotifications)
   const loadSequence = useRef(0)
   const releaseLimitRef = useRef(releaseLimit)
+  const releaseStateRef = useRef(releaseState)
 
   useEffect(() => {
     browserNotificationsRef.current = browserNotifications
@@ -164,6 +186,10 @@ export function ServiceOperations({
   useEffect(() => {
     releaseLimitRef.current = releaseLimit
   }, [releaseLimit])
+
+  useEffect(() => {
+    releaseStateRef.current = releaseState
+  }, [releaseState])
 
   const announceCompletedBuilds = useCallback(
     (nextState: RepositoryReleaseData) => {
@@ -325,41 +351,54 @@ export function ServiceOperations({
     }
   }, [announceCompletedBuilds, load, repository, view])
 
+  const releaseTrackKey =
+    releaseState && (view === 'all' || view === 'releases')
+      ? [
+          ...releaseState.stagingReleases.map((release) => release.tag),
+          ...releaseState.productionReleases.map((release) => release.tag),
+        ].join('\0')
+      : ''
+
   useEffect(() => {
-    if (view !== 'all' && view !== 'releases') return
-    if (!releaseState) return
-    const trackedReleases = [
-      ...releaseState.stagingReleases,
-      ...releaseState.productionReleases,
-    ].map((release) => ({
-      repository,
-      tag: release.tag,
-      createdAt: release.createdAt,
-    }))
-    if (trackedReleases.length === 0) return
+    if (!releaseTrackKey) return
 
     let active = true
-    let running = false
-    let timeout: number | undefined
-    const schedule = () => {
-      if (!active || document.hidden) return
-      timeout = window.setTimeout(() => void poll(), 15_000)
-    }
+    let inFlight = false
     const poll = async () => {
-      if (!active || running || document.hidden) return
-      running = true
+      if (!active || inFlight || document.hidden) return
+      const current = releaseStateRef.current
+      if (!current) return
+      const trackedReleases = [
+        ...current.stagingReleases,
+        ...current.productionReleases,
+      ].map((release) => ({
+        repository,
+        tag: release.tag,
+        createdAt: release.createdAt,
+      }))
+      if (trackedReleases.length === 0) return
+
+      inFlight = true
       try {
         const [buildResult, deploymentResult] = await Promise.allSettled([
-          api.releaseBuildStatuses(trackedReleases, true),
-          api.repositoryDeploymentStatus(repository, true),
+          withTimeout(
+            api.releaseBuildStatuses(trackedReleases, true),
+            BUILD_POLL_TIMEOUT_MS,
+          ),
+          withTimeout(
+            api.repositoryDeploymentStatus(repository, true),
+            BUILD_POLL_TIMEOUT_MS,
+          ),
         ])
         if (!active) return
+        const latest = releaseStateRef.current
+        if (!latest) return
         const results =
           buildResult.status === 'fulfilled' ? buildResult.value : []
         const byTag = new Map(results.map((result) => [result.tag, result]))
         const nextState: RepositoryReleaseData = {
-          ...releaseState,
-          stagingReleases: releaseState.stagingReleases.map((release) => {
+          ...latest,
+          stagingReleases: latest.stagingReleases.map((release) => {
             const result = byTag.get(release.tag)
             return result
               ? {
@@ -369,7 +408,7 @@ export function ServiceOperations({
                 }
               : release
           }),
-          productionReleases: releaseState.productionReleases.map((release) => {
+          productionReleases: latest.productionReleases.map((release) => {
             const result = byTag.get(release.tag)
             return result
               ? {
@@ -382,7 +421,7 @@ export function ServiceOperations({
           deployedTags:
             deploymentResult.status === 'fulfilled'
               ? deploymentResult.value.deployedTags
-              : releaseState.deployedTags,
+              : latest.deployedTags,
           deploymentLookupFailed:
             deploymentResult.status === 'fulfilled'
               ? deploymentResult.value.deploymentLookupFailed
@@ -394,22 +433,20 @@ export function ServiceOperations({
         }
         setReleaseState(nextState)
       } finally {
-        running = false
-        schedule()
+        inFlight = false
       }
     }
     const visibilityChanged = () => {
-      if (timeout) window.clearTimeout(timeout)
       if (!document.hidden) void poll()
     }
     document.addEventListener('visibilitychange', visibilityChanged)
-    schedule()
+    const interval = window.setInterval(() => void poll(), BUILD_POLL_INTERVAL_MS)
     return () => {
       active = false
-      if (timeout) window.clearTimeout(timeout)
+      window.clearInterval(interval)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
-  }, [announceCompletedBuilds, releaseState, repository, view])
+  }, [announceCompletedBuilds, releaseTrackKey, repository])
 
   useEffect(() => {
     if (!notificationToast) return

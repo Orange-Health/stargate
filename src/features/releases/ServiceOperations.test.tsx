@@ -371,6 +371,80 @@ describe('ServiceOperations', () => {
     )
   })
 
+  it('keeps polling after a build status update', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const buildStatusRequest = vi
+      .spyOn(api, 'releaseBuildStatuses')
+      .mockResolvedValue([
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-qa-26.0713.2',
+          createdAt: '2026-07-13T12:00:00Z',
+          buildStatus: 'succeeded',
+          runs: [],
+        },
+      ])
+    vi.spyOn(api, 'repositoryDeploymentStatus').mockResolvedValue({
+      deployedTags: repositoryState.deployedTags,
+      deploymentLookupFailed: false,
+    })
+
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+    await act(async () => {})
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(3)
+  })
+
+  it('resumes polling after a hung build-status request times out', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const buildStatusRequest = vi.spyOn(api, 'releaseBuildStatuses')
+    buildStatusRequest
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockResolvedValue([
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-qa-26.0713.2',
+          createdAt: '2026-07-13T12:00:00Z',
+          buildStatus: 'succeeded',
+          runs: [],
+        },
+      ])
+    vi.spyOn(api, 'repositoryDeploymentStatus').mockResolvedValue({
+      deployedTags: repositoryState.deployedTags,
+      deploymentLookupFailed: false,
+    })
+
+    render(<ServiceOperations repository="Orange-Health/service-api" />)
+    await act(async () => {})
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(1)
+
+    // Hung request times out after 30s; the next 15s interval tick resumes polling.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(45_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByText('Succeeded').length).toBeGreaterThan(0)
+  })
+
   it('temporarily allows production deployment while branches differ', async () => {
     vi.spyOn(api, 'repositoryState').mockResolvedValue({
       ...repositoryState,

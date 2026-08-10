@@ -1252,13 +1252,22 @@ button:disabled {
   margin-top: 10px;
 }
 
+.section-heading-start {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
 .overview-view-toggle {
   display: inline-flex;
-  gap: 4px;
-  margin: 0 0 14px;
-  padding: 4px;
+  flex-shrink: 0;
+  gap: 2px;
+  margin: 0;
+  padding: 3px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--paper-warm);
   width: fit-content;
 }
@@ -1267,13 +1276,13 @@ button:disabled {
   appearance: none;
   background: transparent;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   color: var(--muted);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  min-height: 34px;
-  padding: 0 14px;
+  min-height: 28px;
+  padding: 0 10px;
 }
 
 .overview-view-toggle button.active,
