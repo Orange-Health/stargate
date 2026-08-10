@@ -45,6 +45,7 @@ import {
 import {
   listUnreleasedVersions,
   markVersionIssuesReleased,
+  removeIssueFromRelease,
   testJiraConnection,
 } from './providers/jira.js'
 import {
@@ -239,6 +240,13 @@ const markReleaseIssuesSchema = z.object({
     .min(1)
     .max(500),
 })
+const removeReleaseIssueSchema = z.object({
+  issueKey: z.string().regex(/^[A-Z][A-Z0-9]+-\d+$/i),
+  targetVersionId: z
+    .string()
+    .regex(/^\d+$/)
+    .optional(),
+})
 
 async function currentDeployments(
   config: ConnectionConfig,
@@ -384,6 +392,33 @@ export function createApp() {
           parsed.data.issueKeys,
         ),
       )
+    },
+  )
+
+  app.post(
+    '/api/releases/:versionId/issues/remove',
+    async (request, response) => {
+      const { versionId } = request.params
+      const parsed = removeReleaseIssueSchema.safeParse(request.body)
+      if (!/^\d+$/.test(versionId) || !parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_REMOVE_ISSUE',
+            message: !/^\d+$/.test(versionId)
+              ? 'A numeric Jira version ID is required.'
+              : 'A valid Jira ticket key is required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      const result = await removeIssueFromRelease(
+        requireConnection(),
+        versionId,
+        parsed.data.issueKey,
+        parsed.data.targetVersionId,
+      )
+      clearReleaseCache()
+      response.json(result)
     },
   )
 

@@ -90,6 +90,7 @@ describe('ReleaseOverview', () => {
         repositories.map((repository) => ({
           repository,
           liveQaTags: [],
+          jenkinsServices: [],
           outdated: false,
           checkFailed: false,
         })),
@@ -608,6 +609,7 @@ describe('ReleaseOverview', () => {
         repository: 'orange/service-api',
         latestBuiltQaTag: 'v-qa-26.0714.2',
         liveQaTags: ['v-qa-26.0714.1'],
+        jenkinsServices: ['service-api'],
         outdated: true,
         checkFailed: false,
       },
@@ -615,6 +617,7 @@ describe('ReleaseOverview', () => {
         repository: 'orange/other-api',
         latestBuiltQaTag: 'v-qa-26.0714.1',
         liveQaTags: ['v-qa-26.0714.1'],
+        jenkinsServices: ['other-api'],
         outdated: false,
         checkFailed: false,
       },
@@ -995,93 +998,6 @@ describe('ReleaseOverview', () => {
     expect(onRefresh).toHaveBeenCalled()
   })
 
-  it('force merges PRs into dev, retargeting default-branch PRs', async () => {
-    const user = userEvent.setup()
-    const onRefresh = vi.fn()
-    const merge = vi
-      .spyOn(api, 'mergeFeaturePullRequest')
-      .mockResolvedValue({ merged: true, message: 'Force-merged' })
-    const blockedDev = {
-      ...dashboard.services[0].items[0],
-      pullRequest: {
-        ...dashboard.services[0].items[0].pullRequest!,
-        number: 8,
-        baseBranch: 'dev',
-        reviewDecision: 'review_required' as const,
-        checks: 'pending' as const,
-      },
-      eligible: false,
-      blockingReasons: ['REVIEW_REQUIRED' as const],
-      warningReasons: ['CHECKS_PENDING' as const],
-    }
-    const defaultBranchPr = {
-      ...dashboard.services[0].items[0],
-      issue: {
-        ...dashboard.services[0].items[0].issue,
-        key: 'OH-456',
-        url: 'https://jira.test/OH-456',
-      },
-      pullRequest: {
-        ...dashboard.services[0].items[0].pullRequest!,
-        id: 2,
-        number: 9,
-        title: 'OH-456 Billing',
-        url: 'https://github.test/pull/9',
-        baseBranch: 'main',
-        reviewDecision: 'review_required' as const,
-        checks: 'failure' as const,
-      },
-      eligible: false,
-      blockingReasons: ['WRONG_BASE_BRANCH' as const, 'REVIEW_REQUIRED' as const],
-      warningReasons: ['CHECKS_FAILED' as const],
-    }
-    const forceDashboard: ReleaseDashboard = {
-      ...dashboard,
-      unmatched: [],
-      services: [
-        {
-          ...dashboard.services[0],
-          eligibleCount: 0,
-          blockedCount: 2,
-          items: [blockedDev, defaultBranchPr],
-        },
-      ],
-    }
-    render(
-      <ReleaseOverview
-        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
-        releases={[forceDashboard.version]}
-        selectedVersionId="10351"
-        dashboard={forceDashboard}
-        loading={false}
-        onSelectVersion={vi.fn()}
-        onRefresh={onRefresh}
-        onDisconnect={vi.fn()}
-      />,
-    )
-
-    await user.click(
-      screen.getByRole('button', {
-        name: 'Force merge all release PRs into dev',
-      }),
-    )
-    await user.click(screen.getByRole('button', { name: 'Force merge all' }))
-    expect(merge).toHaveBeenCalledTimes(2)
-    expect(merge).toHaveBeenNthCalledWith(1, {
-      repository: 'orange/service-api',
-      pullNumber: 8,
-      retargetToDev: false,
-      bypassBranchProtection: true,
-    })
-    expect(merge).toHaveBeenNthCalledWith(2, {
-      repository: 'orange/service-api',
-      pullNumber: 9,
-      retargetToDev: true,
-      bypassBranchProtection: true,
-    })
-    expect(onRefresh).toHaveBeenCalled()
-  })
-
   it('retargets a default-branch PR to dev and merges it', async () => {
     const user = userEvent.setup()
     const onRefresh = vi.fn()
@@ -1228,5 +1144,260 @@ describe('ReleaseOverview', () => {
 
     expect(api.repositoryRisks).toHaveBeenCalledTimes(1)
     expect(api.deploymentFreshness).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens bulk QA tag creation for all release services', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'createStagingRelease').mockResolvedValue({
+      id: 1,
+      repository: 'orange/service-api',
+      environment: 'qa',
+      tag: 'v-qa-26.0716.1',
+      sourceBranch: 'dev',
+      url: 'https://github.test/releases/1',
+      createdAt: '2026-07-16T10:00:00Z',
+    })
+
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={dashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Create QA tags for all services in this release',
+      }),
+    )
+    expect(
+      screen.getByRole('heading', {
+        name: 'Create QA tags for all services',
+      }),
+    ).toBeVisible()
+    expect(screen.getByText('v-qa-26.0716.N')).toBeVisible()
+    expect(
+      screen.getByRole('list', { name: 'Services' }),
+    ).toHaveTextContent('service-api')
+  })
+
+  it('opens bulk QA deploy for merged services with a successful tag', async () => {
+    const user = userEvent.setup()
+    const mergedDashboard: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [],
+      services: [
+        {
+          ...dashboard.services[0],
+          eligibleCount: 0,
+          blockedCount: 0,
+          mergedCount: 1,
+          items: [
+            {
+              ...dashboard.services[0].items[0],
+              eligible: false,
+              blockingReasons: ['ALREADY_MERGED'],
+              warningReasons: [],
+              pullRequest: {
+                ...dashboard.services[0].items[0].pullRequest!,
+                merged: true,
+                state: 'closed',
+                baseBranch: 'dev',
+              },
+            },
+          ],
+        },
+      ],
+    }
+    vi.mocked(api.deploymentFreshness).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        latestBuiltQaTag: 'v-qa-26.0716.1',
+        liveQaTags: [],
+        jenkinsServices: ['service-api'],
+        outdated: true,
+        checkFailed: false,
+      },
+    ])
+    vi.spyOn(api, 'triggerDeployment').mockResolvedValue({
+      queueId: 11,
+      queueUrl: 'https://jenkins.test/queue/11',
+      jobName: 'QA/QA-DEPLOYMENT',
+      service: 'service-api',
+      tag: 'v-qa-26.0716.1',
+      environment: 'qa',
+    })
+
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[mergedDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={mergedDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', {
+          name: 'Deploy QA for all merged services in this release',
+        }),
+      ).toBeEnabled(),
+    )
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Deploy QA for all merged services in this release',
+      }),
+    )
+    expect(
+      screen.getByRole('heading', {
+        name: 'Deploy QA for merged services',
+      }),
+    ).toBeVisible()
+    expect(screen.getByText(/v-qa-26.0716.1/)).toBeVisible()
+  })
+
+  it('switches to tickets view and removes a ticket from the release', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn().mockResolvedValue(undefined)
+    const removeReleaseIssue = vi
+      .spyOn(api, 'removeReleaseIssue')
+      .mockResolvedValue({
+        issueKey: 'OH-123',
+        removedFromVersionId: '10351',
+        addedToVersionId: '10400',
+      })
+    const ticketsDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        ...dashboard.services,
+        {
+          repository: 'orange/service-web',
+          defaultBranch: 'main',
+          eligibleCount: 0,
+          blockedCount: 0,
+          mergedCount: 1,
+          backMergePending: false,
+          items: [
+            {
+              issue: {
+                key: 'OH-200',
+                summary: 'Already merged',
+                status: 'Done',
+                url: 'https://jira.test/OH-200',
+              },
+              pullRequest: {
+                id: 2,
+                number: 12,
+                repository: 'orange/service-web',
+                title: 'OH-200 Already merged',
+                url: 'https://github.test/pull/12',
+                state: 'closed',
+                draft: false,
+                merged: true,
+                baseBranch: 'dev',
+                headBranch: 'feature/OH-200',
+                author: 'dev',
+                assignees: [],
+                reviewDecision: 'approved',
+                mergeable: null,
+                mergeableState: 'unknown',
+                checks: 'success',
+                updatedAt: '2026-07-13T12:00:00Z',
+              },
+              eligible: false,
+              blockingReasons: ['ALREADY_MERGED'],
+              warningReasons: [],
+            },
+          ],
+        },
+      ],
+    }
+
+    render(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[
+          dashboard.version,
+          {
+            id: '10400',
+            name: 'OH Release 26.0723',
+            releaseDate: '2026-07-23',
+            overdue: false,
+          },
+        ]}
+        selectedVersionId="10351"
+        dashboard={ticketsDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('tab', { name: 'Tickets' }))
+
+    expect(screen.getByRole('heading', { name: 'Tickets' })).toBeVisible()
+    expect(screen.getByRole('button', { name: /OH-123/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'OH-123' })).toBeVisible()
+    expect(screen.getByText(/service-api #8/)).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: /OH-200/ }))
+    expect(
+      screen.getByRole('button', { name: 'Remove from release' }),
+    ).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: /OH-123/ }))
+    expect(
+      screen.getByRole('button', { name: 'Remove from release' }),
+    ).toBeEnabled()
+    await user.click(
+      screen.getByRole('button', { name: 'Remove from release' }),
+    )
+    expect(
+      screen.getByRole('heading', {
+        name: 'Remove OH-123 from release?',
+      }),
+    ).toBeVisible()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Move to another release' }),
+      '10400',
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Remove and move' }),
+    )
+
+    await waitFor(() =>
+      expect(removeReleaseIssue).toHaveBeenCalledWith(
+        '10351',
+        'OH-123',
+        '10400',
+      ),
+    )
+    expect(onRefresh).toHaveBeenCalled()
   })
 })

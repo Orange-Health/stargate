@@ -52,6 +52,12 @@ export type MarkReleaseIssuesReleasedResult = {
   failed: Array<{ key: string; message: string }>
 }
 
+export type RemoveReleaseIssueResult = {
+  issueKey: string
+  removedFromVersionId: string
+  addedToVersionId?: string
+}
+
 export type ReviewDecision =
   | 'approved'
   | 'changes_requested'
@@ -450,6 +456,7 @@ export type DeploymentFreshness = {
   repository: string
   latestBuiltQaTag?: string
   liveQaTags: string[]
+  jenkinsServices: string[]
   outdated: boolean
   checkFailed: boolean
 }

@@ -3,8 +3,9 @@ import type {
   JiraIssue,
   JiraVersion,
   MarkReleaseIssuesReleasedResult,
+  RemoveReleaseIssueResult,
 } from '../../src/shared/types.js'
-import { providerResponseError } from '../errors.js'
+import { ProviderError, providerResponseError } from '../errors.js'
 
 type JiraVersionResponse = {
   isLast: boolean
@@ -179,6 +180,84 @@ export async function listVersionIssues(
   } while (nextPageToken)
 
   return issues
+}
+
+export async function removeIssueFromRelease(
+  config: ConnectionConfig,
+  versionId: string,
+  issueKey: string,
+  targetVersionId?: string,
+): Promise<RemoveReleaseIssueResult> {
+  const normalizedKey = issueKey.trim().toUpperCase()
+  if (targetVersionId && targetVersionId === versionId) {
+    throw new ProviderError(
+      'Choose a different release to move this ticket into.',
+      'INVALID_TARGET_VERSION',
+      'jira',
+      400,
+    )
+  }
+
+  const issue = await jiraFetch<{
+    key: string
+    fields: {
+      fixVersions?: Array<{ id: string; name?: string }>
+    }
+  }>(
+    config,
+    `/rest/api/3/issue/${encodeURIComponent(normalizedKey)}?fields=fixVersions`,
+  )
+  const currentFixVersions = issue.fields.fixVersions ?? []
+  const onRelease = currentFixVersions.some(
+    (version) => version.id === versionId,
+  )
+  if (!onRelease) {
+    throw new ProviderError(
+      'This ticket is not part of the Jira release.',
+      'ISSUE_NOT_IN_RELEASE',
+      'jira',
+      400,
+    )
+  }
+
+  if (targetVersionId) {
+    const unreleased = await listUnreleasedVersions(config)
+    if (!unreleased.some((version) => version.id === targetVersionId)) {
+      throw new ProviderError(
+        'The target release must be an unreleased Jira version.',
+        'INVALID_TARGET_VERSION',
+        'jira',
+        400,
+      )
+    }
+  }
+
+  const fixVersionUpdates: Array<
+    | { remove: { id: string } }
+    | { add: { id: string } }
+  > = [{ remove: { id: versionId } }]
+  if (targetVersionId) {
+    fixVersionUpdates.push({ add: { id: targetVersionId } })
+  }
+
+  await jiraFetch<void>(
+    config,
+    `/rest/api/3/issue/${encodeURIComponent(issue.key)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({
+        update: {
+          fixVersions: fixVersionUpdates,
+        },
+      }),
+    },
+  )
+
+  return {
+    issueKey: issue.key,
+    removedFromVersionId: versionId,
+    ...(targetVersionId ? { addedToVersionId: targetVersionId } : {}),
+  }
 }
 
 export async function markVersionIssuesReleased(

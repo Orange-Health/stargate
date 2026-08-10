@@ -226,6 +226,14 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_SERVICE_REFRESH')
   })
 
+  it('validates remove-issue-from-release requests', async () => {
+    const response = await request(createApp())
+      .post('/api/releases/10351/issues/remove')
+      .send({ issueKey: 'not-a-ticket' })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_REMOVE_ISSUE')
+  })
+
   it('validates production deployment inputs before triggering Jenkins', async () => {
     const response = await request(createApp())
       .post('/api/jenkins/production-deployments')

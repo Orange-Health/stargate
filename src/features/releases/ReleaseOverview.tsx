@@ -16,16 +16,23 @@ import type {
 } from '../../shared/types'
 import { ConfirmDialog } from './ConfirmDialog'
 import {
-  featureForceMergeActions,
   featureMergeActions,
   isFeatureForceMergeReady,
   isFeatureMergeReady,
   isFeatureRetargetReady,
 } from './featureMerge'
+import { BulkQaDeployDialog, deployableQaTargets } from './BulkQaDeployDialog'
+import { BulkQaReleaseDialog } from './BulkQaReleaseDialog'
 import { StagingReleaseDialog } from './StagingReleaseDialog'
 import { ProductionReleaseDialog } from './ProductionReleaseDialog'
 import { ReleaseDayOperations } from './ReleaseDayOperations'
+import { ReleaseTicketsView } from './ReleaseTicketsView'
+import { RemoveTicketDialog } from './RemoveTicketDialog'
 import { RepositoryPullRequests } from './RepositoryPullRequests'
+import {
+  groupReleaseTickets,
+  type TicketFilter,
+} from './releaseTickets'
 import { ServiceOperations } from './ServiceOperations'
 import { ThemeToggle } from '../theme/ThemeToggle'
 
@@ -34,8 +41,6 @@ type PendingFeatureMerge = {
   retargetToDev: boolean
   bypassBranchProtection: boolean
 }
-
-type BulkMergeMode = 'ready' | 'force'
 
 const PINNED_REPOSITORIES_KEY = 'release-desk-pinned-repositories'
 
@@ -329,12 +334,8 @@ function ServiceDetail({
     new Set(),
   )
   const [pendingMerge, setPendingMerge] = useState<PendingFeatureMerge>()
-  const [pendingBulkMerge, setPendingBulkMerge] = useState<BulkMergeMode>()
+  const [pendingBulkMerge, setPendingBulkMerge] = useState(false)
   const readyMergeActions = featureMergeActions(service, optimisticallyMerged)
-  const forceMergeActions = featureForceMergeActions(
-    service,
-    optimisticallyMerged,
-  )
   const mergeBusy = bulkMerging || merging !== undefined
 
   useEffect(() => {
@@ -345,7 +346,7 @@ function ServiceDetail({
     pullNumber: number,
     options: { retargetToDev?: boolean; bypassBranchProtection?: boolean } = {},
   ) {
-    setPendingBulkMerge(undefined)
+    setPendingBulkMerge(false)
     setPendingMerge({
       pullNumber,
       retargetToDev: options.retargetToDev ?? false,
@@ -353,11 +354,10 @@ function ServiceDetail({
     })
   }
 
-  function requestBulkMerge(mode: BulkMergeMode) {
-    const actions = mode === 'force' ? forceMergeActions : readyMergeActions
-    if (actions.length === 0 || mergeBusy) return
+  function requestBulkMerge() {
+    if (readyMergeActions.length === 0 || mergeBusy) return
     setPendingMerge(undefined)
-    setPendingBulkMerge(mode)
+    setPendingBulkMerge(true)
   }
 
   async function mergePullRequest(pending: PendingFeatureMerge) {
@@ -383,23 +383,19 @@ function ServiceDetail({
     }
   }
 
-  async function mergeAllReadyPullRequests(mode: BulkMergeMode) {
-    const actions = mode === 'force' ? forceMergeActions : readyMergeActions
-    if (actions.length === 0 || mergeBusy) return
-    setPendingBulkMerge(undefined)
+  async function mergeAllReadyPullRequests() {
+    if (readyMergeActions.length === 0 || mergeBusy) return
+    setPendingBulkMerge(false)
     setBulkMerging(true)
     setMergeError('')
     const merged = new Set<number>()
     const failures: string[] = []
-    for (const action of actions) {
+    for (const action of readyMergeActions) {
       try {
         await api.mergeFeaturePullRequest({
           repository: action.repository,
           pullNumber: action.pullNumber,
           retargetToDev: Boolean(action.retargetToDev),
-          ...(action.bypassBranchProtection
-            ? { bypassBranchProtection: true }
-            : {}),
         })
         merged.add(action.pullNumber)
       } catch (reason) {
@@ -416,7 +412,7 @@ function ServiceDetail({
     }
     if (failures.length > 0) {
       setMergeError(
-        `Merged ${merged.size}/${actions.length}. ${failures.join(' ')}`,
+        `Merged ${merged.size}/${readyMergeActions.length}. ${failures.join(' ')}`,
       )
     }
     setBulkMerging(false)
@@ -442,33 +438,18 @@ function ServiceDetail({
           }
     : undefined
 
-  const pendingBulkActions =
-    pendingBulkMerge === 'force'
-      ? forceMergeActions
-      : pendingBulkMerge === 'ready'
-        ? readyMergeActions
-        : []
-  const bulkMergeRetargetCount = pendingBulkActions.filter(
+  const bulkMergeRetargetCount = readyMergeActions.filter(
     (action) => action.retargetToDev,
   ).length
   const pendingBulkMergeCopy = pendingBulkMerge
-    ? pendingBulkMerge === 'force'
-      ? {
-          title: 'Force merge all to dev?',
-          message:
-            bulkMergeRetargetCount > 0
-              ? `Force merge ${pendingBulkActions.length} PR(s) into dev for ${service.repository}?\n\n${bulkMergeRetargetCount} will be retargeted from the default branch first.\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`
-              : `Force merge ${pendingBulkActions.length} PR(s) into dev for ${service.repository}?\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`,
-          confirmLabel: 'Force merge all',
-        }
-      : {
-          title: 'Merge all ready to dev?',
-          message:
-            bulkMergeRetargetCount > 0
-              ? `Merge ${pendingBulkActions.length} ready PR(s) into dev for ${service.repository}?\n\n${bulkMergeRetargetCount} will be retargeted from the default branch first.`
-              : `Merge ${pendingBulkActions.length} ready PR(s) into dev for ${service.repository}?`,
-          confirmLabel: 'Merge all',
-        }
+    ? {
+        title: 'Merge all ready to dev?',
+        message:
+          bulkMergeRetargetCount > 0
+            ? `Merge ${readyMergeActions.length} ready PR(s) into dev for ${service.repository}?\n\n${bulkMergeRetargetCount} will be retargeted from the default branch first.`
+            : `Merge ${readyMergeActions.length} ready PR(s) into dev for ${service.repository}?`,
+        confirmLabel: 'Merge all',
+      }
     : undefined
 
   async function refreshService() {
@@ -562,7 +543,7 @@ function ServiceDetail({
               className="merge-feature-button"
               type="button"
               aria-label="Merge all ready PRs into dev for this service"
-              onClick={() => requestBulkMerge('ready')}
+              onClick={() => requestBulkMerge()}
               disabled={
                 readyMergeActions.length === 0 || mergeBusy || refreshing
               }
@@ -572,19 +553,6 @@ function ServiceDetail({
                 : readyMergeActions.length > 0
                   ? `Merge all ready to dev (${readyMergeActions.length})`
                   : 'No ready PRs to merge'}
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              aria-label="Force merge all PRs into dev for this service"
-              onClick={() => requestBulkMerge('force')}
-              disabled={
-                forceMergeActions.length === 0 || mergeBusy || refreshing
-              }
-            >
-              {forceMergeActions.length > 0
-                ? `Force merge all to dev (${forceMergeActions.length})`
-                : 'No PRs to force merge'}
             </button>
           </div>
           <button
@@ -756,8 +724,8 @@ function ServiceDetail({
           title={pendingBulkMergeCopy.title}
           message={pendingBulkMergeCopy.message}
           confirmLabel={pendingBulkMergeCopy.confirmLabel}
-          onCancel={() => setPendingBulkMerge(undefined)}
-          onConfirm={() => void mergeAllReadyPullRequests(pendingBulkMerge)}
+          onCancel={() => setPendingBulkMerge(false)}
+          onConfirm={() => void mergeAllReadyPullRequests()}
         />
       )}
       {operationsActivated && (
@@ -805,9 +773,20 @@ export function ReleaseOverview({
   const [releaseRepository, setReleaseRepository] = useState('')
   const [productionReleaseRepository, setProductionReleaseRepository] =
     useState('')
+  const [bulkQaReleaseOpen, setBulkQaReleaseOpen] = useState(false)
+  const [bulkQaDeployOpen, setBulkQaDeployOpen] = useState(false)
   const [serviceFilter, setServiceFilter] = useState<
     'all' | 'pending' | 'issues' | 'backmerges' | 'outdated'
   >('all')
+  const [overviewView, setOverviewView] = useState<'services' | 'tickets'>(
+    'services',
+  )
+  const [ticketFilter, setTicketFilter] = useState<TicketFilter>('all')
+  const [ticketSearch, setTicketSearch] = useState('')
+  const [selectedIssueKey, setSelectedIssueKey] = useState('')
+  const [pendingRemoveIssueKey, setPendingRemoveIssueKey] = useState('')
+  const [removingTicket, setRemovingTicket] = useState(false)
+  const [removeTicketError, setRemoveTicketError] = useState('')
   const [serviceSearch, setServiceSearch] = useState('')
   const [repositorySearch, setRepositorySearch] = useState('')
   const [pinnedRepositories, setPinnedRepositories] = useState(
@@ -845,8 +824,7 @@ export function ReleaseOverview({
   const [freshnessLoading, setFreshnessLoading] = useState(false)
   const [bulkMerging, setBulkMerging] = useState(false)
   const [bulkMergeError, setBulkMergeError] = useState('')
-  const [pendingReleaseBulkMerge, setPendingReleaseBulkMerge] =
-    useState<BulkMergeMode>()
+  const [pendingReleaseBulkMerge, setPendingReleaseBulkMerge] = useState(false)
   const serviceListRef = useRef<HTMLDivElement>(null)
   const [serviceListOverflow, setServiceListOverflow] = useState({
     top: false,
@@ -862,6 +840,15 @@ export function ReleaseOverview({
   const visibleDashboard = useMemo(
     () => (dashboard ? { ...dashboard, services: visibleServices } : undefined),
     [dashboard, visibleServices],
+  )
+  const releaseTickets = useMemo(
+    () =>
+      visibleDashboard ? groupReleaseTickets(visibleDashboard) : [],
+    [visibleDashboard],
+  )
+  const otherReleaseTargets = useMemo(
+    () => releases.filter((release) => release.id !== selectedVersionId),
+    [releases, selectedVersionId],
   )
   const repositoryScope =
     visibleServices
@@ -1033,6 +1020,7 @@ export function ReleaseOverview({
               {
                 repository,
                 liveQaTags: [],
+                jenkinsServices: [],
                 outdated: false,
                 checkFailed: true,
               },
@@ -1126,10 +1114,9 @@ export function ReleaseOverview({
     () => visibleServices.flatMap((service) => featureMergeActions(service)),
     [visibleServices],
   )
-  const releaseForceMergeActions = useMemo(
-    () =>
-      visibleServices.flatMap((service) => featureForceMergeActions(service)),
-    [visibleServices],
+  const qaDeployTargets = useMemo(
+    () => deployableQaTargets(visibleServices, deploymentFreshness),
+    [deploymentFreshness, visibleServices],
   )
   const selectedServiceWithRisk = selectedService
     ? {
@@ -1143,24 +1130,61 @@ export function ReleaseOverview({
       }
     : undefined
 
-  async function mergeAllReadyFeaturePullRequests(mode: BulkMergeMode) {
-    const actions =
-      mode === 'force' ? releaseForceMergeActions : releaseMergeActions
-    if (actions.length === 0 || bulkMerging || loading) return
-    setPendingReleaseBulkMerge(undefined)
+  useEffect(() => {
+    if (overviewView !== 'tickets') return
+    if (
+      selectedIssueKey &&
+      releaseTickets.some((ticket) => ticket.issue.key === selectedIssueKey)
+    ) {
+      return
+    }
+    setSelectedIssueKey(releaseTickets[0]?.issue.key ?? '')
+  }, [overviewView, releaseTickets, selectedIssueKey])
+
+  useEffect(() => {
+    if (allServicesSelected && overviewView === 'tickets') {
+      setOverviewView('services')
+    }
+  }, [allServicesSelected, overviewView])
+
+  async function confirmRemoveTicket(targetVersionId?: string) {
+    if (!pendingRemoveIssueKey || !selectedVersionId) return
+    setRemovingTicket(true)
+    setRemoveTicketError('')
+    try {
+      await api.removeReleaseIssue(
+        selectedVersionId,
+        pendingRemoveIssueKey,
+        targetVersionId,
+      )
+      setPendingRemoveIssueKey('')
+      setSelectedIssueKey('')
+      await onRefresh()
+    } catch (reason) {
+      setRemoveTicketError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not remove the ticket from this release.',
+      )
+      setPendingRemoveIssueKey('')
+    } finally {
+      setRemovingTicket(false)
+    }
+  }
+
+  async function mergeAllReadyFeaturePullRequests() {
+    if (releaseMergeActions.length === 0 || bulkMerging || loading) return
+    setPendingReleaseBulkMerge(false)
     setBulkMerging(true)
     setBulkMergeError('')
     let mergedCount = 0
     const failures: string[] = []
-    for (const action of actions) {
+    for (const action of releaseMergeActions) {
       try {
         await api.mergeFeaturePullRequest({
           repository: action.repository,
           pullNumber: action.pullNumber,
           retargetToDev: Boolean(action.retargetToDev),
-          ...(action.bypassBranchProtection
-            ? { bypassBranchProtection: true }
-            : {}),
         })
         mergedCount += 1
       } catch (reason) {
@@ -1174,50 +1198,29 @@ export function ReleaseOverview({
     await onRefresh()
     if (failures.length > 0) {
       setBulkMergeError(
-        `Merged ${mergedCount}/${actions.length}. ${failures.join(' ')}`,
+        `Merged ${mergedCount}/${releaseMergeActions.length}. ${failures.join(' ')}`,
       )
     }
     setBulkMerging(false)
   }
 
-  const pendingReleaseBulkActions =
-    pendingReleaseBulkMerge === 'force'
-      ? releaseForceMergeActions
-      : pendingReleaseBulkMerge === 'ready'
-        ? releaseMergeActions
-        : []
-  const releaseBulkRetargetCount = pendingReleaseBulkActions.filter(
+  const releaseBulkRetargetCount = releaseMergeActions.filter(
     (action) => action.retargetToDev,
   ).length
   const releaseBulkServiceCount = new Set(
-    pendingReleaseBulkActions.map((action) => action.repository),
+    releaseMergeActions.map((action) => action.repository),
   ).size
   const pendingReleaseBulkMergeCopy = pendingReleaseBulkMerge
-    ? pendingReleaseBulkMerge === 'force'
-      ? {
-          title: 'Force merge all to dev?',
-          message:
-            releaseBulkRetargetCount > 0
-              ? `Force merge ${pendingReleaseBulkActions.length} PR(s) into dev across ${releaseBulkServiceCount} service(s)?
-
-${releaseBulkRetargetCount} will be retargeted from the default branch first.
-
-This bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`
-              : `Force merge ${pendingReleaseBulkActions.length} PR(s) into dev across ${releaseBulkServiceCount} service(s)?
-
-This bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`,
-          confirmLabel: 'Force merge all',
-        }
-      : {
-          title: 'Merge all ready to dev?',
-          message:
-            releaseBulkRetargetCount > 0
-              ? `Merge ${pendingReleaseBulkActions.length} ready PR(s) into dev across ${releaseBulkServiceCount} service(s)?
+    ? {
+        title: 'Merge all ready to dev?',
+        message:
+          releaseBulkRetargetCount > 0
+            ? `Merge ${releaseMergeActions.length} ready PR(s) into dev across ${releaseBulkServiceCount} service(s)?
 
 ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
-              : `Merge ${pendingReleaseBulkActions.length} ready PR(s) into dev across ${releaseBulkServiceCount} service(s)?`,
-          confirmLabel: 'Merge all',
-        }
+            : `Merge ${releaseMergeActions.length} ready PR(s) into dev across ${releaseBulkServiceCount} service(s)?`,
+        confirmLabel: 'Merge all',
+      }
     : undefined
 
   useEffect(() => {
@@ -1636,7 +1639,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                       className="merge-feature-button overview-bulk-merge"
                       type="button"
                       aria-label="Merge all ready release PRs into dev"
-                      onClick={() => setPendingReleaseBulkMerge('ready')}
+                      onClick={() => setPendingReleaseBulkMerge(true)}
                       disabled={
                         loading ||
                         bulkMerging ||
@@ -1652,17 +1655,35 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                     <button
                       className="secondary-button overview-bulk-merge"
                       type="button"
-                      aria-label="Force merge all release PRs into dev"
-                      onClick={() => setPendingReleaseBulkMerge('force')}
+                      aria-label="Create QA tags for all services in this release"
+                      onClick={() => setBulkQaReleaseOpen(true)}
                       disabled={
                         loading ||
                         bulkMerging ||
-                        releaseForceMergeActions.length === 0
+                        visibleServices.length === 0
                       }
                     >
-                      {releaseForceMergeActions.length > 0
-                        ? `Force merge all to dev (${releaseForceMergeActions.length})`
-                        : 'No PRs to force merge'}
+                      {visibleServices.length > 0
+                        ? `Create QA tags (${visibleServices.length})`
+                        : 'No services for QA tags'}
+                    </button>
+                    <button
+                      className="secondary-button overview-bulk-merge"
+                      type="button"
+                      aria-label="Deploy QA for all merged services in this release"
+                      onClick={() => setBulkQaDeployOpen(true)}
+                      disabled={
+                        loading ||
+                        bulkMerging ||
+                        freshnessLoading ||
+                        qaDeployTargets.length === 0
+                      }
+                    >
+                      {freshnessLoading
+                        ? 'Checking QA deploys…'
+                        : qaDeployTargets.length > 0
+                          ? `Deploy QA (${qaDeployTargets.length})`
+                          : 'No QA deploys ready'}
                     </button>
                   </div>
                 </div>
@@ -1688,6 +1709,54 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               </div>
             ))}
 
+            <div
+              className="overview-view-toggle"
+              role="tablist"
+              aria-label="Release overview view"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={overviewView === 'services'}
+                className={overviewView === 'services' ? 'active' : ''}
+                onClick={() => setOverviewView('services')}
+              >
+                Services
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={overviewView === 'tickets'}
+                className={overviewView === 'tickets' ? 'active' : ''}
+                onClick={() => {
+                  setRemoveTicketError('')
+                  setOverviewView('tickets')
+                }}
+              >
+                Tickets
+              </button>
+            </div>
+
+            {overviewView === 'tickets' ? (
+              <ReleaseTicketsView
+                tickets={releaseTickets}
+                ticketFilter={ticketFilter}
+                ticketSearch={ticketSearch}
+                selectedIssueKey={selectedIssueKey}
+                removeError={removeTicketError}
+                onFilterChange={setTicketFilter}
+                onSearchChange={setTicketSearch}
+                onSelectTicket={(issueKey) => {
+                  setRemoveTicketError('')
+                  setSelectedIssueKey(issueKey)
+                }}
+                onRemoveTicket={() => {
+                  if (!selectedIssueKey) return
+                  setRemoveTicketError('')
+                  setPendingRemoveIssueKey(selectedIssueKey)
+                }}
+              />
+            ) : (
             <div className="dashboard-grid">
               <section className="services-panel">
                 <div className="section-heading">
@@ -1854,8 +1923,9 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                 </section>
               )}
             </div>
+            )}
 
-            {dashboard.unmatched.length > 0 && (
+            {overviewView === 'services' && dashboard.unmatched.length > 0 && (
               <section className="unmatched-panel">
                 <div className="section-heading">
                   <div>
@@ -1894,6 +1964,22 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           onClose={() => setReleaseRepository('')}
         />
       )}
+      {bulkQaReleaseOpen && dashboard && (
+        <BulkQaReleaseDialog
+          repositories={visibleServices.map((service) => service.repository)}
+          releaseDate={dashboard.version.releaseDate ?? ''}
+          releaseName={dashboard.version.name}
+          onClose={() => setBulkQaReleaseOpen(false)}
+        />
+      )}
+      {bulkQaDeployOpen && dashboard && (
+        <BulkQaDeployDialog
+          services={visibleServices}
+          freshness={deploymentFreshness}
+          releaseName={dashboard.version.name}
+          onClose={() => setBulkQaDeployOpen(false)}
+        />
+      )}
       {productionReleaseRepository && (
         <ProductionReleaseDialog
           repository={productionReleaseRepository}
@@ -1905,10 +1991,23 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           title={pendingReleaseBulkMergeCopy.title}
           message={pendingReleaseBulkMergeCopy.message}
           confirmLabel={pendingReleaseBulkMergeCopy.confirmLabel}
-          onCancel={() => setPendingReleaseBulkMerge(undefined)}
-          onConfirm={() =>
-            void mergeAllReadyFeaturePullRequests(pendingReleaseBulkMerge)
-          }
+          onCancel={() => setPendingReleaseBulkMerge(false)}
+          onConfirm={() => void mergeAllReadyFeaturePullRequests()}
+        />
+      )}
+      {pendingRemoveIssueKey && dashboard && (
+        <RemoveTicketDialog
+          issueKey={pendingRemoveIssueKey}
+          releaseName={dashboard.version.name}
+          otherReleases={otherReleaseTargets}
+          busy={removingTicket}
+          onCancel={() => {
+            if (removingTicket) return
+            setPendingRemoveIssueKey('')
+          }}
+          onConfirm={(targetVersionId) => {
+            void confirmRemoveTicket(targetVersionId)
+          }}
         />
       )}
     </div>

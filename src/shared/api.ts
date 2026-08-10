@@ -14,6 +14,7 @@ import type {
   JenkinsBuildStatus,
   JenkinsQueueStatus,
   MarkReleaseIssuesReleasedResult,
+  RemoveReleaseIssueResult,
   MergeFeaturePullRequestInput,
   MergePromotionPullRequestInput,
   MergePromotionPullRequestResult,
@@ -99,6 +100,21 @@ export const api = {
       {
         method: 'POST',
         body: JSON.stringify({ issueKeys }),
+      },
+    ),
+  removeReleaseIssue: (
+    versionId: string,
+    issueKey: string,
+    targetVersionId?: string,
+  ) =>
+    request<RemoveReleaseIssueResult>(
+      `/api/releases/${encodeURIComponent(versionId)}/issues/remove`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          issueKey,
+          ...(targetVersionId ? { targetVersionId } : {}),
+        }),
       },
     ),
   repositories: () =>

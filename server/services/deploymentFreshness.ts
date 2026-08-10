@@ -46,6 +46,7 @@ export async function getDeploymentFreshness(
           repository,
           latestBuiltQaTag,
           liveQaTags,
+          jenkinsServices: services,
           outdated,
           checkFailed: false,
         }
@@ -53,6 +54,7 @@ export async function getDeploymentFreshness(
         results[index] = {
           repository,
           liveQaTags: [],
+          jenkinsServices: servicesForRepository(repository),
           outdated: false,
           checkFailed: true,
         }
