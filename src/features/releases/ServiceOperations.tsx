@@ -109,10 +109,7 @@ function reviewStatusLabel(pull: {
   reviewDecision: string
   unresolvedReviewThreads?: number
 }) {
-  if (
-    (pull.unresolvedReviewThreads ?? 0) > 0 &&
-    pull.reviewDecision === 'approved'
-  ) {
+  if ((pull.unresolvedReviewThreads ?? 0) > 0) {
     return 'unresolved comments'
   }
   return pull.reviewDecision.replaceAll('_', ' ')
@@ -125,10 +122,7 @@ function mergeBlockReason(
   if (hasBackMerges) return 'Resolve pending back-merges first'
   const pull = step.pullRequest
   if (!pull) return undefined
-  if (
-    (pull.unresolvedReviewThreads ?? 0) > 0 &&
-    pull.reviewDecision === 'approved'
-  ) {
+  if ((pull.unresolvedReviewThreads ?? 0) > 0) {
     return 'Resolve unresolved review comments'
   }
   return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
@@ -151,10 +145,7 @@ function canForceMergePromotion(
 function backMergeBlockReason(step: BackMergeStep) {
   const pull = step.pullRequest
   if (!pull) return undefined
-  if (
-    (pull.unresolvedReviewThreads ?? 0) > 0 &&
-    pull.reviewDecision === 'approved'
-  ) {
+  if ((pull.unresolvedReviewThreads ?? 0) > 0) {
     return 'Resolve unresolved review comments'
   }
   return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)

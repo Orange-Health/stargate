@@ -678,6 +678,87 @@ describe('Jira development links', () => {
       mergeableState: 'blocked',
     })
   })
+
+  it('keeps approvals when a later comment review shadows them', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url === 'https://api.github.com/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          variables: Record<string, string | number>
+        }
+        const data: Record<string, unknown> = {}
+        for (const key of Object.keys(body.variables)) {
+          const match = /^number(\d+)$/.exec(key)
+          if (!match) continue
+          data[`p${match[1]}`] = {
+            pullRequest: {
+              databaseId: 56,
+              number: 56,
+              title: 'OH-56',
+              url: 'https://github.com/Orange-Health/a/pull/56',
+              state: 'OPEN',
+              isDraft: false,
+              merged: false,
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'BLOCKED',
+              baseRefName: 'dev',
+              headRefName: 'feature/OH-56',
+              updatedAt: '2026-07-15T08:00:00Z',
+              reviewDecision: 'REVIEW_REQUIRED',
+              author: { login: 'dev', avatarUrl: '' },
+              assignees: { nodes: [] },
+              latestReviews: {
+                nodes: [
+                  {
+                    author: { login: 'reviewer', avatarUrl: '' },
+                    state: 'APPROVED',
+                  },
+                  {
+                    author: { login: 'reviewer', avatarUrl: '' },
+                    state: 'COMMENTED',
+                  },
+                ],
+              },
+              reviewThreads: {
+                nodes: [{ isResolved: false }],
+              },
+              commits: {
+                nodes: [
+                  { commit: { statusCheckRollup: { state: 'SUCCESS' } } },
+                ],
+              },
+            },
+          }
+        }
+        return new Response(JSON.stringify({ data }), { status: 200 })
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await discoverPullRequests(config, [
+      {
+        key: 'OH-56',
+        developmentSummary:
+          'https://github.com/Orange-Health/a/pull/56',
+      },
+    ])
+
+    expect(result.byIssue.get('OH-56')?.[0]).toMatchObject({
+      reviewDecision: 'approved',
+      unresolvedReviewThreads: 1,
+    })
+  })
 })
 
 describe('targeted search invalidation', () => {

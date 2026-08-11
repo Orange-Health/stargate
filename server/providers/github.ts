@@ -923,25 +923,6 @@ export function developmentPullRequests(summary?: string) {
   return [...matches.values()]
 }
 
-function reviewDecision(reviews: GitHubReview[]): ReviewDecision {
-  const latestByUser = new Map<string, GitHubReview>()
-  for (const review of reviews) {
-    if (review.state === 'PENDING') continue
-    const current = latestByUser.get(review.user.login)
-    if (
-      !current ||
-      (review.submitted_at ?? '').localeCompare(current.submitted_at ?? '') >= 0
-    ) {
-      latestByUser.set(review.user.login, review)
-    }
-  }
-
-  const states = [...latestByUser.values()].map((review) => review.state)
-  if (states.includes('CHANGES_REQUESTED')) return 'changes_requested'
-  if (states.includes('APPROVED')) return 'approved'
-  return 'review_required'
-}
-
 function unresolvedReviewThreadCount(
   threads: Array<{ isResolved: boolean }>,
 ) {
@@ -955,19 +936,21 @@ function graphqlReviewDecision(
 ): ReviewDecision {
   if (decision === 'APPROVED') return 'approved'
   if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
-  const fromReviews = reviewDecision(reviews)
+  if (reviews.some((review) => review.state === 'CHANGES_REQUESTED')) {
+    return 'changes_requested'
+  }
+  const hasApproval = reviews.some((review) => review.state === 'APPROVED')
   // GitHub can still report REVIEW_REQUIRED when an approval exists but
   // unresolved conversation threads are blocking merge. Prefer the approval
   // signal so eligibility can call out unresolved comments instead.
-  if (
-    decision === 'REVIEW_REQUIRED' &&
-    fromReviews === 'approved' &&
-    unresolvedThreads > 0
-  ) {
+  // Use any APPROVED review (not latest-per-user) so a later COMMENT from the
+  // same reviewer does not hide the approval.
+  if (decision === 'REVIEW_REQUIRED' && hasApproval && unresolvedThreads > 0) {
     return 'approved'
   }
   if (decision === 'REVIEW_REQUIRED') return 'review_required'
-  return fromReviews
+  if (hasApproval) return 'approved'
+  return 'review_required'
 }
 
 function pullParticipants(pull: GitHubPull, reviews: GitHubReview[]) {

@@ -108,6 +108,7 @@ type Props = {
   selectedRepository?: string
   onSelectRepository?: (repository: string) => void
   onRefresh: () => void | Promise<void>
+  onServiceUpdated?: (service: ServiceRelease) => void
   onDisconnect: () => void
 }
 
@@ -361,6 +362,7 @@ function ServiceDetail({
   onCreateRelease,
   onCreateProductionRelease,
   onDataChanged,
+  onServiceUpdated,
   productionEnabled,
 }: {
   service: ServiceRelease
@@ -368,6 +370,7 @@ function ServiceDetail({
   onCreateRelease: () => void
   onCreateProductionRelease: () => void
   onDataChanged: () => void | Promise<void>
+  onServiceUpdated?: (service: ServiceRelease) => void
   productionEnabled: boolean
 }) {
   const [service, setService] = useState(initialService)
@@ -513,6 +516,7 @@ function ServiceDetail({
         false,
       )
       setService(result.service)
+      onServiceUpdated?.(result.service)
       if (result.repositoryState) {
         window.dispatchEvent(
           new CustomEvent('service-refresh-requested', {
@@ -818,6 +822,7 @@ export function ReleaseOverview({
   selectedRepository = '',
   onSelectRepository = () => {},
   onRefresh,
+  onServiceUpdated,
   onDisconnect,
 }: Props) {
   const [releaseRepository, setReleaseRepository] = useState('')
@@ -1169,17 +1174,18 @@ export function ReleaseOverview({
     () => deployableQaTargets(visibleServices, deploymentFreshness),
     [deploymentFreshness, visibleServices],
   )
-  const selectedServiceWithRisk = selectedService
-    ? {
-        ...selectedService,
-        backMergePending:
-          repositoryRisks[selectedService.repository]?.backMergePending ??
-          selectedService.backMergePending,
-        riskCheckFailed:
-          repositoryRisks[selectedService.repository]?.checkFailed ??
-          selectedService.riskCheckFailed,
-      }
-    : undefined
+  const selectedServiceWithRisk = useMemo(() => {
+    if (!selectedService) return undefined
+    return {
+      ...selectedService,
+      backMergePending:
+        repositoryRisks[selectedService.repository]?.backMergePending ??
+        selectedService.backMergePending,
+      riskCheckFailed:
+        repositoryRisks[selectedService.repository]?.checkFailed ??
+        selectedService.riskCheckFailed,
+    }
+  }, [repositoryRisks, selectedService])
 
   useEffect(() => {
     if (overviewView !== 'tickets') return
@@ -1991,6 +1997,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                     )
                   }
                   onDataChanged={onRefresh}
+                  onServiceUpdated={onServiceUpdated}
                   productionEnabled={Boolean(connection.productionEnabled)}
                 />
               ) : (

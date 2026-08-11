@@ -42,15 +42,13 @@ export function evaluateEligibility(
       }
       if (pullRequest.reviewDecision === 'changes_requested') {
         blockingReasons.push('CHANGES_REQUESTED')
-      } else if (
-        (pullRequest.unresolvedReviewThreads ?? 0) > 0 &&
-        pullRequest.reviewDecision === 'approved'
-      ) {
+      } else if ((pullRequest.unresolvedReviewThreads ?? 0) > 0) {
+        // Prefer unresolved conversations over GitHub's REVIEW_REQUIRED signal.
+        // Branch protection often reports review_required when open threads are
+        // what actually block merge (even after an approval).
         blockingReasons.push('UNRESOLVED_COMMENTS')
       } else if (pullRequest.reviewDecision === 'review_required') {
         blockingReasons.push('REVIEW_REQUIRED')
-      } else if ((pullRequest.unresolvedReviewThreads ?? 0) > 0) {
-        blockingReasons.push('UNRESOLVED_COMMENTS')
       }
       if (
         pullRequest.mergeable === false ||
@@ -253,5 +251,23 @@ export async function refreshServiceRelease(
   } catch {
     // ponytail: refresh still works without default branch metadata
   }
-  return summarizeService(repository, items, defaultBranch)
+  const service = summarizeService(repository, items, defaultBranch)
+  const cacheKey = `${config.jiraSite}:${config.jiraProject ?? 'OH'}:${config.githubOrg}:${versionId}`
+  const cached = cache.get(cacheKey)
+  if (cached) {
+    const services = cached.dashboard.services.map((entry) =>
+      entry.repository.toLowerCase() === repository.toLowerCase()
+        ? service
+        : entry,
+    )
+    cache.set(cacheKey, {
+      expiresAt: Date.now() + CACHE_TTL_MS,
+      dashboard: {
+        ...cached.dashboard,
+        services,
+        cached: false,
+      },
+    })
+  }
+  return service
 }

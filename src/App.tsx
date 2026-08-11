@@ -10,6 +10,7 @@ import type {
   DashboardProgress,
   JiraVersion,
   ReleaseDashboard,
+  ServiceRelease,
 } from './shared/types'
 
 function App() {
@@ -179,6 +180,19 @@ function App() {
     setDashboardProgress(undefined)
   }
 
+  function updateService(service: ServiceRelease) {
+    setDashboard((current) => {
+      if (!current) return current
+      const index = current.services.findIndex(
+        (item) => item.repository === service.repository,
+      )
+      if (index < 0) return current
+      const services = current.services.slice()
+      services[index] = service
+      return { ...current, services, cached: false }
+    })
+  }
+
   if (checkingConnection) {
     return (
       <main className="boot-state">
@@ -209,6 +223,7 @@ function App() {
           ? Promise.resolve()
           : loadDashboard(selectedVersionId, true)
       }
+      onServiceUpdated={updateService}
       onDisconnect={() => void disconnect()}
     />
   )

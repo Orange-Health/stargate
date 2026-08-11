@@ -76,6 +76,19 @@ describe('evaluateEligibility', () => {
     })
   })
 
+  it('prefers unresolved comments over review required', () => {
+    expect(
+      evaluateEligibility(issue, {
+        ...readyPull,
+        reviewDecision: 'review_required',
+        unresolvedReviewThreads: 1,
+      }),
+    ).toMatchObject({
+      eligible: false,
+      blockingReasons: ['UNRESOLVED_COMMENTS'],
+    })
+  })
+
   it('keeps unmatched tickets visible and blocked', () => {
     expect(evaluateEligibility(issue)).toMatchObject({
       eligible: false,

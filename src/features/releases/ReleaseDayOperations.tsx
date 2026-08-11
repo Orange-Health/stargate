@@ -364,15 +364,18 @@ function checksSoftBlockReason(pull: PromotionPullRequest) {
   return undefined
 }
 
-function hasUnresolvedApprovedComments(pull: PromotionPullRequest) {
+function hasUnresolvedComments(pull: PromotionPullRequest) {
+  return (pull.unresolvedReviewThreads ?? 0) > 0
+}
+
+function hasForceMergeableUnresolvedComments(pull: PromotionPullRequest) {
   return (
-    (pull.unresolvedReviewThreads ?? 0) > 0 &&
-    pull.reviewDecision === 'approved'
+    hasUnresolvedComments(pull) && pull.reviewDecision === 'approved'
   )
 }
 
 function mergeBlockReason(pull: PromotionPullRequest) {
-  if (hasUnresolvedApprovedComments(pull)) {
+  if (hasUnresolvedComments(pull)) {
     return 'Resolve unresolved review comments'
   }
   return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
@@ -382,7 +385,7 @@ function canForceMergePull(pull: PromotionPullRequest) {
   return (
     !hardMergeBlockReason(pull) &&
     (Boolean(checksSoftBlockReason(pull)) ||
-      hasUnresolvedApprovedComments(pull))
+      hasForceMergeableUnresolvedComments(pull))
   )
 }
 

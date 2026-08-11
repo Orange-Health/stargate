@@ -430,7 +430,9 @@ describe('ReleaseOverview', () => {
       },
     })
     const onRefresh = vi.fn().mockResolvedValue(undefined)
-    render(
+    const onServiceUpdated = vi.fn()
+    let currentDashboard = dashboard
+    const view = render(
       <ReleaseOverview
         connection={{
           connected: true,
@@ -439,10 +441,20 @@ describe('ReleaseOverview', () => {
         }}
         releases={[dashboard.version]}
         selectedVersionId="10351"
-        dashboard={dashboard}
+        dashboard={currentDashboard}
         loading={false}
         onSelectVersion={vi.fn()}
         onRefresh={onRefresh}
+        onServiceUpdated={(service) => {
+          onServiceUpdated(service)
+          currentDashboard = {
+            ...currentDashboard,
+            services: currentDashboard.services.map((entry) =>
+              entry.repository === service.repository ? service : entry,
+            ),
+            cached: false,
+          }
+        }}
         onDisconnect={vi.fn()}
       />,
     )
@@ -461,6 +473,29 @@ describe('ReleaseOverview', () => {
       screen.getByText('OH-123 Refreshed pull request'),
     ).toBeVisible()
     expect(onRefresh).not.toHaveBeenCalled()
+    expect(onServiceUpdated).toHaveBeenCalledWith(refreshedService)
+
+    // Parent re-render (e.g. synced clock / risk overlay) must keep fresh data.
+    view.rerender(
+      <ReleaseOverview
+        connection={{
+          connected: true,
+          githubOrg: 'orange',
+          projectKey: 'OH',
+        }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={currentDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onServiceUpdated={onServiceUpdated}
+        onDisconnect={vi.fn()}
+      />,
+    )
+    expect(
+      screen.getByText('OH-123 Refreshed pull request'),
+    ).toBeVisible()
   })
 
   it('searches the service list by repository name', async () => {
