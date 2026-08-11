@@ -62,6 +62,20 @@ describe('evaluateEligibility', () => {
     expect(result.warningReasons).toEqual(['CHECKS_FAILED'])
   })
 
+  it('reports unresolved comments when approval exists', () => {
+    expect(
+      evaluateEligibility(issue, {
+        ...readyPull,
+        reviewDecision: 'approved',
+        unresolvedReviewThreads: 2,
+        mergeableState: 'blocked',
+      }),
+    ).toMatchObject({
+      eligible: false,
+      blockingReasons: ['UNRESOLVED_COMMENTS'],
+    })
+  })
+
   it('keeps unmatched tickets visible and blocked', () => {
     expect(evaluateEligibility(issue)).toMatchObject({
       eligible: false,

@@ -1,8 +1,11 @@
 import type { ReactNode } from 'react'
 import type { EligibilityReason, ReleaseItem } from '../../shared/types'
 import {
+  listTicketAssignees,
+  ticketMatchesAssignee,
   ticketMatchesFilter,
   ticketReadinessLabel,
+  UNASSIGNED_ASSIGNEE,
   type ReleaseTicket,
   type TicketFilter,
 } from './releaseTickets'
@@ -12,6 +15,7 @@ const reasonLabels: Record<EligibilityReason, string> = {
   WRONG_BASE_BRANCH: 'Not targeting dev',
   REVIEW_REQUIRED: 'Review required',
   CHANGES_REQUESTED: 'Changes requested',
+  UNRESOLVED_COMMENTS: 'Unresolved comments',
   HAS_CONFLICTS: 'Merge conflicts',
   MERGEABILITY_PENDING: 'Checking conflicts',
   CHECKS_PENDING: 'Checks pending',
@@ -96,11 +100,13 @@ function TicketCard({
 type Props = {
   tickets: ReleaseTicket[]
   ticketFilter: TicketFilter
+  ticketAssigneeFilter: string
   ticketSearch: string
   selectedIssueKey: string
   removeError: string
   viewToggle?: ReactNode
   onFilterChange: (filter: TicketFilter) => void
+  onAssigneeFilterChange: (assignee: string) => void
   onSearchChange: (value: string) => void
   onSelectTicket: (issueKey: string) => void
   onRemoveTicket: () => void
@@ -109,18 +115,25 @@ type Props = {
 export function ReleaseTicketsView({
   tickets,
   ticketFilter,
+  ticketAssigneeFilter,
   ticketSearch,
   selectedIssueKey,
   removeError,
   viewToggle,
   onFilterChange,
+  onAssigneeFilterChange,
   onSearchChange,
   onSelectTicket,
   onRemoveTicket,
 }: Props) {
   const query = ticketSearch.trim().toLowerCase()
+  const assignees = listTicketAssignees(tickets)
+  const hasUnassigned = tickets.some(
+    (ticket) => !ticket.issue.assignee?.trim(),
+  )
   const filtered = tickets.filter((ticket) => {
     if (!ticketMatchesFilter(ticket, ticketFilter)) return false
+    if (!ticketMatchesAssignee(ticket, ticketAssigneeFilter)) return false
     if (!query) return true
     return (
       ticket.issue.key.toLowerCase().includes(query) ||
@@ -170,6 +183,24 @@ export function ReleaseTicketsView({
             placeholder="Search tickets"
             aria-label="Search tickets"
           />
+        </label>
+        <label className="ticket-assignee-filter">
+          <span>Assignee</span>
+          <select
+            value={ticketAssigneeFilter}
+            onChange={(event) => onAssigneeFilterChange(event.target.value)}
+            aria-label="Filter by assignee"
+          >
+            <option value="">All assignees</option>
+            {hasUnassigned && (
+              <option value={UNASSIGNED_ASSIGNEE}>Unassigned</option>
+            )}
+            {assignees.map((assignee) => (
+              <option value={assignee} key={assignee}>
+                {assignee}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="service-filters" aria-label="Filter tickets">
           {(

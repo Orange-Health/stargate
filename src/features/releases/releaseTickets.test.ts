@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest'
 import type { ReleaseDashboard, ReleaseItem } from '../../shared/types'
 import {
   groupReleaseTickets,
+  listTicketAssignees,
+  ticketMatchesAssignee,
   ticketMatchesFilter,
   ticketReadiness,
+  UNASSIGNED_ASSIGNEE,
 } from './releaseTickets'
 
 function item(
@@ -165,5 +168,41 @@ describe('groupReleaseTickets', () => {
     expect(
       tickets.filter((ticket) => ticketMatchesFilter(ticket, 'not-merge-ready')),
     ).toHaveLength(1)
+  })
+
+  it('lists and filters by Jira assignee', () => {
+    const tickets = groupReleaseTickets(dashboard).map((ticket) => {
+      if (ticket.issue.key === 'OH-1') {
+        return {
+          ...ticket,
+          issue: { ...ticket.issue, assignee: 'Ada Lovelace' },
+        }
+      }
+      if (ticket.issue.key === 'OH-2') {
+        return {
+          ...ticket,
+          issue: { ...ticket.issue, assignee: 'Grace Hopper' },
+        }
+      }
+      return ticket
+    })
+
+    expect(listTicketAssignees(tickets)).toEqual([
+      'Ada Lovelace',
+      'Grace Hopper',
+    ])
+    expect(
+      tickets.filter((ticket) =>
+        ticketMatchesAssignee(ticket, 'Ada Lovelace'),
+      ),
+    ).toEqual([expect.objectContaining({ issue: expect.objectContaining({ key: 'OH-1' }) })])
+    expect(
+      tickets.filter((ticket) =>
+        ticketMatchesAssignee(ticket, UNASSIGNED_ASSIGNEE),
+      ),
+    ).toHaveLength(2)
+    expect(
+      tickets.every((ticket) => ticketMatchesAssignee(ticket, '')),
+    ).toBe(true)
   })
 })

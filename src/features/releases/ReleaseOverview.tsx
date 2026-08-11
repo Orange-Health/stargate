@@ -116,6 +116,7 @@ const reasonLabels: Record<EligibilityReason, string> = {
   WRONG_BASE_BRANCH: 'Not targeting dev',
   REVIEW_REQUIRED: 'Review required',
   CHANGES_REQUESTED: 'Changes requested',
+  UNRESOLVED_COMMENTS: 'Unresolved comments',
   HAS_CONFLICTS: 'Merge conflicts',
   MERGEABILITY_PENDING: 'Checking conflicts',
   CHECKS_PENDING: 'Checks pending',
@@ -137,7 +138,8 @@ function hasPullRequestIssues(service: ServiceRelease) {
     return (
       pull.baseBranch === 'dev' &&
       (pull.reviewDecision !== 'approved' ||
-        item.blockingReasons.includes('HAS_CONFLICTS'))
+        item.blockingReasons.includes('HAS_CONFLICTS') ||
+        item.blockingReasons.includes('UNRESOLVED_COMMENTS'))
     )
   })
 }
@@ -830,6 +832,7 @@ export function ReleaseOverview({
     'services',
   )
   const [ticketFilter, setTicketFilter] = useState<TicketFilter>('all')
+  const [ticketAssigneeFilter, setTicketAssigneeFilter] = useState('')
   const [ticketSearch, setTicketSearch] = useState('')
   const [selectedIssueKey, setSelectedIssueKey] = useState('')
   const [pendingRemoveIssueKey, setPendingRemoveIssueKey] = useState('')
@@ -1805,6 +1808,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               <ReleaseTicketsView
                 tickets={releaseTickets}
                 ticketFilter={ticketFilter}
+                ticketAssigneeFilter={ticketAssigneeFilter}
                 ticketSearch={ticketSearch}
                 selectedIssueKey={selectedIssueKey}
                 removeError={removeTicketError}
@@ -1818,6 +1822,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                   />
                 }
                 onFilterChange={setTicketFilter}
+                onAssigneeFilterChange={setTicketAssigneeFilter}
                 onSearchChange={setTicketSearch}
                 onSelectTicket={(issueKey) => {
                   setRemoveTicketError('')
@@ -1890,7 +1895,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                   <button
                     className={serviceFilter === 'issues' ? 'active' : ''}
                     type="button"
-                    data-tooltip="Shows services with an open PR targeting the default branch instead of dev, or an open PR into dev that is not reviewer-approved or has Git merge conflicts."
+                    data-tooltip="Shows services with an open PR targeting the default branch instead of dev, or an open PR into dev that is not reviewer-approved, has unresolved review comments, or has Git merge conflicts."
                     onClick={() => {
                       setServiceFilter('issues')
                       onSelectRepository('')

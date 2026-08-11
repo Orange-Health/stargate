@@ -79,6 +79,11 @@ type GraphqlPullRequest = {
       state: string
     }>
   }
+  reviewThreads: {
+    nodes: Array<{
+      isResolved: boolean
+    }>
+  }
   commits: {
     nodes: Array<{
       commit: {
@@ -937,6 +942,34 @@ function reviewDecision(reviews: GitHubReview[]): ReviewDecision {
   return 'review_required'
 }
 
+function unresolvedReviewThreadCount(
+  threads: Array<{ isResolved: boolean }>,
+) {
+  return threads.filter((thread) => !thread.isResolved).length
+}
+
+function graphqlReviewDecision(
+  decision: GraphqlPullRequest['reviewDecision'],
+  reviews: GitHubReview[],
+  unresolvedThreads = 0,
+): ReviewDecision {
+  if (decision === 'APPROVED') return 'approved'
+  if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
+  const fromReviews = reviewDecision(reviews)
+  // GitHub can still report REVIEW_REQUIRED when an approval exists but
+  // unresolved conversation threads are blocking merge. Prefer the approval
+  // signal so eligibility can call out unresolved comments instead.
+  if (
+    decision === 'REVIEW_REQUIRED' &&
+    fromReviews === 'approved' &&
+    unresolvedThreads > 0
+  ) {
+    return 'approved'
+  }
+  if (decision === 'REVIEW_REQUIRED') return 'review_required'
+  return fromReviews
+}
+
 function pullParticipants(pull: GitHubPull, reviews: GitHubReview[]) {
   const participants = new Map<
     string,
@@ -990,16 +1023,6 @@ function graphqlCheckStatus(
   }
 }
 
-function graphqlReviewDecision(
-  decision: GraphqlPullRequest['reviewDecision'],
-  reviews: GitHubReview[],
-): ReviewDecision {
-  if (decision === 'APPROVED') return 'approved'
-  if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
-  if (decision === 'REVIEW_REQUIRED') return 'review_required'
-  return reviewDecision(reviews)
-}
-
 function mapGraphqlPullRequest(
   repository: string,
   pull: GraphqlPullRequest,
@@ -1013,6 +1036,9 @@ function mapGraphqlPullRequest(
       },
       state: review.state as GitHubReview['state'],
     }))
+  const unresolvedThreads = unresolvedReviewThreadCount(
+    pull.reviewThreads.nodes,
+  )
   const authorLogin = pull.author?.login ?? 'unknown'
   const authorAvatar = pull.author?.avatarUrl ?? ''
   let mergeable: boolean | null = null
@@ -1053,12 +1079,17 @@ function mapGraphqlPullRequest(
     headBranch: restShape.head.ref,
     author: authorLogin,
     assignees: restShape.assignees.map((assignee) => assignee.login),
-    reviewDecision: graphqlReviewDecision(pull.reviewDecision, reviews),
+    reviewDecision: graphqlReviewDecision(
+      pull.reviewDecision,
+      reviews,
+      unresolvedThreads,
+    ),
     mergeable: restShape.mergeable,
     mergeableState: restShape.mergeable_state,
     checks: graphqlCheckStatus(
       pull.commits.nodes[0]?.commit.statusCheckRollup?.state,
     ),
+    unresolvedReviewThreads: unresolvedThreads,
     updatedAt: restShape.updated_at,
     participants: pullParticipants(restShape, reviews),
   }
@@ -1090,6 +1121,9 @@ const GRAPHQL_PULL_FIELDS = `
   assignees(first: 20) { nodes { login avatarUrl } }
   latestReviews(first: 50) {
     nodes { author { login avatarUrl } state }
+  }
+  reviewThreads(first: 100) {
+    nodes { isResolved }
   }
   commits(last: 1) {
     nodes { commit { statusCheckRollup { state } } }

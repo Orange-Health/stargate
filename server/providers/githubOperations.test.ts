@@ -1060,6 +1060,7 @@ describe('repository state cache', () => {
                       },
                       reviewDecision: 'APPROVED',
                       latestReviews: { nodes: [{ state: 'APPROVED' }] },
+                      reviewThreads: { nodes: [] },
                       commits: {
                         nodes: [
                           {

@@ -104,6 +104,11 @@ type ControlRoomGraphqlPull = {
       state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED'
     }>
   }
+  reviewThreads: {
+    nodes: Array<{
+      isResolved: boolean
+    }>
+  }
   commits: {
     nodes: Array<{
       commit: { statusCheckRollup: { state: string } | null }
@@ -692,15 +697,28 @@ function checksStatus(checks: GitHubChecks): CheckStatus {
 function graphqlReviewDecision(
   decision: ControlRoomGraphqlPull['reviewDecision'],
   reviews: ControlRoomGraphqlPull['latestReviews']['nodes'],
+  unresolvedThreads = 0,
 ): ReviewDecision {
   if (decision === 'APPROVED') return 'approved'
   if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
-  if (decision === 'REVIEW_REQUIRED') return 'review_required'
   if (reviews.some((review) => review.state === 'CHANGES_REQUESTED')) {
     return 'changes_requested'
   }
-  if (reviews.some((review) => review.state === 'APPROVED')) return 'approved'
+  const hasApproval = reviews.some((review) => review.state === 'APPROVED')
+  // Prefer approval when unresolved conversations are what actually remain,
+  // so the UI can report unresolved comments instead of "review required".
+  if (decision === 'REVIEW_REQUIRED' && hasApproval && unresolvedThreads > 0) {
+    return 'approved'
+  }
+  if (decision === 'REVIEW_REQUIRED') return 'review_required'
+  if (hasApproval) return 'approved'
   return 'review_required'
+}
+
+function unresolvedReviewThreadCount(
+  threads: Array<{ isResolved: boolean }>,
+) {
+  return threads.filter((thread) => !thread.isResolved).length
 }
 
 function graphqlChecksStatus(state?: string): CheckStatus {
@@ -712,6 +730,9 @@ function graphqlChecksStatus(state?: string): CheckStatus {
 }
 
 function graphqlPromotionPull(pull: ControlRoomGraphqlPull): PromotionPullRequest {
+  const unresolvedThreads = unresolvedReviewThreadCount(
+    pull.reviewThreads.nodes,
+  )
   return {
     number: pull.number,
     title: pull.title,
@@ -728,10 +749,12 @@ function graphqlPromotionPull(pull: ControlRoomGraphqlPull): PromotionPullReques
     reviewDecision: graphqlReviewDecision(
       pull.reviewDecision,
       pull.latestReviews.nodes,
+      unresolvedThreads,
     ),
     checks: graphqlChecksStatus(
       pull.commits.nodes[0]?.commit.statusCheckRollup?.state,
     ),
+    unresolvedReviewThreads: unresolvedThreads,
   }
 }
 
@@ -1302,6 +1325,9 @@ async function fetchControlRoomGraphqlBatch(
             reviewDecision
             latestReviews(first: 50) {
               nodes { state }
+            }
+            reviewThreads(first: 100) {
+              nodes { isResolved }
             }
             commits(last: 1) {
               nodes { commit { statusCheckRollup { state } } }

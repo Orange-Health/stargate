@@ -37,6 +37,7 @@ const HARD_BLOCKERS: EligibilityReason[] = [
   'WRONG_BASE_BRANCH',
   'REVIEW_REQUIRED',
   'CHANGES_REQUESTED',
+  'UNRESOLVED_COMMENTS',
   'HAS_CONFLICTS',
   'MERGEABILITY_PENDING',
   'DRAFT',
@@ -131,6 +132,28 @@ export function ticketMatchesFilter(
     case 'merged':
       return ticket.readiness === 'merged'
   }
+}
+
+/** Sentinel for filtering tickets with no Jira assignee. */
+export const UNASSIGNED_ASSIGNEE = '__unassigned__'
+
+export function listTicketAssignees(tickets: ReleaseTicket[]): string[] {
+  const names = new Set<string>()
+  for (const ticket of tickets) {
+    const assignee = ticket.issue.assignee?.trim()
+    if (assignee) names.add(assignee)
+  }
+  return [...names].sort((left, right) => left.localeCompare(right))
+}
+
+export function ticketMatchesAssignee(
+  ticket: ReleaseTicket,
+  assigneeFilter: string,
+) {
+  if (!assigneeFilter) return true
+  const assignee = ticket.issue.assignee?.trim()
+  if (assigneeFilter === UNASSIGNED_ASSIGNEE) return !assignee
+  return assignee === assigneeFilter
 }
 
 export function ticketReadinessLabel(readiness: TicketReadiness) {

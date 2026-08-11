@@ -711,7 +711,7 @@ describe('ReleaseOverview', () => {
     expect(screen.getAllByText('service-api')).toHaveLength(2)
     expect(screen.getByRole('button', { name: 'Issues 1' })).toHaveAttribute(
       'data-tooltip',
-      'Shows services with an open PR targeting the default branch instead of dev, or an open PR into dev that is not reviewer-approved or has Git merge conflicts.',
+      'Shows services with an open PR targeting the default branch instead of dev, or an open PR into dev that is not reviewer-approved, has unresolved review comments, or has Git merge conflicts.',
     )
   })
 
@@ -1292,7 +1292,18 @@ describe('ReleaseOverview', () => {
     const ticketsDashboard: ReleaseDashboard = {
       ...dashboard,
       services: [
-        ...dashboard.services,
+        {
+          ...dashboard.services[0],
+          items: [
+            {
+              ...dashboard.services[0].items[0],
+              issue: {
+                ...dashboard.services[0].items[0].issue,
+                assignee: 'Ada Lovelace',
+              },
+            },
+          ],
+        },
         {
           repository: 'orange/service-web',
           defaultBranch: 'main',
@@ -1306,6 +1317,7 @@ describe('ReleaseOverview', () => {
                 key: 'OH-200',
                 summary: 'Already merged',
                 status: 'Done',
+                assignee: 'Grace Hopper',
                 url: 'https://jira.test/OH-200',
               },
               pullRequest: {
@@ -1368,6 +1380,29 @@ describe('ReleaseOverview', () => {
     expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
     expect(screen.getByRole('heading', { name: 'OH-123' })).toBeVisible()
     expect(screen.getByText(/service-api #8/)).toBeVisible()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Filter by assignee' }),
+      'Ada Lovelace',
+    )
+    expect(screen.getByRole('button', { name: /OH-123/ })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /OH-999/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /OH-200/ })).not.toBeInTheDocument()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Filter by assignee' }),
+      'Unassigned',
+    )
+    expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /OH-123/ })).not.toBeInTheDocument()
+
+    await user.selectOptions(
+      screen.getByRole('combobox', { name: 'Filter by assignee' }),
+      'All assignees',
+    )
+    expect(screen.getByRole('button', { name: /OH-123/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
+
     expect(screen.getByRole('button', { name: /^Blocked / })).toHaveAttribute(
       'data-tooltip',
       'Shows tickets with an open PR blocked by a hard issue such as missing review, merge conflicts, wrong base branch, or draft status.',

@@ -368,6 +368,7 @@ describe('Jira development links', () => {
               author: { login: 'dev', avatarUrl: 'https://avatar.test/dev' },
               assignees: { nodes: [] },
               latestReviews: { nodes: [] },
+              reviewThreads: { nodes: [] },
               commits: {
                 nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS' } } }],
               },
@@ -440,6 +441,7 @@ describe('Jira development links', () => {
               author: { login: 'dev', avatarUrl: 'https://avatar.test/dev' },
               assignees: { nodes: [] },
               latestReviews: { nodes: [] },
+              reviewThreads: { nodes: [] },
               commits: { nodes: [] },
             },
           }
@@ -513,6 +515,7 @@ describe('Jira development links', () => {
                   author: { login: 'dev', avatarUrl: '' },
                   assignees: { nodes: [] },
                   latestReviews: { nodes: [] },
+                  reviewThreads: { nodes: [] },
                   commits: { nodes: [] },
                 },
               },
@@ -541,6 +544,7 @@ describe('Jira development links', () => {
                       },
                     ],
                   },
+                  reviewThreads: { nodes: [] },
                   commits: {
                     nodes: [
                       { commit: { statusCheckRollup: { state: 'FAILURE' } } },
@@ -594,6 +598,84 @@ describe('Jira development links', () => {
       mergeableState: 'dirty',
       checks: 'failure',
       reviewDecision: 'changes_requested',
+    })
+  })
+
+  it('treats approved reviews with unresolved threads as approved, not review required', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input)
+      if (url === 'https://api.github.com/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          variables: Record<string, string | number>
+        }
+        const data: Record<string, unknown> = {}
+        for (const key of Object.keys(body.variables)) {
+          const match = /^number(\d+)$/.exec(key)
+          if (!match) continue
+          data[`p${match[1]}`] = {
+            pullRequest: {
+              databaseId: 55,
+              number: 55,
+              title: 'OH-55',
+              url: 'https://github.com/Orange-Health/a/pull/55',
+              state: 'OPEN',
+              isDraft: false,
+              merged: false,
+              mergeable: 'MERGEABLE',
+              mergeStateStatus: 'BLOCKED',
+              baseRefName: 'dev',
+              headRefName: 'feature/OH-55',
+              updatedAt: '2026-07-15T08:00:00Z',
+              reviewDecision: 'REVIEW_REQUIRED',
+              author: { login: 'dev', avatarUrl: '' },
+              assignees: { nodes: [] },
+              latestReviews: {
+                nodes: [
+                  {
+                    author: { login: 'reviewer', avatarUrl: '' },
+                    state: 'APPROVED',
+                  },
+                ],
+              },
+              reviewThreads: {
+                nodes: [{ isResolved: false }, { isResolved: true }],
+              },
+              commits: {
+                nodes: [
+                  { commit: { statusCheckRollup: { state: 'SUCCESS' } } },
+                ],
+              },
+            },
+          }
+        }
+        return new Response(JSON.stringify({ data }), { status: 200 })
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await discoverPullRequests(config, [
+      {
+        key: 'OH-55',
+        developmentSummary:
+          'https://github.com/Orange-Health/a/pull/55',
+      },
+    ])
+
+    expect(result.byIssue.get('OH-55')?.[0]).toMatchObject({
+      reviewDecision: 'approved',
+      unresolvedReviewThreads: 1,
+      mergeableState: 'blocked',
     })
   })
 })
@@ -706,6 +788,7 @@ describe('targeted search invalidation', () => {
                   author: { login: 'dev', avatarUrl: '' },
                   assignees: { nodes: [] },
                   latestReviews: { nodes: [] },
+                  reviewThreads: { nodes: [] },
                   commits: { nodes: [] },
                 },
               },
@@ -727,6 +810,7 @@ describe('targeted search invalidation', () => {
                   author: { login: 'dev', avatarUrl: '' },
                   assignees: { nodes: [] },
                   latestReviews: { nodes: [] },
+                  reviewThreads: { nodes: [] },
                   commits: { nodes: [] },
                 },
               },
@@ -822,6 +906,7 @@ describe('targeted search invalidation', () => {
               author: { login: 'dev', avatarUrl: '' },
               assignees: { nodes: [] },
               latestReviews: { nodes: [] },
+              reviewThreads: { nodes: [] },
               commits: { nodes: [] },
             },
           }

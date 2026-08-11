@@ -105,6 +105,19 @@ function checksSoftBlockReason(pull: { checks: string }) {
   return undefined
 }
 
+function reviewStatusLabel(pull: {
+  reviewDecision: string
+  unresolvedReviewThreads?: number
+}) {
+  if (
+    (pull.unresolvedReviewThreads ?? 0) > 0 &&
+    pull.reviewDecision === 'approved'
+  ) {
+    return 'unresolved comments'
+  }
+  return pull.reviewDecision.replaceAll('_', ' ')
+}
+
 function mergeBlockReason(
   step: PromotionStep,
   hasBackMerges: boolean,
@@ -112,6 +125,12 @@ function mergeBlockReason(
   if (hasBackMerges) return 'Resolve pending back-merges first'
   const pull = step.pullRequest
   if (!pull) return undefined
+  if (
+    (pull.unresolvedReviewThreads ?? 0) > 0 &&
+    pull.reviewDecision === 'approved'
+  ) {
+    return 'Resolve unresolved review comments'
+  }
   return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
 }
 
@@ -120,23 +139,35 @@ function canForceMergePromotion(
   hasBackMerges: boolean,
 ): boolean {
   if (hasBackMerges || !step.pullRequest) return false
+  const unresolvedComments =
+    (step.pullRequest.unresolvedReviewThreads ?? 0) > 0 &&
+    step.pullRequest.reviewDecision === 'approved'
   return (
     !hardMergeBlockReason(step.pullRequest) &&
-    Boolean(checksSoftBlockReason(step.pullRequest))
+    (Boolean(checksSoftBlockReason(step.pullRequest)) || unresolvedComments)
   )
 }
 
 function backMergeBlockReason(step: BackMergeStep) {
   const pull = step.pullRequest
   if (!pull) return undefined
+  if (
+    (pull.unresolvedReviewThreads ?? 0) > 0 &&
+    pull.reviewDecision === 'approved'
+  ) {
+    return 'Resolve unresolved review comments'
+  }
   return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
 }
 
 function canForceMergeBackMerge(step: BackMergeStep): boolean {
   if (!step.pullRequest) return false
+  const unresolvedComments =
+    (step.pullRequest.unresolvedReviewThreads ?? 0) > 0 &&
+    step.pullRequest.reviewDecision === 'approved'
   return (
     !hardMergeBlockReason(step.pullRequest) &&
-    Boolean(checksSoftBlockReason(step.pullRequest))
+    (Boolean(checksSoftBlockReason(step.pullRequest)) || unresolvedComments)
   )
 }
 
@@ -1054,7 +1085,7 @@ export function ServiceOperations({
                         {step.commitsAhead}{' '}
                         {step.commitsAhead === 1 ? 'commit' : 'commits'} waiting
                         · checks {step.pullRequest.checks} ·{' '}
-                        {step.pullRequest.reviewDecision.replaceAll('_', ' ')}
+                        {reviewStatusLabel(step.pullRequest)}
                       </small>
                       {blockReason && (
                         <small className="merge-block">{blockReason}</small>
@@ -1182,7 +1213,7 @@ export function ServiceOperations({
                         </a>
                       </strong>
                       <small>
-                        {step.pullRequest.reviewDecision.replaceAll('_', ' ')} ·{' '}
+                        {reviewStatusLabel(step.pullRequest)} ·{' '}
                         checks {step.pullRequest.checks}
                       </small>
                       {blockReason && (

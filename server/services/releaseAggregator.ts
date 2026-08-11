@@ -40,11 +40,17 @@ export function evaluateEligibility(
       if (pullRequest.baseBranch !== 'dev') {
         blockingReasons.push('WRONG_BASE_BRANCH')
       }
-      if (pullRequest.reviewDecision === 'review_required') {
-        blockingReasons.push('REVIEW_REQUIRED')
-      }
       if (pullRequest.reviewDecision === 'changes_requested') {
         blockingReasons.push('CHANGES_REQUESTED')
+      } else if (
+        (pullRequest.unresolvedReviewThreads ?? 0) > 0 &&
+        pullRequest.reviewDecision === 'approved'
+      ) {
+        blockingReasons.push('UNRESOLVED_COMMENTS')
+      } else if (pullRequest.reviewDecision === 'review_required') {
+        blockingReasons.push('REVIEW_REQUIRED')
+      } else if ((pullRequest.unresolvedReviewThreads ?? 0) > 0) {
+        blockingReasons.push('UNRESOLVED_COMMENTS')
       }
       if (
         pullRequest.mergeable === false ||

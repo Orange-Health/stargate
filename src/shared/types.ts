@@ -82,6 +82,7 @@ export type PullRequest = {
   mergeable: boolean | null
   mergeableState: string
   checks: CheckStatus
+  unresolvedReviewThreads?: number
   updatedAt: string
   participants?: Array<{
     login: string
@@ -95,6 +96,7 @@ export type EligibilityReason =
   | 'WRONG_BASE_BRANCH'
   | 'REVIEW_REQUIRED'
   | 'CHANGES_REQUESTED'
+  | 'UNRESOLVED_COMMENTS'
   | 'HAS_CONFLICTS'
   | 'MERGEABILITY_PENDING'
   | 'CHECKS_PENDING'
@@ -277,6 +279,7 @@ export type PromotionPullRequest = {
   mergeableState: string
   reviewDecision: ReviewDecision
   checks: CheckStatus
+  unresolvedReviewThreads?: number
   resolution?: 'existing' | 'created'
 }
 
