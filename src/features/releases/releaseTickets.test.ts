@@ -3,6 +3,7 @@ import type { ReleaseDashboard, ReleaseItem } from '../../shared/types'
 import {
   groupReleaseTickets,
   listTicketAssignees,
+  removeIssueFromDashboard,
   ticketMatchesAssignee,
   ticketMatchesFilter,
   ticketReadiness,
@@ -204,5 +205,26 @@ describe('groupReleaseTickets', () => {
     expect(
       tickets.every((ticket) => ticketMatchesAssignee(ticket, '')),
     ).toBe(true)
+  })
+
+  it('removes an issue from the dashboard across services and unmatched', () => {
+    const updated = removeIssueFromDashboard(dashboard, 'OH-1')
+    expect(updated.services.flatMap((service) => service.items.map((item) => item.issue.key))).toEqual([
+      'OH-2',
+      'OH-3',
+    ])
+    expect(updated.unmatched.map((item) => item.issue.key)).toEqual(['OH-9'])
+    expect(updated.version.issueCount).toBe(
+      Math.max(0, (dashboard.version.issueCount ?? 0) - 1),
+    )
+    expect(updated.cached).toBe(false)
+
+    const withoutUnmatched = removeIssueFromDashboard(dashboard, 'OH-9')
+    expect(withoutUnmatched.unmatched).toEqual([])
+    expect(
+      withoutUnmatched.services.flatMap((service) =>
+        service.items.map((item) => item.issue.key),
+      ),
+    ).toEqual(['OH-1', 'OH-2', 'OH-1', 'OH-3'])
   })
 })

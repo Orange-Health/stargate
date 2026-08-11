@@ -170,3 +170,56 @@ export function ticketReadinessLabel(readiness: TicketReadiness) {
       return 'Not merge-ready'
   }
 }
+
+function isClearedMergeItem(item: ReleaseItem) {
+  return (
+    Boolean(item.pullRequest?.merged) &&
+    (item.pullRequest?.baseBranch === 'dev' ||
+      item.pullRequest?.baseBranch === 'main')
+  )
+}
+
+/** Optimistically drop a Jira issue from the in-memory release dashboard. */
+export function removeIssueFromDashboard(
+  dashboard: ReleaseDashboard,
+  issueKey: string,
+): ReleaseDashboard {
+  const key = issueKey.toUpperCase()
+  const hadIssue =
+    dashboard.unmatched.some((item) => item.issue.key.toUpperCase() === key) ||
+    dashboard.services.some((service) =>
+      service.items.some((item) => item.issue.key.toUpperCase() === key),
+    )
+  if (!hadIssue) return dashboard
+
+  const services = dashboard.services
+    .map((service) => {
+      const items = service.items.filter(
+        (item) => item.issue.key.toUpperCase() !== key,
+      )
+      if (items.length === service.items.length) return service
+      return {
+        ...service,
+        items,
+        eligibleCount: items.filter((item) => item.eligible).length,
+        blockedCount: items.filter(
+          (item) => !item.eligible && !item.pullRequest?.merged,
+        ).length,
+        mergedCount: items.filter(isClearedMergeItem).length,
+      }
+    })
+    .filter((service) => service.items.length > 0)
+
+  return {
+    ...dashboard,
+    services,
+    unmatched: dashboard.unmatched.filter(
+      (item) => item.issue.key.toUpperCase() !== key,
+    ),
+    version: {
+      ...dashboard.version,
+      issueCount: Math.max(0, (dashboard.version.issueCount ?? 0) - 1),
+    },
+    cached: false,
+  }
+}

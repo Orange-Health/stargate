@@ -464,6 +464,8 @@ export function createApp() {
       setDashboardProgress(progressId, {
         phase: 'starting',
         message: 'Preparing release data…',
+        current: 0,
+        total: 1,
       })
     }
     response.json(

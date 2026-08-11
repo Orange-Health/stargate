@@ -1319,23 +1319,29 @@ export async function discoverPullRequests(
 
   const searchBatches = chunkArray(uncachedIssueKeys, SEARCH_ISSUE_BATCH_SIZE)
   const acquireSearchSlot = createSearchSlotScheduler(SEARCH_SPACING_MS)
-  let searchesStarted = 0
+  let searchesCompleted = 0
+  if (searchBatches.length > 0) {
+    reportProgress?.({
+      phase: 'github-search',
+      message: 'Searching GitHub for pull requests…',
+      current: 0,
+      total: searchBatches.length,
+    })
+  }
   const searches = await mapConcurrent(
     searchBatches,
     SEARCH_CONCURRENCY,
     async (batch) => {
       await acquireSearchSlot()
-      searchesStarted += 1
+      const result = await searchIssueKeyBatch(config, batch)
+      searchesCompleted += 1
       reportProgress?.({
         phase: 'github-search',
         message: 'Searching GitHub for pull requests…',
-        current: Math.min(
-          searchesStarted * SEARCH_ISSUE_BATCH_SIZE,
-          uncachedIssueKeys.length,
-        ),
-        total: issuesNeedingSearch.length,
+        current: searchesCompleted,
+        total: searchBatches.length,
       })
-      return searchIssueKeyBatch(config, batch)
+      return result
     },
   )
 
@@ -1397,20 +1403,27 @@ export async function discoverPullRequests(
   })
 
   if (keysNeedingFallback.length > 0) {
-    let fallbackStarted = 0
+    let fallbackCompleted = 0
+    reportProgress?.({
+      phase: 'github-search',
+      message: 'Searching GitHub for pull requests…',
+      current: 0,
+      total: keysNeedingFallback.length,
+    })
     const fallbackResults = await mapConcurrent(
       keysNeedingFallback,
       1,
       async (issueKey) => {
         await acquireSearchSlot()
-        fallbackStarted += 1
+        const result = await searchIssueKeyBatch(config, [issueKey])
+        fallbackCompleted += 1
         reportProgress?.({
           phase: 'github-search',
           message: 'Searching GitHub for pull requests…',
-          current: fallbackStarted,
+          current: fallbackCompleted,
           total: keysNeedingFallback.length,
         })
-        return searchIssueKeyBatch(config, [issueKey])
+        return result
       },
     )
     fallbackResults.forEach((result, index) => {
@@ -1452,21 +1465,34 @@ export async function discoverPullRequests(
 
   const batches = chunkArray(uncached, GRAPHQL_PULL_BATCH_SIZE)
   let batchesCompleted = 0
+  if (batches.length > 0) {
+    reportProgress?.({
+      phase: 'github-details',
+      message: 'Loading pull request details…',
+      current: 0,
+      total: batches.length,
+    })
+  } else if (entries.length > 0) {
+    reportProgress?.({
+      phase: 'github-details',
+      message: 'Loading pull request details…',
+      current: 1,
+      total: 1,
+    })
+  }
   const batchResults = await mapConcurrent(
     batches,
     MAX_CONCURRENT_GITHUB_READS,
     async (batch) => {
+      const result = await fetchPullRequestBatch(config, batch)
       batchesCompleted += 1
       reportProgress?.({
         phase: 'github-details',
         message: 'Loading pull request details…',
-        current: Math.min(
-          batchesCompleted * GRAPHQL_PULL_BATCH_SIZE,
-          uncached.length,
-        ),
-        total: entries.length,
+        current: batchesCompleted,
+        total: batches.length,
       })
-      return fetchPullRequestBatch(config, batch)
+      return result
     },
   )
   batchResults.forEach((result, index) => {

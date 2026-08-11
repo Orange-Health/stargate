@@ -12,6 +12,7 @@ import type {
   ReleaseDashboard,
   ServiceRelease,
 } from './shared/types'
+import { removeIssueFromDashboard } from './features/releases/releaseTickets'
 
 function App() {
   const initialSelection = new URLSearchParams(window.location.search)
@@ -133,6 +134,8 @@ function App() {
     setDashboardProgress({
       phase: 'starting',
       message: 'Preparing release data…',
+      current: 0,
+      total: 1,
     })
     progressTimer = window.setTimeout(pollProgress, 150)
     try {
@@ -193,6 +196,12 @@ function App() {
     })
   }
 
+  function removeIssue(issueKey: string) {
+    setDashboard((current) =>
+      current ? removeIssueFromDashboard(current, issueKey) : current,
+    )
+  }
+
   if (checkingConnection) {
     return (
       <main className="boot-state">
@@ -224,6 +233,7 @@ function App() {
           : loadDashboard(selectedVersionId, true)
       }
       onServiceUpdated={updateService}
+      onIssueRemoved={removeIssue}
       onDisconnect={() => void disconnect()}
     />
   )

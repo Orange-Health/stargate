@@ -119,6 +119,8 @@ export async function aggregateRelease(
     reportProgress?.({
       phase: 'mapping',
       message: 'Using recently cached release data…',
+      current: 1,
+      total: 1,
     })
     return { ...cached.dashboard, cached: true }
   }
@@ -126,6 +128,8 @@ export async function aggregateRelease(
   reportProgress?.({
     phase: 'jira',
     message: `Loading Jira release ${versionId} and its tickets…`,
+    current: 0,
+    total: 1,
   })
   const [version, issues] = await Promise.all([
     getVersion(config, versionId),
@@ -134,8 +138,8 @@ export async function aggregateRelease(
   reportProgress?.({
     phase: 'jira',
     message: `Found ${issues.length} Jira tickets in ${version.name}.`,
-    current: issues.length,
-    total: issues.length,
+    current: 1,
+    total: 1,
   })
   const discovery = await discoverPullRequests(
     config,
@@ -148,6 +152,8 @@ export async function aggregateRelease(
   reportProgress?.({
     phase: 'mapping',
     message: 'Grouping matched pull requests by service…',
+    current: 0,
+    total: 1,
   })
   const serviceItems = new Map<string, ReleaseItem[]>()
   const unmatched: ReleaseItem[] = []
@@ -191,8 +197,8 @@ export async function aggregateRelease(
   reportProgress?.({
     phase: 'mapping',
     message: `Mapped ${issues.length - unmatched.length} tickets across ${services.length} services.`,
-    current: services.length,
-    total: services.length,
+    current: 1,
+    total: 1,
   })
 
   const dashboard: ReleaseDashboard = {
