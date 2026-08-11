@@ -3,6 +3,7 @@ import {
   completeControlRoomSyncProgress,
   createControlRoomSyncProgress,
   getControlRoomSyncProgress,
+  publishControlRoomServiceState,
   updateControlRoomProviderProgress,
 } from './controlRoomSyncProgress.js'
 
@@ -166,6 +167,58 @@ describe('control-room sync progress', () => {
       completed: 1,
       percent: 100,
       services: [{ status: 'synced', stage: 'complete', weight: 1 }],
+    })
+  })
+
+  it('attaches and replaces progressive repository state', () => {
+    const progressId = 'progress-state-test'
+    const repository = 'Orange-Health/service-api'
+    createControlRoomSyncProgress(progressId, [repository])
+    updateControlRoomProviderProgress(
+      progressId,
+      repository,
+      'jenkins',
+      'succeeded',
+      'Deployments load separately.',
+      'jenkins-ready',
+    )
+
+    const partialState = {
+      repository,
+      defaultBranch: 'main',
+      productionReleases: [],
+      deployedTags: [],
+      deploymentLookupFailed: false,
+      productionReady: false,
+      promotionSteps: [],
+      jenkinsServices: [],
+      fetchedAt: new Date().toISOString(),
+      partial: true,
+    }
+    updateControlRoomProviderProgress(
+      progressId,
+      repository,
+      'github',
+      'succeeded',
+      'GitHub promotion state is ready.',
+      'github-ready',
+      partialState,
+    )
+
+    expect(getControlRoomSyncProgress(progressId)?.services[0].state).toEqual(
+      partialState,
+    )
+
+    const enriched = { ...partialState, partial: false }
+    publishControlRoomServiceState(
+      progressId,
+      repository,
+      enriched,
+      'Release build and tag details are ready.',
+    )
+    expect(getControlRoomSyncProgress(progressId)?.services[0]).toMatchObject({
+      state: enriched,
+      message: 'Release build and tag details are ready.',
     })
   })
 })

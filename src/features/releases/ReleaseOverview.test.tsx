@@ -812,6 +812,11 @@ describe('ReleaseOverview', () => {
             avatarUrl: 'https://avatars.test/reviewer.png',
             role: 'reviewer' as const,
           },
+          {
+            login: 'alice',
+            avatarUrl: 'https://avatars.test/alice.png',
+            role: 'author' as const,
+          },
         ],
       },
       eligible: true,
@@ -845,6 +850,15 @@ describe('ReleaseOverview', () => {
     )
 
     expect(screen.getByAltText('reviewer')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'View people involved' }))
+    expect(
+      await screen.findByRole('dialog', { name: '#8 Contributors' }),
+    ).toBeVisible()
+    expect(screen.getByText('alice')).toBeVisible()
+    expect(screen.getByText(/author · 1 PR/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog', { name: '#8 Contributors' })).not.toBeInTheDocument()
+
     expect(screen.getByText('0 of 1 tickets merged to dev')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Merge to dev' }))
     await user.click(screen.getByRole('button', { name: 'Merge' }))

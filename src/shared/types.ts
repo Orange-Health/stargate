@@ -355,7 +355,10 @@ export type ReleaseControlRoomState = Pick<
   | 'promotionSteps'
   | 'jenkinsServices'
   | 'fetchedAt'
->
+> & {
+  /** True while workflow runs / tag-delta enrichment is still pending. */
+  partial?: boolean
+}
 
 export type ReleaseControlSyncError = {
   code: string
@@ -415,6 +418,8 @@ export type ReleaseControlServiceSyncProgress = {
   weight: number
   github: ReleaseControlProviderSyncStatus
   jenkins: ReleaseControlProviderSyncStatus
+  /** Latest known control-room state for progressive UI unlock. */
+  state?: ReleaseControlRoomState
   updatedAt: string
 }
 

@@ -74,6 +74,8 @@ import {
   completeControlRoomSyncProgress,
   createControlRoomSyncProgress,
   getControlRoomSyncProgress,
+  publishControlRoomServiceState,
+  trackControlRoomEnrichment,
   updateControlRoomProviderProgress,
 } from './services/controlRoomSyncProgress.js'
 
@@ -746,55 +748,44 @@ export function createApp() {
           progressId,
           repository,
           'jenkins',
-          'running',
-          'Loading deployment status from Jenkins.',
-          'jenkins-loading',
+          'succeeded',
+          'Deployments load separately from Jenkins.',
+          'jenkins-ready',
         )
       }
     }
-    const [github, deployments] = await Promise.all([
-      getReleaseControlRoomStatesBatch(
-        config,
-        repositories,
-        parsed.data.forceRefresh,
-        progressId
-          ? (repository, status, message, step) =>
-              updateControlRoomProviderProgress(
-                progressId,
-                repository,
-                'github',
-                status,
-                message,
-                step,
-              )
-          : undefined,
-      ),
-      getCurrentDeploymentsBatch(
-        config,
-        repositories,
-        parsed.data.forceRefresh,
-      ).then((results) => {
-        if (progressId) {
-          for (const result of results) {
+    const github = await getReleaseControlRoomStatesBatch(
+      config,
+      repositories,
+      parsed.data.forceRefresh,
+      progressId
+        ? (repository, status, message, step, state) =>
             updateControlRoomProviderProgress(
               progressId,
-              result.repository,
-              'jenkins',
-              result.deploymentLookupFailed ? 'failed' : 'succeeded',
-              result.deploymentLookupFailed
-                ? 'Jenkins deployment status is unavailable.'
-                : 'Jenkins deployment status is ready.',
-              result.deploymentLookupFailed
-                ? 'jenkins-failed'
-                : 'jenkins-ready',
+              repository,
+              'github',
+              status,
+              message,
+              step,
+              state,
             )
+        : undefined,
+      progressId
+        ? {
+            onEnrichment: (enrichment) => {
+              trackControlRoomEnrichment(progressId, enrichment)
+            },
+            publishEnrichedState: (repository, state) =>
+              publishControlRoomServiceState(
+                progressId,
+                repository,
+                state,
+                'Release build and tag details are ready.',
+              ),
           }
-        }
-        return results
-      }),
-    ])
-    const deploymentsByRepository = new Map(
-      deployments.map((deployment) => [deployment.repository, deployment]),
+        : {
+            onEnrichment: (enrichment) => enrichment,
+          },
     )
     if (progressId) completeControlRoomSyncProgress(progressId)
     const durationMs = Math.round(performance.now() - startedAt)
@@ -802,14 +793,12 @@ export function createApp() {
     response.json({
       results: github.results.map((result) => {
         if (!result.state) return result
-        const deployment = deploymentsByRepository.get(result.repository)
         return {
           repository: result.repository,
           state: {
             ...result.state,
-            deployedTags: deployment?.deployedTags ?? [],
-            deploymentLookupFailed:
-              deployment?.deploymentLookupFailed ?? true,
+            deployedTags: result.state.deployedTags ?? [],
+            deploymentLookupFailed: false,
           },
         }
       }),

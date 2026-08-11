@@ -1589,9 +1589,18 @@ button:disabled {
 
 .participant-list {
   align-items: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
   display: flex;
   margin-top: 9px;
-  padding-left: 3px;
+  padding: 0 0 0 3px;
+}
+
+.participant-list:focus-visible {
+  border-radius: 999px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .participant-list img,
@@ -3143,7 +3152,7 @@ label {
 .release-day-header,
 .release-day-toolbar,
 .release-day-step,
-.release-day-log > div {
+.release-day-log > div:first-child {
   align-items: center;
   display: flex;
 }
@@ -3412,8 +3421,11 @@ label {
   width: 38px;
 }
 
+.release-day-table th:nth-child(2),
 .release-day-table td:nth-child(2) {
-  min-width: 190px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  width: 20%;
 }
 
 .release-day-table td > strong,
@@ -3841,8 +3853,43 @@ label {
   padding: 14px;
 }
 
-.release-day-log > div {
+.release-day-log.collapsed {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.release-day-log > div:first-child {
   justify-content: space-between;
+}
+
+.release-day-log-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.release-day-log-toggle:hover h3,
+.release-day-log-toggle:focus-visible h3 {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.release-day-log-chevron {
+  flex: 0 0 auto;
+  opacity: 0.7;
+  transform: rotate(-90deg);
+  transition: transform 180ms ease;
+}
+
+.release-day-log-chevron.open {
+  transform: rotate(0deg);
 }
 
 .release-day-log h3 {
@@ -3851,9 +3898,20 @@ label {
 }
 
 .release-day-log > div > span,
-.release-day-log > p {
+.release-day-log-body > p {
   color: var(--on-strong-muted);
   font-size: 10px;
+}
+
+.release-day-log-body[hidden] {
+  display: none;
+}
+
+.release-day-log-body:not([hidden]) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .release-day-log ol {
@@ -3864,6 +3922,10 @@ label {
   padding: 0;
 }
 
+.release-day-log-body > p {
+  margin: 10px 0 0;
+}
+
 .release-day-workspace {
   display: grid;
   flex: 1 1 auto;
@@ -3871,6 +3933,11 @@ label {
   grid-template-columns: minmax(0, 3fr) minmax(220px, 1fr);
   min-height: 320px;
   overflow: hidden;
+}
+
+.release-day-workspace.log-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 
 .release-day-log li {
@@ -4015,6 +4082,10 @@ label {
   .release-day-log {
     height: 220px;
     margin-top: 14px;
+  }
+
+  .release-day-log.collapsed {
+    height: auto;
   }
 
   .workflow-links {

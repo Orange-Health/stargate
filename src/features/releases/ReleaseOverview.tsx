@@ -16,13 +16,19 @@ import type {
   ServiceRelease,
 } from "../../shared/types";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ReleaseDevelopersDialog } from "./ReleaseDevelopersDialog";
+import {
+  developersFromParticipants,
+  type ReleaseDeveloper,
+} from "./releaseDevelopers";
 import {
   featureMergeActions,
   isFeatureForceMergeReady,
   isFeatureMergeReady,
   isFeatureRetargetReady,
 } from "./featureMerge";
-import { BulkQaDeployDialog, deployableQaTargets } from "./BulkQaDeployDialog";
+import { BulkQaDeployDialog } from "./BulkQaDeployDialog";
+import { deployableQaTargets } from "./deployableQaTargets";
 import { BulkQaReleaseDialog } from "./BulkQaReleaseDialog";
 import { StagingReleaseDialog } from "./StagingReleaseDialog";
 import { ProductionReleaseDialog } from "./ProductionReleaseDialog";
@@ -396,6 +402,10 @@ function ServiceDetail({
   );
   const [pendingMerge, setPendingMerge] = useState<PendingFeatureMerge>();
   const [pendingBulkMerge, setPendingBulkMerge] = useState(false);
+  const [participantsModal, setParticipantsModal] = useState<{
+    pullNumber: number;
+    developers: ReleaseDeveloper[];
+  }>();
   const readyMergeActions = featureMergeActions(service, optimisticallyMerged);
   const mergeBusy = bulkMerging || merging !== undefined;
 
@@ -684,9 +694,19 @@ function ServiceDetail({
                             <span>#{item.pullRequest.number}</span>
                           </p>
                           {Boolean(item.pullRequest.participants?.length) && (
-                            <div
+                            <button
+                              type="button"
                               className="participant-list"
-                              aria-label="People involved"
+                              aria-label="View people involved"
+                              onClick={() =>
+                                setParticipantsModal({
+                                  pullNumber: item.pullRequest!.number,
+                                  developers: developersFromParticipants(
+                                    item.pullRequest!.participants ?? [],
+                                    item.pullRequest!.number,
+                                  ),
+                                })
+                              }
                             >
                               {item.pullRequest.participants
                                 ?.slice(0, 6)
@@ -695,7 +715,7 @@ function ServiceDetail({
                                     src={person.avatarUrl}
                                     alt={person.login}
                                     title={`${person.login} · ${person.role}`}
-                                    key={person.login}
+                                    key={`${person.login}-${person.role}`}
                                   />
                                 ))}
                               {(item.pullRequest.participants?.length ?? 0) >
@@ -706,7 +726,7 @@ function ServiceDetail({
                                     0) - 6}
                                 </span>
                               )}
-                            </div>
+                            </button>
                           )}
                         </>
                       )}
@@ -793,6 +813,15 @@ function ServiceDetail({
           confirmLabel={pendingBulkMergeCopy.confirmLabel}
           onCancel={() => setPendingBulkMerge(false)}
           onConfirm={() => void mergeAllReadyPullRequests()}
+        />
+      )}
+      {participantsModal && (
+        <ReleaseDevelopersDialog
+          repository={service.repository}
+          developers={participantsModal.developers}
+          eyebrow="PR participants"
+          title={`#${participantsModal.pullNumber} Contributors`}
+          onClose={() => setParticipantsModal(undefined)}
         />
       )}
       {operationsActivated && (

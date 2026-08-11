@@ -1,5 +1,6 @@
 import type {
   ReleaseControlProviderSyncStatus,
+  ReleaseControlRoomState,
   ReleaseControlServiceSyncProgress,
   ReleaseControlSyncProgress,
   ReleaseControlSyncStep,
@@ -8,6 +9,7 @@ import type {
 const PROGRESS_TTL_MS = 5 * 60_000
 const progress = new Map<string, ReleaseControlSyncProgress>()
 const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const enrichmentWaiters = new Map<string, Promise<void>>()
 
 /** GitHub work is ~70% of a service; Jenkins is the remaining ~30%. */
 const GITHUB_WEIGHT: Partial<Record<ReleaseControlSyncStep, number>> = {
@@ -34,6 +36,7 @@ function scheduleExpiry(progressId: string) {
   const timer = setTimeout(() => {
     progress.delete(progressId)
     expiryTimers.delete(progressId)
+    enrichmentWaiters.delete(progressId)
   }, PROGRESS_TTL_MS)
   timer.unref()
   expiryTimers.set(progressId, timer)
@@ -97,6 +100,7 @@ function deriveServiceProgress(
   providerStatus: ReleaseControlProviderSyncStatus,
   message: string,
   step?: ReleaseControlSyncStep,
+  state?: ReleaseControlRoomState,
 ): ReleaseControlServiceSyncProgress {
   const github =
     provider === 'github' ? providerStatus : current.github
@@ -144,6 +148,7 @@ function deriveServiceProgress(
     step: resolvedStep,
     weight: serviceWeight(githubStep, jenkinsStep, status),
     message: finalMessage,
+    ...(state ? { state } : {}),
     updatedAt: new Date().toISOString(),
   }
 }
@@ -202,6 +207,7 @@ export function updateControlRoomProviderProgress(
   providerStatus: ReleaseControlProviderSyncStatus,
   message: string,
   step?: ReleaseControlSyncStep,
+  state?: ReleaseControlRoomState,
 ) {
   const current = progress.get(progressId)
   if (!current) return
@@ -213,15 +219,70 @@ export function updateControlRoomProviderProgress(
       providerStatus,
       message,
       step,
+      state,
     )
   })
   const summary = summarize(services)
+  // Keep overall status running while enrichment may still be in flight.
+  const enrichmentPending = enrichmentWaiters.has(progressId)
   progress.set(progressId, {
     ...current,
     ...summary,
+    status: enrichmentPending ? 'running' : summary.status,
     services,
     updatedAt: new Date().toISOString(),
   })
+  scheduleExpiry(progressId)
+}
+
+/** Publish or merge an enriched control-room state onto a service entry. */
+export function publishControlRoomServiceState(
+  progressId: string,
+  repository: string,
+  state: ReleaseControlRoomState,
+  message?: string,
+) {
+  const current = progress.get(progressId)
+  if (!current) return
+  const services = current.services.map((service) => {
+    if (service.repository !== repository) return service
+    return {
+      ...service,
+      state,
+      message: message ?? service.message,
+      updatedAt: new Date().toISOString(),
+    }
+  })
+  progress.set(progressId, {
+    ...current,
+    services,
+    updatedAt: new Date().toISOString(),
+  })
+  scheduleExpiry(progressId)
+}
+
+/** Track deferred enrichment so progress stays running until it finishes. */
+export function trackControlRoomEnrichment(
+  progressId: string,
+  enrichment: Promise<void>,
+) {
+  const tracked = enrichment
+    .catch(() => undefined)
+    .finally(() => {
+      if (enrichmentWaiters.get(progressId) === tracked) {
+        enrichmentWaiters.delete(progressId)
+      }
+      completeControlRoomSyncProgress(progressId)
+    })
+  enrichmentWaiters.set(progressId, tracked)
+  const current = progress.get(progressId)
+  if (current) {
+    progress.set(progressId, {
+      ...current,
+      status: 'running',
+      updatedAt: new Date().toISOString(),
+    })
+  }
   scheduleExpiry(progressId)
 }
 
@@ -232,6 +293,15 @@ export function getControlRoomSyncProgress(progressId: string) {
 export function completeControlRoomSyncProgress(progressId: string) {
   const current = progress.get(progressId)
   if (!current) return
+  if (enrichmentWaiters.has(progressId)) {
+    progress.set(progressId, {
+      ...current,
+      status: 'running',
+      updatedAt: new Date().toISOString(),
+    })
+    scheduleExpiry(progressId)
+    return
+  }
   const services = current.services.map((service) => {
     if (service.status === 'synced' || service.status === 'failed') {
       return {

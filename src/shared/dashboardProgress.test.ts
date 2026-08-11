@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dashboardProgressPercent } from './dashboardProgress'
+import { dashboardProgressPercent } from './dashboardProgress.js'
 
 describe('dashboardProgressPercent', () => {
   it('maps each phase into a non-overlapping overall range', () => {

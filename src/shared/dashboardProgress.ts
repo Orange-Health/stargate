@@ -1,4 +1,4 @@
-import type { DashboardProgress } from './types'
+import type { DashboardProgress } from './types.js'
 
 /** Overall load ranges so no mid-flight phase can paint the bar at 100%. */
 const PHASE_RANGE: Record<

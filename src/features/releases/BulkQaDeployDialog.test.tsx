@@ -3,10 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { DeploymentFreshness, ServiceRelease } from '../../shared/types'
-import {
-  BulkQaDeployDialog,
-  deployableQaTargets,
-} from './BulkQaDeployDialog'
+import { BulkQaDeployDialog } from './BulkQaDeployDialog'
+import { deployableQaTargets } from './deployableQaTargets'
 
 const mergedService: ServiceRelease = {
   repository: 'orange/service-api',

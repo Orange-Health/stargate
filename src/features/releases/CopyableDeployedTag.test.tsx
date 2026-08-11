@@ -3,8 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CopyableDeployedTag,
-  liveProductionTags,
 } from './CopyableDeployedTag'
+import { liveProductionTags } from './liveProductionTags'
 
 describe('liveProductionTags', () => {
   const deployments = [
