@@ -579,6 +579,50 @@ export type TriggeredProductionDeployment = {
   imageTag: string
 }
 
+export type EitriNamespace = Exclude<DeploymentEnvironment, 'qa'>
+
+export type TriggerEitriDeploymentInput = {
+  repository: string
+  service: string
+  namespace: EitriNamespace
+  branch?: string
+  commitSha?: string
+  stagingEnvUpdateJob?: string
+}
+
+export type TriggeredEitriDeployment = {
+  queueId: number
+  queueUrl: string
+  buildUrl?: string
+  buildNumber?: number
+  jobName: string
+  service: string
+  namespace: EitriNamespace
+  branch?: string
+  commitSha?: string
+  stagingEnvUpdateJob: string
+}
+
+export type EitriBuild = {
+  buildNumber: number
+  buildUrl: string
+  service: string
+  namespace: EitriNamespace
+  branch?: string
+  commitSha?: string
+  stagingEnvUpdateJob?: string
+  status: 'running' | 'succeeded' | 'failed' | 'canceled'
+  createdAt: string
+}
+
+export type EitriBuildsResult = {
+  repository: string
+  jenkinsServices: string[]
+  builds: EitriBuild[]
+  lookupFailed: boolean
+  fetchedAt: string
+}
+
 export type ApiErrorBody = {
   error: {
     code: string

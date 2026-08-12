@@ -14,7 +14,12 @@ import type {
 } from '../../shared/types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DeployDialog } from './DeployDialog'
+import { EitriOperations } from './EitriOperations'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
+import {
+  ReleasePlatformToggle,
+  type ReleasePlatform,
+} from './ReleasePlatformToggle'
 
 type Props = {
   repository: string
@@ -196,6 +201,10 @@ export function ServiceOperations({
     message: string
     status?: BuildStatus
   }>()
+  const [releasePlatform, setReleasePlatform] =
+    useState<ReleasePlatform>('gha')
+  const [eitriRefreshToken, setEitriRefreshToken] = useState(0)
+  const [eitriRefreshing, setEitriRefreshing] = useState(false)
   const previousBuilds = useRef(new Map<string, BuildStatus>())
   const buildsInitialized = useRef(false)
   const browserNotificationsRef = useRef(browserNotifications)
@@ -204,6 +213,7 @@ export function ServiceOperations({
   const releaseLimitRef = useRef(releaseLimit)
   const releaseStateRef = useRef(releaseState)
   const viewRef = useRef(view)
+  const releasePlatformRef = useRef(releasePlatform)
 
   useEffect(() => {
     browserNotificationsRef.current = browserNotifications
@@ -220,6 +230,16 @@ export function ServiceOperations({
   useEffect(() => {
     viewRef.current = view
   }, [view])
+
+  useEffect(() => {
+    releasePlatformRef.current = releasePlatform
+  }, [releasePlatform])
+
+  useEffect(() => {
+    setReleasePlatform('gha')
+    setEitriRefreshToken(0)
+    setEitriRefreshing(false)
+  }, [repository])
 
   const announceCompletedBuilds = useCallback(
     (nextState: RepositoryReleaseData) => {
@@ -540,7 +560,9 @@ export function ServiceOperations({
   ])
 
   const releaseTrackKey =
-    releaseState && (view === 'all' || view === 'releases')
+    releasePlatform === 'gha' &&
+    releaseState &&
+    (view === 'all' || view === 'releases')
       ? [
           ...releaseState.stagingReleases.map((release) => release.tag),
           ...releaseState.productionReleases.map((release) => release.tag),
@@ -711,6 +733,13 @@ export function ServiceOperations({
   }
 
   async function refreshOperations() {
+    if (
+      releasePlatformRef.current === 'eitri' &&
+      (viewRef.current === 'all' || viewRef.current === 'releases')
+    ) {
+      setEitriRefreshToken((current) => current + 1)
+      return
+    }
     setRefreshing(true)
     setError('')
     try {
@@ -882,18 +911,37 @@ export function ServiceOperations({
             className="secondary-button"
             type="button"
             onClick={() => void refreshOperations()}
-            disabled={refreshing}
+            disabled={
+              refreshing || (view === 'releases' && eitriRefreshing)
+            }
           >
-            {refreshing
+            {refreshing || (view === 'releases' && eitriRefreshing)
               ? 'Refreshing…'
               : view === 'releases'
-                ? '↻ Refresh releases'
+                ? releasePlatform === 'eitri'
+                  ? '↻ Refresh EITRI'
+                  : '↻ Refresh releases'
                 : '↻ Refresh branch ops'}
           </button>
+          {view === 'releases' && (
+            <ReleasePlatformToggle
+              value={releasePlatform}
+              onChange={setReleasePlatform}
+            />
+          )}
         </div>
       )}
 
-      {(view === 'all' || view === 'releases') && (
+      {(view === 'all' || view === 'releases') && releasePlatform === 'eitri' && (
+        <EitriOperations
+          key={`${repository}-eitri`}
+          repository={repository}
+          refreshToken={eitriRefreshToken}
+          onRefreshingChange={setEitriRefreshing}
+        />
+      )}
+
+      {(view === 'all' || view === 'releases') && releasePlatform === 'gha' && (
         <>
       <section className="operation-section">
         <div className="operation-heading">

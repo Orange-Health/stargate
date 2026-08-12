@@ -1,0 +1,390 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { api } from '../../shared/api'
+import type { EitriBuild, EitriBuildsResult } from '../../shared/types'
+import { EitriDialog } from './EitriDialog'
+
+type Props = {
+  repository: string
+  onRefreshingChange?: (refreshing: boolean) => void
+  refreshToken?: number
+}
+
+const statusLabels: Record<EitriBuild['status'], string> = {
+  running: 'Running',
+  succeeded: 'Succeeded',
+  failed: 'Failed',
+  canceled: 'Canceled',
+}
+
+const BUILD_POLL_INTERVAL_MS = 15_000
+const BUILD_POLL_TIMEOUT_MS = 30_000
+const NOTIFICATION_KEY = 'release-build-notifications'
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error('Timed out'))
+    }, ms)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId)
+        resolve(value)
+      },
+      (reason) => {
+        window.clearTimeout(timeoutId)
+        reject(reason)
+      },
+    )
+  })
+}
+
+function timeAgo(value: string) {
+  const seconds = Math.max(
+    0,
+    Math.round((Date.now() - new Date(value).getTime()) / 1000),
+  )
+  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`
+  return `${Math.floor(seconds / 86_400)}d ago`
+}
+
+function buildSourceLabel(build: EitriBuild) {
+  if (build.commitSha) return build.commitSha.slice(0, 7)
+  if (build.branch) return build.branch
+  return `deploy/${build.namespace}`
+}
+
+export function EitriOperations({
+  repository,
+  onRefreshingChange,
+  refreshToken = 0,
+}: Props) {
+  const [state, setState] = useState<EitriBuildsResult>()
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [browserNotifications, setBrowserNotifications] = useState(
+    () =>
+      typeof Notification !== 'undefined' &&
+      Notification.permission === 'granted' &&
+      window.localStorage.getItem(NOTIFICATION_KEY) === 'true',
+  )
+  const [notificationToast, setNotificationToast] = useState<{
+    message: string
+    status?: EitriBuild['status']
+  }>()
+  const previousBuilds = useRef(new Map<number, EitriBuild['status']>())
+  const buildsInitialized = useRef(false)
+  const browserNotificationsRef = useRef(browserNotifications)
+  const loadSequence = useRef(0)
+  const stateRef = useRef(state)
+
+  useEffect(() => {
+    browserNotificationsRef.current = browserNotifications
+  }, [browserNotifications])
+
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
+  const announceCompletedBuilds = useCallback(
+    (nextState: EitriBuildsResult) => {
+      const nextBuilds = new Map(
+        nextState.builds.map((build) => [build.buildNumber, build.status]),
+      )
+      if (!buildsInitialized.current) {
+        previousBuilds.current = nextBuilds
+        buildsInitialized.current = true
+        return
+      }
+      const completed = nextState.builds.filter((build) => {
+        const previous = previousBuilds.current.get(build.buildNumber)
+        return (
+          ['succeeded', 'failed', 'canceled'].includes(build.status) &&
+          previous !== build.status
+        )
+      })
+      previousBuilds.current = nextBuilds
+      if (completed.length === 0) return
+
+      const latest = completed[0]
+      const statusLabel = statusLabels[latest.status]
+      const message =
+        completed.length === 1
+          ? `${latest.service} · ${latest.namespace.toUpperCase()} ${statusLabel.toLowerCase()}`
+          : `${completed.length} EITRI builds completed`
+      setNotificationToast({ message, status: latest.status })
+      if (
+        browserNotificationsRef.current &&
+        typeof Notification !== 'undefined' &&
+        Notification.permission === 'granted'
+      ) {
+        new Notification(`EITRI build ${statusLabel}`, {
+          body: `${repository.split('/').at(-1)} · ${message}`,
+          tag: `eitri-build-${repository}-${latest.buildNumber}`,
+        })
+      }
+    },
+    [repository],
+  )
+
+  const load = useCallback(
+    async (silent = false, forceRefresh = false) => {
+      const sequence = ++loadSequence.current
+      if (!silent) {
+        setLoading(true)
+        onRefreshingChange?.(true)
+      }
+      setError('')
+      try {
+        const nextState = await api.eitriBuilds(repository, forceRefresh)
+        if (sequence !== loadSequence.current) return
+        announceCompletedBuilds(nextState)
+        setState(nextState)
+      } catch (reason) {
+        if (sequence !== loadSequence.current) return
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : 'Could not load Jenkins EITRI builds.',
+        )
+      } finally {
+        if (sequence === loadSequence.current) {
+          if (!silent) setLoading(false)
+          onRefreshingChange?.(false)
+        }
+      }
+    },
+    [announceCompletedBuilds, onRefreshingChange, repository],
+  )
+
+  useEffect(() => {
+    buildsInitialized.current = false
+    previousBuilds.current = new Map()
+    void load()
+  }, [load, repository])
+
+  useEffect(() => {
+    if (refreshToken === 0) return
+    void load(false, true)
+  }, [load, refreshToken])
+
+  useEffect(() => {
+    let active = true
+    let inFlight = false
+    let timeout: number | undefined
+
+    const schedule = () => {
+      if (!active || document.hidden) return
+      timeout = window.setTimeout(() => void poll(), BUILD_POLL_INTERVAL_MS)
+    }
+
+    const poll = async () => {
+      if (!active || inFlight || document.hidden) return
+      inFlight = true
+      try {
+        const nextState = await withTimeout(
+          api.eitriBuilds(repository, true),
+          BUILD_POLL_TIMEOUT_MS,
+        )
+        if (!active) return
+        announceCompletedBuilds(nextState)
+        setState(nextState)
+        setError('')
+      } catch {
+        // Keep the last good snapshot; try again on the next tick.
+      } finally {
+        inFlight = false
+        schedule()
+      }
+    }
+
+    const onVisibility = () => {
+      if (!document.hidden) void poll()
+    }
+
+    schedule()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      active = false
+      if (timeout) window.clearTimeout(timeout)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [announceCompletedBuilds, repository])
+
+  useEffect(() => {
+    if (!notificationToast) return
+    const timeout = window.setTimeout(
+      () => setNotificationToast(undefined),
+      6_000,
+    )
+    return () => window.clearTimeout(timeout)
+  }, [notificationToast])
+
+  async function toggleBrowserNotifications() {
+    if (typeof Notification === 'undefined') {
+      setError('Browser notifications are not supported in this browser.')
+      return
+    }
+    if (browserNotifications) {
+      window.localStorage.setItem(NOTIFICATION_KEY, 'false')
+      setBrowserNotifications(false)
+      return
+    }
+    const permission =
+      Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission()
+    if (permission !== 'granted') {
+      setError('Notification permission was not granted.')
+      return
+    }
+    window.localStorage.setItem(NOTIFICATION_KEY, 'true')
+    setBrowserNotifications(true)
+  }
+
+  return (
+    <>
+      {error && (
+        <div className="alert error" role="alert">
+          {error}
+        </div>
+      )}
+      {notificationToast && (
+        <div
+          className={`build-notification-toast ${notificationToast.status ?? 'info'}`}
+          role="status"
+        >
+          <span aria-hidden="true">●</span>
+          <div>
+            <strong>EITRI build update</strong>
+            <p>{notificationToast.message}</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={() => setNotificationToast(undefined)}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      <section className="operation-section">
+        <div className="operation-heading">
+          <div>
+            <p className="eyebrow">Jenkins EITRI</p>
+            <h3>Staging build & deploy</h3>
+          </div>
+          <div className="operation-heading-actions">
+            <button
+              className="create-release-button"
+              type="button"
+              onClick={() => setDialogOpen(true)}
+              disabled={!state?.jenkinsServices.length}
+              title={
+                state && state.jenkinsServices.length === 0
+                  ? 'No Jenkins service mapping for this repository'
+                  : 'Build and deploy with Stag EITRI'
+              }
+            >
+              <span aria-hidden="true">＋</span> Build & deploy
+            </button>
+            <button
+              className={`notification-toggle ${browserNotifications ? 'active' : ''}`}
+              type="button"
+              aria-pressed={browserNotifications}
+              onClick={() => void toggleBrowserNotifications()}
+            >
+              {browserNotifications ? '● Alerts on' : 'Enable alerts'}
+            </button>
+            <span className="auto-refresh">Live · 15s</span>
+          </div>
+        </div>
+
+        {state?.lookupFailed && (
+          <p className="deployment-lookup-note">
+            Jenkins EITRI status is temporarily unavailable.
+          </p>
+        )}
+
+        {loading && !state ? (
+          <div className="operation-loading">
+            <span className="spinner" /> Loading EITRI builds…
+          </div>
+        ) : state?.builds.length ? (
+          <div className="release-build-list">
+            {state.builds.map((build) => (
+              <article
+                className="release-build-row eitri-build-row"
+                key={build.buildNumber}
+              >
+                <span
+                  className={`build-indicator ${build.status}`}
+                  aria-hidden="true"
+                />
+                <div className="release-build-main">
+                  {build.buildUrl ? (
+                    <a
+                      href={build.buildUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      #{build.buildNumber} · {build.service}
+                    </a>
+                  ) : (
+                    <span>
+                      #{build.buildNumber} · {build.service}
+                    </span>
+                  )}
+                  <span>
+                    {build.namespace.toUpperCase()} · {buildSourceLabel(build)}{' '}
+                    · {timeAgo(build.createdAt)}
+                  </span>
+                </div>
+                <span className={`build-status ${build.status}`}>
+                  {statusLabels[build.status]}
+                </span>
+                {build.buildUrl ? (
+                  <a
+                    className="deploy-button eitri-build-link"
+                    href={build.buildUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open build
+                  </a>
+                ) : (
+                  <span className="deploy-button eitri-build-link disabled">
+                    Queued
+                  </span>
+                )}
+                <div className="workflow-links">
+                  <small>
+                    {build.stagingEnvUpdateJob || 'DEV/DEV Deployer'}
+                  </small>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="operation-empty">
+            No EITRI builds found for this service yet.
+          </div>
+        )}
+      </section>
+
+      {dialogOpen && state && (
+        <EitriDialog
+          repository={repository}
+          services={state.jenkinsServices}
+          onClose={() => setDialogOpen(false)}
+          onQueued={() => {
+            void load(true, true)
+          }}
+        />
+      )}
+    </>
+  )
+}

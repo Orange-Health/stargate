@@ -2,16 +2,24 @@ import Jenkins from "jenkins";
 import type {
   ConnectionConfig,
   DeploymentEnvironment,
+  EitriBuild,
+  EitriBuildsResult,
+  EitriNamespace,
   JenkinsBuildStatus,
   JenkinsDeployedTag,
   JenkinsQueueStatus,
   RepositoryDeploymentStatusResult,
+  TriggerEitriDeploymentInput,
+  TriggeredEitriDeployment,
   TriggerProductionDeploymentInput,
   TriggeredProductionDeployment,
   TriggerDeploymentInput,
   TriggeredDeployment,
 } from "../../src/shared/types.js";
 import { ProviderError } from "../errors.js";
+
+export const EITRI_JOB_NAME = "DEV/Stag EITRI";
+export const EITRI_DEFAULT_STAGING_ENV_UPDATE_JOB = "DEV/DEV Deployer";
 
 const serviceToRepository = {
   accounts: "accounts",
@@ -135,6 +143,10 @@ const deploymentBuildCache = new Map<
   }
 >();
 const productionDeploymentBuildCache = new Map<
+  string,
+  { expiresAt: number; value: Promise<JenkinsBuild[]> }
+>();
+const eitriBuildCache = new Map<
   string,
   { expiresAt: number; value: Promise<JenkinsBuild[]> }
 >();
@@ -478,6 +490,205 @@ export async function getCurrentDeploymentsBatch(
           productionResult.status === "rejected"),
     };
   });
+}
+
+const eitriNamespaces = new Set<EitriNamespace>([
+  "s1",
+  "s2",
+  "s3",
+  "s4",
+  "s5",
+]);
+
+function buildStatusFromResult(
+  result?: string | null,
+  building?: boolean,
+): EitriBuild["status"] {
+  if (building || !result) return "running";
+  if (result === "SUCCESS") return "succeeded";
+  if (result === "ABORTED") return "canceled";
+  return "failed";
+}
+
+export function eitriDeploymentSpec(
+  input: TriggerEitriDeploymentInput,
+): DeploymentSpec {
+  const validServices = servicesForRepository(input.repository);
+  if (!validServices.includes(input.service)) {
+    throw new ProviderError(
+      `Jenkins service "${input.service}" is not mapped to ${input.repository}.`,
+      "JENKINS_SERVICE_NOT_MAPPED",
+      "jenkins",
+      400,
+    );
+  }
+  if (!eitriNamespaces.has(input.namespace)) {
+    throw new ProviderError(
+      `EITRI namespace "${input.namespace}" is not supported.`,
+      "EITRI_NAMESPACE_UNSUPPORTED",
+      "jenkins",
+      400,
+    );
+  }
+
+  const parameters: Record<string, string | boolean> = {
+    SERVICE_NAME: stagingDeployServiceName(input.service),
+    NAMESPACE: input.namespace,
+    STAGING_ENV_UPDATE_JOB:
+      input.stagingEnvUpdateJob?.trim() ||
+      EITRI_DEFAULT_STAGING_ENV_UPDATE_JOB,
+  };
+  const branch = input.branch?.trim();
+  if (branch) parameters.BRANCH = branch;
+  const commitSha = input.commitSha?.trim();
+  if (commitSha) parameters.COMMIT_SHA = commitSha;
+
+  return {
+    jobName: EITRI_JOB_NAME,
+    parameters,
+  };
+}
+
+export function eitriBuildsFromJobBuilds(
+  builds: JenkinsBuild[],
+  services: string[],
+): EitriBuild[] {
+  const serviceNames = new Map<string, string>();
+  for (const service of services) {
+    serviceNames.set(service.toLowerCase(), service);
+    serviceNames.set(stagingDeployServiceName(service).toLowerCase(), service);
+  }
+
+  return [...builds]
+    .sort((left, right) => right.number - left.number)
+    .flatMap((build) => {
+      const parameters = buildParameters(build);
+      const serviceName = parameters.SERVICE_NAME?.toLowerCase();
+      const service = serviceName ? serviceNames.get(serviceName) : undefined;
+      const namespace = parameters.NAMESPACE?.toLowerCase() as
+        | EitriNamespace
+        | undefined;
+      if (!service || !namespace || !eitriNamespaces.has(namespace)) {
+        return [];
+      }
+      return [
+        {
+          buildNumber: build.number,
+          buildUrl: build.url ?? "",
+          service,
+          namespace,
+          branch: parameters.BRANCH || undefined,
+          commitSha: parameters.COMMIT_SHA || undefined,
+          stagingEnvUpdateJob: parameters.STAGING_ENV_UPDATE_JOB || undefined,
+          status: buildStatusFromResult(build.result),
+          createdAt: new Date(build.timestamp ?? 0).toISOString(),
+        } satisfies EitriBuild,
+      ];
+    });
+}
+
+async function recentEitriBuilds(
+  config: ConnectionConfig,
+  forceRefresh = false,
+) {
+  const cacheKey = config.jenkinsUrl.toLowerCase();
+  const cached = eitriBuildCache.get(cacheKey);
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+  const value = recentJobBuilds(jenkinsClient(config), EITRI_JOB_NAME);
+  eitriBuildCache.set(cacheKey, {
+    expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
+    value,
+  });
+  value.catch(() => eitriBuildCache.delete(cacheKey));
+  return value;
+}
+
+export async function getEitriBuilds(
+  config: ConnectionConfig,
+  repository: string,
+  forceRefresh = false,
+): Promise<EitriBuildsResult> {
+  const jenkinsServices = servicesForRepository(repository);
+  const fetchedAt = new Date().toISOString();
+  if (jenkinsServices.length === 0) {
+    return {
+      repository,
+      jenkinsServices,
+      builds: [],
+      lookupFailed: false,
+      fetchedAt,
+    };
+  }
+  try {
+    const builds = await recentEitriBuilds(config, forceRefresh);
+    return {
+      repository,
+      jenkinsServices,
+      builds: eitriBuildsFromJobBuilds(builds, jenkinsServices).slice(0, 25),
+      lookupFailed: false,
+      fetchedAt,
+    };
+  } catch {
+    return {
+      repository,
+      jenkinsServices,
+      builds: [],
+      lookupFailed: true,
+      fetchedAt,
+    };
+  }
+}
+
+export async function triggerEitriDeployment(
+  config: ConnectionConfig,
+  input: TriggerEitriDeploymentInput,
+): Promise<TriggeredEitriDeployment> {
+  const spec = eitriDeploymentSpec(input);
+  try {
+    const client = jenkinsClient(config);
+    const queueId = Number(
+      await client.job.build({
+        name: spec.jobName,
+        parameters: spec.parameters,
+      }),
+    );
+    if (!Number.isInteger(queueId) || queueId <= 0) {
+      throw new Error("Jenkins did not return a valid queue item.");
+    }
+    let buildUrl: string | undefined;
+    let buildNumber: number | undefined;
+    try {
+      const queueItem = (await client.queue.item(queueId)) as {
+        executable?: { number?: number; url?: string };
+      };
+      buildUrl = queueItem.executable?.url;
+      buildNumber = queueItem.executable?.number;
+    } catch {
+      // It is normal for the queue item to take a moment to become available.
+    }
+    return {
+      queueId,
+      queueUrl: `${config.jenkinsUrl.replace(/\/+$/, "")}/queue/item/${queueId}/`,
+      buildUrl,
+      buildNumber,
+      jobName: spec.jobName,
+      service: input.service,
+      namespace: input.namespace,
+      branch: input.branch?.trim() || undefined,
+      commitSha: input.commitSha?.trim() || undefined,
+      stagingEnvUpdateJob: String(spec.parameters.STAGING_ENV_UPDATE_JOB),
+    };
+  } catch (error) {
+    if (error instanceof ProviderError) throw error;
+    throw new ProviderError(
+      jenkinsTriggerFailureMessage(error, spec),
+      "JENKINS_EITRI_TRIGGER_FAILED",
+      "jenkins",
+      502,
+    );
+  }
 }
 
 export function deploymentSpec(input: TriggerDeploymentInput): DeploymentSpec {

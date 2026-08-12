@@ -2506,6 +2506,81 @@ button:disabled {
   padding: 2px 5px;
 }
 
+.release-dialog .field-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: -6px 0 0;
+}
+
+.eitri-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: min(720px, 90vh);
+  overflow: hidden;
+  padding: 0;
+  width: min(520px, 100%);
+}
+
+.eitri-dialog .dialog-close {
+  z-index: 2;
+}
+
+.eitri-dialog form.eitri-dialog-form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 0;
+}
+
+.eitri-dialog-header {
+  flex: 0 0 auto;
+  padding: 30px 30px 16px;
+}
+
+.eitri-dialog-header h2 {
+  margin-bottom: 8px;
+}
+
+.eitri-dialog-body {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 30px 8px;
+}
+
+.eitri-dialog-body .field-hint {
+  margin-top: -12px;
+}
+
+.eitri-dialog-footer {
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding: 16px 30px 24px;
+}
+
+.eitri-dialog .release-created {
+  padding: 30px;
+}
+
+a.eitri-build-link {
+  align-items: center;
+  display: inline-flex;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.eitri-build-link.disabled {
+  cursor: default;
+  opacity: 0.7;
+  pointer-events: none;
+}
+
 .created-icon.deploy {
   font-size: 22px;
 }
