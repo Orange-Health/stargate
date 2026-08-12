@@ -4,6 +4,7 @@ import type {
   EitriNamespace,
   TriggeredEitriDeployment,
 } from '../../shared/types'
+import { DialogBackdrop } from './DialogBackdrop'
 
 type Props = {
   repository: string
@@ -171,7 +172,7 @@ export function EitriDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog deploy-dialog eitri-dialog"
         role="dialog"
@@ -362,6 +363,6 @@ export function EitriDialog({
           </form>
         )}
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

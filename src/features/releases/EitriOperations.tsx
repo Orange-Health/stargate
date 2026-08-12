@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../shared/api'
-import type {
-  EitriBuild,
-  EitriBuildStage,
-  EitriBuildsResult,
-} from '../../shared/types'
+import type { EitriBuild, EitriBuildsResult } from '../../shared/types'
 import { EitriDialog } from './EitriDialog'
 import { EitriReplayDialog } from './EitriReplayDialog'
+import { PipelineStageList } from './PipelineStageList'
 
 type Props = {
   repository: string
@@ -21,24 +18,9 @@ const statusLabels: Record<EitriBuild['status'], string> = {
   canceled: 'Canceled',
 }
 
-const BUILD_POLL_INTERVAL_MS = 15_000
-const RUNNING_POLL_INTERVAL_MS = 5_000
+const BUILD_POLL_INTERVAL_MS = 5_000
 const BUILD_POLL_TIMEOUT_MS = 30_000
 const NOTIFICATION_KEY = 'release-build-notifications'
-
-function formatStageDuration(durationMillis?: number) {
-  if (durationMillis == null || durationMillis < 0) return undefined
-  const seconds = Math.round(durationMillis / 1000)
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`
-}
-
-function stageTitle(stage: EitriBuildStage) {
-  const duration = formatStageDuration(stage.durationMillis)
-  return duration ? `${stage.name} · ${duration}` : stage.name
-}
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -196,20 +178,14 @@ export function EitriOperations({
     let inFlight = false
     let timeout: number | undefined
 
-    const schedule = (hasRunning = false) => {
+    const schedule = () => {
       if (!active || document.hidden) return
-      timeout = window.setTimeout(
-        () => void poll(),
-        hasRunning ? RUNNING_POLL_INTERVAL_MS : BUILD_POLL_INTERVAL_MS,
-      )
+      timeout = window.setTimeout(() => void poll(), BUILD_POLL_INTERVAL_MS)
     }
 
     const poll = async () => {
       if (!active || inFlight || document.hidden) return
       inFlight = true
-      let hasRunning = Boolean(
-        stateRef.current?.builds.some((build) => build.status === 'running'),
-      )
       try {
         const nextState = await withTimeout(
           api.eitriBuilds(repository, true),
@@ -219,12 +195,11 @@ export function EitriOperations({
         announceCompletedBuilds(nextState)
         setState(nextState)
         setError('')
-        hasRunning = nextState.builds.some((build) => build.status === 'running')
       } catch {
         // Keep the last good snapshot; try again on the next tick.
       } finally {
         inFlight = false
-        schedule(hasRunning)
+        schedule()
       }
     }
 
@@ -232,11 +207,7 @@ export function EitriOperations({
       if (!document.hidden) void poll()
     }
 
-    schedule(
-      Boolean(
-        stateRef.current?.builds.some((build) => build.status === 'running'),
-      ),
-    )
+    void poll()
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
       active = false
@@ -331,12 +302,7 @@ export function EitriOperations({
             >
               {browserNotifications ? '● Alerts on' : 'Enable alerts'}
             </button>
-            <span className="auto-refresh">
-              Live ·{' '}
-              {state?.builds.some((build) => build.status === 'running')
-                ? '5s'
-                : '15s'}
-            </span>
+            <span className="auto-refresh">Live · 5s</span>
           </div>
         </div>
 
@@ -379,14 +345,6 @@ export function EitriOperations({
                       {' · '}
                       {build.stagingEnvUpdateJob || 'DEV/DEV Deployer'}
                     </span>
-                    {build.status === 'running' &&
-                      build.currentStage &&
-                      !build.stages?.length && (
-                        <span className="eitri-current-stage">
-                          <span className="spinner" aria-hidden="true" />
-                          {build.currentStage}
-                        </span>
-                      )}
                   </div>
                   <span className={`build-status ${build.status}`}>
                     {statusLabels[build.status]}
@@ -416,27 +374,12 @@ export function EitriOperations({
                     </button>
                   </div>
                 </div>
-                {build.stages && build.stages.length > 0 && (
-                  <div
-                    className="eitri-stage-list"
-                    aria-label="Pipeline stages"
-                  >
-                    {build.stages.map((stage) => (
-                      <span
-                        className={`eitri-stage ${stage.status}`}
-                        title={stageTitle(stage)}
-                        key={stage.id}
-                      >
-                        <span aria-hidden="true">●</span>
-                        {stage.name}
-                        {stage.durationMillis != null &&
-                          stage.status !== 'pending' && (
-                            <em>{formatStageDuration(stage.durationMillis)}</em>
-                          )}
-                      </span>
-                    ))}
-                  </div>
-                )}
+                <PipelineStageList
+                  stages={build.stages}
+                  currentStage={
+                    build.status === 'running' ? build.currentStage : undefined
+                  }
+                />
               </article>
             ))}
           </div>

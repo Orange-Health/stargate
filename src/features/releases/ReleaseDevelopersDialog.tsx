@@ -1,3 +1,4 @@
+import { DialogBackdrop } from './DialogBackdrop'
 import type { ReleaseDeveloper } from './releaseDevelopers'
 
 type Props = {
@@ -23,11 +24,7 @@ export function ReleaseDevelopersDialog({
     title ?? `${repository.split('/').at(-1)} Developers`
 
   return (
-    <div
-      className="dialog-backdrop"
-      role="presentation"
-      onMouseDown={onClose}
-    >
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog release-developers-dialog"
         role="dialog"
@@ -81,6 +78,6 @@ export function ReleaseDevelopersDialog({
           <div className="operation-empty">{emptyMessage}</div>
         )}
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

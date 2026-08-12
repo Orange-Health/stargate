@@ -5,12 +5,14 @@ import type {
   TrackedStagingRelease,
   TriggeredDeployment,
 } from '../../shared/types'
+import { DialogBackdrop } from './DialogBackdrop'
 
 type Props = {
   repository: string
   release: TrackedStagingRelease
   services: string[]
   allowAnyVTag?: boolean
+  onQueued?: (deployment: TriggeredDeployment) => void
   onClose: () => void
 }
 
@@ -33,6 +35,7 @@ export function DeployDialog({
   release,
   services,
   allowAnyVTag = false,
+  onQueued,
   onClose,
 }: Props) {
   const initialEnvironment =
@@ -91,15 +94,15 @@ export function DeployDialog({
     setDeploying(true)
     setError('')
     try {
-      setDeployment(
-        await api.triggerDeployment({
-          repository,
-          service,
-          tag: release.tag,
-          environment,
-          ...(allowAnyVTag ? { allowAnyVTag: true } : {}),
-        }),
-      )
+      const result = await api.triggerDeployment({
+        repository,
+        service,
+        tag: release.tag,
+        environment,
+        ...(allowAnyVTag ? { allowAnyVTag: true } : {}),
+      })
+      setDeployment(result)
+      onQueued?.(result)
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -112,7 +115,7 @@ export function DeployDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog deploy-dialog"
         role="dialog"
@@ -243,6 +246,6 @@ export function DeployDialog({
           </>
         )}
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

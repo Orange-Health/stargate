@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { JiraVersion } from '../../shared/types'
+import { DialogBackdrop } from './DialogBackdrop'
 
 type Props = {
   issueKey: string
@@ -22,7 +23,7 @@ export function RemoveTicketDialog({
   const moving = Boolean(targetVersionId)
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onCancel}>
+    <DialogBackdrop onMouseDown={onCancel}>
       <section
         className="release-dialog confirm-dialog remove-ticket-dialog"
         role="dialog"
@@ -79,6 +80,6 @@ export function RemoveTicketDialog({
           </button>
         </div>
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

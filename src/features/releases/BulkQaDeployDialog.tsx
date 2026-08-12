@@ -5,6 +5,7 @@ import type {
   ServiceRelease,
   TriggeredDeployment,
 } from '../../shared/types'
+import { DialogBackdrop } from './DialogBackdrop'
 import { deployableQaTargets, isMergedToDev } from './deployableQaTargets'
 
 type Props = {
@@ -134,7 +135,7 @@ export function BulkQaDeployDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog bulk-qa-release-dialog"
         role="dialog"
@@ -232,6 +233,6 @@ export function BulkQaDeployDialog({
           )}
         </div>
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../../shared/api'
 import type { EitriBuild } from '../../shared/types'
+import { DialogBackdrop } from './DialogBackdrop'
 
 type Props = {
   repository: string
@@ -67,7 +68,7 @@ export function EitriReplayDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog confirm-dialog eitri-replay-dialog"
         role="dialog"
@@ -123,6 +124,6 @@ export function EitriReplayDialog({
           </button>
         </div>
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

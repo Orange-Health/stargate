@@ -13,6 +13,8 @@ import type {
   TrackedProductionRelease,
   TriggeredProductionDeployment,
 } from "../../shared/types";
+import { DialogBackdrop } from "./DialogBackdrop";
+import { PipelineStageList } from "./PipelineStageList";
 import { ProductionDeployDialog } from "./ProductionDeployDialog";
 import { ReleaseDevelopersDialog } from "./ReleaseDevelopersDialog";
 import type { ReleaseDeveloper } from "./releaseDevelopers";
@@ -117,7 +119,9 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 function productionDeploymentLabel(deployment: JenkinsDeployedTag) {
   switch (deployment.status) {
     case "running":
-      return `Running: ${deployment.tag}`;
+      return deployment.currentStage
+        ? `Running: ${deployment.tag} · ${deployment.currentStage}`
+        : `Running: ${deployment.tag}`;
     case "failed":
       return `Failed: ${deployment.tag}`;
     case "canceled":
@@ -694,12 +698,16 @@ export function ReleaseDayOperations({
   );
 
   const kickDeploymentStatuses = useCallback(
-    async (repositories: string[], sequence: number) => {
+    async (
+      repositories: string[],
+      sequence: number,
+      forceRefresh = true,
+    ) => {
       if (repositories.length === 0) return;
       try {
         const response = await api.repositoryDeploymentStatuses(
           repositories,
-          false,
+          forceRefresh,
         );
         if (sequence !== loadSequence.current) return;
         setStates((current) => {
@@ -991,11 +999,15 @@ export function ReleaseDayOperations({
 
   const handleProductionDeploymentUpdated = useCallback(
     (deployment: TriggeredProductionDeployment) => {
-      if (deployTarget) {
-        trackProductionDeployment(deployTarget.repository, deployment);
-      }
+      if (!deployTarget) return;
+      trackProductionDeployment(deployTarget.repository, deployment);
+      void kickDeploymentStatuses(
+        [deployTarget.repository],
+        loadSequence.current,
+        true,
+      );
     },
-    [deployTarget, trackProductionDeployment],
+    [deployTarget, kickDeploymentStatuses, trackProductionDeployment],
   );
 
   useEffect(() => {
@@ -1027,7 +1039,11 @@ export function ReleaseDayOperations({
               const status = await api.productionJenkinsBuildStatus(
                 deployment.buildNumber,
               );
-              if (status.status === "succeeded") {
+              if (
+                status.status === "succeeded" ||
+                status.status === "failed" ||
+                status.status === "canceled"
+              ) {
                 completedRepositories.push(repository);
               }
               return {
@@ -1131,6 +1147,21 @@ export function ReleaseDayOperations({
         return;
       }
 
+      const forceDeploymentRefresh =
+        currentSession.selectedRepositories.some((repository) =>
+          statesRef.current[repository]?.deployedTags.some(
+            (tag) => tag.status === "running",
+          ),
+        ) ||
+        currentSession.selectedRepositories.some((repository) => {
+          const deployment =
+            currentSession.repositories[repository]?.productionDeployment;
+          return (
+            deployment?.status === "queued" ||
+            deployment?.status === "running"
+          );
+        });
+
       inFlight = true;
       try {
         const [results, deploymentResults] = await withTimeout(
@@ -1141,7 +1172,7 @@ export function ReleaseDayOperations({
             api
               .repositoryDeploymentStatuses(
                 currentSession.selectedRepositories,
-                false,
+                forceDeploymentRefresh,
               )
               .then((response) =>
                 response.results.map((result) => ({
@@ -1158,7 +1189,7 @@ export function ReleaseDayOperations({
                           repository,
                           result: await api.repositoryDeploymentStatus(
                             repository,
-                            false,
+                            forceDeploymentRefresh,
                           ),
                         };
                       } catch {
@@ -1225,6 +1256,7 @@ export function ReleaseDayOperations({
       if (!document.hidden) void poll();
     };
     document.addEventListener("visibilitychange", visibilityChanged);
+    void poll();
     const interval = window.setInterval(() => void poll(), POLL_INTERVAL);
     return () => {
       active = false;
@@ -2813,20 +2845,36 @@ export function ReleaseDayOperations({
                           )}
                           {productionDeployments.length > 0 ? (
                             productionDeployments.map((deployment) => (
-                              <a
-                                className={`release-day-production-live ${deployment.status ?? "succeeded"}`}
-                                href={deployment.buildUrl}
-                                target="_blank"
-                                rel="noreferrer"
+                              <div
+                                className="release-day-production-live-item"
                                 key={`${deployment.service}-${deployment.buildNumber}`}
-                                title={`Jenkins build #${deployment.buildNumber}`}
                               >
-                                {productionDeploymentLabel(deployment)}
-                                {productionDeployments.length > 1
-                                  ? ` · ${deployment.service}`
-                                  : ""}{" "}
-                                ↗
-                              </a>
+                                <a
+                                  className={`release-day-production-live ${deployment.status ?? "succeeded"}`}
+                                  href={deployment.buildUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={`Jenkins build #${deployment.buildNumber}${
+                                    deployment.currentStage
+                                      ? ` · ${deployment.currentStage}`
+                                      : ""
+                                  }`}
+                                >
+                                  {productionDeploymentLabel(deployment)}
+                                  {productionDeployments.length > 1
+                                    ? ` · ${deployment.service}`
+                                    : ""}{" "}
+                                  ↗
+                                </a>
+                                <PipelineStageList
+                                  stages={deployment.stages}
+                                  currentStage={
+                                    deployment.status === "running"
+                                      ? deployment.currentStage
+                                      : undefined
+                                  }
+                                />
+                              </div>
                             ))
                           ) : !deploymentProgress ? (
                             <small className="release-day-production-unknown">
@@ -2904,9 +2952,7 @@ export function ReleaseDayOperations({
       </section>
 
       {jiraReleaseDialogOpen && (
-        <div
-          className="dialog-backdrop"
-          role="presentation"
+        <DialogBackdrop
           onMouseDown={() => {
             if (jiraReleaseStatus !== "running")
               setJiraReleaseDialogOpen(false);
@@ -2997,7 +3043,7 @@ export function ReleaseDayOperations({
               </button>
             </div>
           </section>
-        </div>
+        </DialogBackdrop>
       )}
 
       {developerModal && (

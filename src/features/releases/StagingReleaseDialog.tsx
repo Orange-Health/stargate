@@ -4,6 +4,7 @@ import type {
   CreatedStagingRelease,
   StagingEnvironment,
 } from '../../shared/types'
+import { DialogBackdrop } from './DialogBackdrop'
 
 type Props = {
   repository: string
@@ -105,7 +106,7 @@ export function StagingReleaseDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog"
         role="dialog"
@@ -227,6 +228,6 @@ export function StagingReleaseDialog({
           </>
         )}
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

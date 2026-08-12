@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../../shared/api'
 import type { CreatedStagingRelease } from '../../shared/types'
+import { DialogBackdrop } from './DialogBackdrop'
 
 type Props = {
   repositories: string[]
@@ -125,7 +126,7 @@ export function BulkQaReleaseDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog bulk-qa-release-dialog"
         role="dialog"
@@ -215,6 +216,6 @@ export function BulkQaReleaseDialog({
           )}
         </div>
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

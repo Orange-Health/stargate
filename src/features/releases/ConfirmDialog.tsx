@@ -1,3 +1,5 @@
+import { DialogBackdrop } from './DialogBackdrop'
+
 type Props = {
   title: string
   message: string
@@ -16,7 +18,7 @@ export function ConfirmDialog({
   onCancel,
 }: Props) {
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onCancel}>
+    <DialogBackdrop onMouseDown={onCancel}>
       <section
         className="release-dialog confirm-dialog"
         role="dialog"
@@ -49,6 +51,6 @@ export function ConfirmDialog({
           </button>
         </div>
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

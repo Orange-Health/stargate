@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildStatusFromPipelineRunStatus,
+  buildStatusFromResult,
   dashboardJenkinsServices,
   deployedTagsFromBuilds,
   deploymentSpec,
@@ -14,6 +16,7 @@ import {
   productionDeploymentSpec,
   servicesForRepository,
   stagingDeployServiceName,
+  statusFromPipelineStages,
 } from './jenkins.js'
 
 /** SERVICE_NAME choices from Jenkins DEV/DEV Deployer. */
@@ -345,6 +348,42 @@ describe('eitri pipeline stages', () => {
     ])
     expect(currentEitriStageName(stages)).toBe('Build sapphire-web')
   })
+
+  it('treats finished builds with a null result as running until wfapi reconciles', () => {
+    expect(buildStatusFromResult(null, true)).toBe('running')
+    expect(buildStatusFromResult(null, false)).toBe('running')
+    expect(buildStatusFromResult('SUCCESS', false)).toBe('succeeded')
+    expect(buildStatusFromResult('FAILURE', false)).toBe('failed')
+    expect(buildStatusFromPipelineRunStatus('SUCCESS')).toBe('succeeded')
+    expect(buildStatusFromPipelineRunStatus('IN_PROGRESS')).toBe('running')
+  })
+
+  it('reconciles terminal status from completed pipeline stages', () => {
+    const succeeded = eitriStagesFromDescribe({
+      stages: [
+        { id: '1', name: 'Checkout', status: 'SUCCESS' },
+        { id: '2', name: 'Deploy', status: 'SUCCESS' },
+      ],
+    })
+    expect(statusFromPipelineStages(succeeded)).toBe('succeeded')
+
+    const failed = eitriStagesFromDescribe({
+      stages: [
+        { id: '1', name: 'Checkout', status: 'SUCCESS' },
+        { id: '2', name: 'Deploy', status: 'FAILED' },
+        { id: '3', name: 'Notify', status: 'NOT_EXECUTED' },
+      ],
+    })
+    expect(statusFromPipelineStages(failed)).toBe('failed')
+
+    const running = eitriStagesFromDescribe({
+      stages: [
+        { id: '1', name: 'Checkout', status: 'SUCCESS' },
+        { id: '2', name: 'Deploy', status: 'IN_PROGRESS' },
+      ],
+    })
+    expect(statusFromPipelineStages(running)).toBeUndefined()
+  })
 })
 
 describe('deployedTagsFromBuilds', () => {
@@ -394,11 +433,53 @@ describe('deployedTagsFromBuilds', () => {
         environment: 'qa',
         tag: 'v-qa-26.0714.1',
         buildNumber: 2152,
+        status: 'succeeded',
+      }),
+      expect.objectContaining({
+        environment: 's1',
+        tag: 'v-s1-26.0714.2',
+        buildNumber: 300,
+        status: 'failed',
       }),
       expect.objectContaining({
         environment: 's1',
         tag: 'v-s1-26.0714.1',
         buildNumber: 299,
+        status: 'succeeded',
+      }),
+    ])
+  })
+
+  it('maps remapped staging SERVICE_NAME values back to dashboard services', () => {
+    const deployments = deployedTagsFromBuilds(
+      [],
+      [
+        {
+          number: 310,
+          result: null,
+          url: 'https://jenkins.test/dev/310/',
+          timestamp: Date.parse('2026-08-12T08:00:00Z'),
+          actions: [
+            {
+              parameters: [
+                { name: 'SERVICE_NAME', value: 'bifrost' },
+                { name: 'IMAGE_TAG', value: 'v-s2-26.0812.1' },
+                { name: 'TEAM', value: 'D2C CRM' },
+              ],
+            },
+          ],
+        },
+      ],
+      ['bifrost-web'],
+    )
+
+    expect(deployments).toEqual([
+      expect.objectContaining({
+        service: 'bifrost-web',
+        environment: 's2',
+        tag: 'v-s2-26.0812.1',
+        status: 'running',
+        jobName: 'DEV/DEV Deployer',
       }),
     ])
   })

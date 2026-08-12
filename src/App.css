@@ -1236,12 +1236,18 @@ button:disabled {
   background: var(--green);
 }
 
+html[data-modal-open],
+body[data-modal-open] {
+  overflow: hidden;
+}
+
 .dialog-backdrop {
   align-items: center;
   background: rgb(1 5 3 / 76%);
   display: flex;
   inset: 0;
   justify-content: center;
+  overscroll-behavior: contain;
   padding: 24px;
   position: fixed;
   z-index: 30;
@@ -2315,9 +2321,20 @@ button:disabled {
 
 .live-deployments {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-direction: column;
+  gap: 8px;
   margin-top: 7px;
+}
+
+.live-deployment-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.live-deployment-item .live-deployment {
+  width: fit-content;
 }
 
 .release-build-main .live-deployment {
@@ -2639,30 +2656,39 @@ a.eitri-build-link {
   color: var(--ink);
 }
 
-.release-build-main .eitri-current-stage {
+.pipeline-stage-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.eitri-build-row > .pipeline-stage-block {
+  padding-left: 20px;
+}
+
+.pipeline-current-stage {
   align-items: center;
   color: #80b8f2;
   display: inline-flex;
   font-size: 10px;
   font-weight: 650;
   gap: 6px;
-  margin-top: 6px;
 }
 
-.release-build-main .eitri-current-stage .spinner {
+.pipeline-current-stage .spinner {
   height: 10px;
   width: 10px;
 }
 
-.eitri-stage-list {
+.pipeline-stage-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
-  padding-left: 20px;
 }
 
-.eitri-stage {
+.pipeline-stage {
   align-items: center;
   background: var(--paper-warm);
   border: 1px solid var(--line);
@@ -2676,43 +2702,54 @@ a.eitri-build-link {
   padding: 3px 8px;
 }
 
-.eitri-stage span {
+.pipeline-stage span {
   font-size: 7px;
   margin: 0;
 }
 
-.eitri-stage em {
+.pipeline-stage em {
   color: inherit;
   font-style: normal;
   font-weight: 500;
   opacity: 0.8;
 }
 
-.eitri-stage.succeeded {
+.pipeline-stage.succeeded {
   background: var(--green-faint);
   border-color: color-mix(in srgb, var(--green) 40%, transparent);
   color: var(--green);
 }
 
-.eitri-stage.running {
+.pipeline-stage.running {
   background: #172a3d;
   border-color: #2d4d6f;
   color: #80b8f2;
 }
 
-.eitri-stage.failed {
+.pipeline-stage.failed {
   background: var(--red-faint);
   border-color: color-mix(in srgb, var(--red) 40%, transparent);
   color: var(--red);
 }
 
-.eitri-stage.canceled {
+.pipeline-stage.canceled {
   background: var(--paper-warm);
   color: var(--muted);
 }
 
-.eitri-stage.pending {
+.pipeline-stage.pending {
   opacity: 0.7;
+}
+
+.release-day-production-live-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.release-day-production-live-item .pipeline-stage-list {
+  max-width: 280px;
 }
 
 .eitri-replay-dialog .eitri-replay-params {
@@ -4315,7 +4352,7 @@ label {
     justify-content: flex-start;
   }
 
-  .eitri-stage-list {
+  .eitri-build-row > .pipeline-stage-block {
     padding-left: 20px;
   }
 

@@ -8,6 +8,7 @@ import type {
 import {
   CopyableDeployedTag,
 } from './CopyableDeployedTag'
+import { DialogBackdrop } from './DialogBackdrop'
 import { liveProductionTags } from './liveProductionTags'
 import { productionTagForFormat } from './productionTags'
 
@@ -129,7 +130,7 @@ export function ProductionDeployDialog({
   }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
+    <DialogBackdrop onMouseDown={onClose}>
       <section
         className="release-dialog deploy-dialog production-deploy-dialog"
         role="dialog"
@@ -305,6 +306,6 @@ export function ProductionDeployDialog({
           </>
         )}
       </section>
-    </div>
+    </DialogBackdrop>
   )
 }

@@ -512,6 +512,20 @@ export type JenkinsDeploymentEnvironment =
   | DeploymentEnvironment
   | 'production'
 
+export type JenkinsPipelineStageStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled'
+
+export type JenkinsPipelineStage = {
+  id: string
+  name: string
+  status: JenkinsPipelineStageStatus
+  durationMillis?: number
+}
+
 export type JenkinsDeployedTag = {
   service: string
   tag: string
@@ -520,6 +534,9 @@ export type JenkinsDeployedTag = {
   buildNumber: number
   buildUrl: string
   deployedAt: string
+  jobName?: string
+  stages?: JenkinsPipelineStage[]
+  currentStage?: string
 }
 
 export type RepositoryDeploymentStatus = {
@@ -612,19 +629,8 @@ export type TriggeredEitriDeployment = {
   stagingEnvUpdateJob: string
 }
 
-export type EitriStageStatus =
-  | 'pending'
-  | 'running'
-  | 'succeeded'
-  | 'failed'
-  | 'canceled'
-
-export type EitriBuildStage = {
-  id: string
-  name: string
-  status: EitriStageStatus
-  durationMillis?: number
-}
+export type EitriStageStatus = JenkinsPipelineStageStatus
+export type EitriBuildStage = JenkinsPipelineStage
 
 export type EitriBuild = {
   buildNumber: number
@@ -636,7 +642,7 @@ export type EitriBuild = {
   stagingEnvUpdateJob?: string
   status: 'running' | 'succeeded' | 'failed' | 'canceled'
   createdAt: string
-  stages?: EitriBuildStage[]
+  stages?: JenkinsPipelineStage[]
   currentStage?: string
 }
 

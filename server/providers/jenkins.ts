@@ -22,6 +22,10 @@ import { ProviderError } from "../errors.js";
 
 export const EITRI_JOB_NAME = "DEV/Stag EITRI";
 export const EITRI_DEFAULT_STAGING_ENV_UPDATE_JOB = "DEV/DEV Deployer";
+export const QA_DEPLOYMENT_JOB_NAME = "QA/QA-DEPLOYMENT";
+export const STAGING_DEPLOYMENT_JOB_NAME = "DEV/DEV Deployer";
+export const PRODUCTION_DEPLOYMENT_JOB_NAME =
+  "Prod Deployments/Prod-cluster-deployment";
 
 const serviceToRepository = {
   accounts: "accounts",
@@ -157,6 +161,7 @@ type JenkinsBuild = {
   number: number;
   url?: string;
   result?: string | null;
+  building?: boolean;
   timestamp?: number;
   actions?: Array<{
     parameters?: Array<{ name: string; value: unknown }>;
@@ -222,37 +227,72 @@ function buildParameters(build: JenkinsBuild) {
   );
 }
 
+function resolveDashboardService(
+  jenkinsServiceName: string | undefined,
+  services: string[],
+): string | undefined {
+  if (!jenkinsServiceName) return undefined;
+  const lower = jenkinsServiceName.toLowerCase();
+  const direct = services.find((service) => service.toLowerCase() === lower);
+  if (direct) return direct;
+  return services.find(
+    (service) => stagingDeployServiceName(service).toLowerCase() === lower,
+  );
+}
+
+export function deploymentJobName(
+  environment: JenkinsDeployedTag["environment"],
+) {
+  if (environment === "qa") return QA_DEPLOYMENT_JOB_NAME;
+  if (environment === "production") return PRODUCTION_DEPLOYMENT_JOB_NAME;
+  return STAGING_DEPLOYMENT_JOB_NAME;
+}
+
 export function deployedTagsFromBuilds(
   qaBuilds: JenkinsBuild[],
   stagingBuilds: JenkinsBuild[],
   services: string[],
 ): JenkinsDeployedTag[] {
-  const serviceSet = new Set(services.map((service) => service.toLowerCase()));
   const deployments = new Map<string, JenkinsDeployedTag>();
+  const latestKeys = new Set<string>();
+  const liveKeys = new Set<string>();
 
   function collect(builds: JenkinsBuild[], qa: boolean) {
     for (const build of [...builds].sort((a, b) => b.number - a.number)) {
-      if (build.result !== "SUCCESS") continue;
       const parameters = buildParameters(build);
-      const service = (
-        parameters.SERVICE ?? parameters.SERVICE_NAME
-      )?.toLowerCase();
+      const service = resolveDashboardService(
+        parameters.SERVICE ?? parameters.SERVICE_NAME,
+        services,
+      );
       const tag = parameters.IMAGE_TAG;
       const environment = qa
         ? "qa"
         : teamEnvironments.get((parameters.TEAM ?? "").toLowerCase());
-      if (!service || !serviceSet.has(service) || !tag || !environment)
-        continue;
+      if (!service || !tag || !environment) continue;
+      const status = buildStatusFromResult(build.result, build.building);
       const key = `${service}:${environment}`;
-      if (deployments.has(key)) continue;
-      deployments.set(key, {
+      const deployment: JenkinsDeployedTag = {
         service,
         tag,
         environment,
+        status,
         buildNumber: build.number,
         buildUrl: build.url ?? "",
         deployedAt: new Date(build.timestamp ?? 0).toISOString(),
-      });
+        jobName: deploymentJobName(environment),
+      };
+      if (!latestKeys.has(key)) {
+        deployments.set(`${key}:latest`, deployment);
+        latestKeys.add(key);
+        if (status === "succeeded") liveKeys.add(key);
+      }
+      if (status === "succeeded" && !liveKeys.has(key)) {
+        deployments.set(`${key}:live`, {
+          ...deployment,
+          status: "succeeded",
+        });
+        liveKeys.add(key);
+      }
     }
   }
 
@@ -265,7 +305,6 @@ export function productionDeployedTagsFromBuilds(
   builds: JenkinsBuild[],
   services: string[],
 ): JenkinsDeployedTag[] {
-  const serviceSet = new Set(services.map((service) => service.toLowerCase()));
   const deployments = new Map<string, JenkinsDeployedTag>();
   const latestServices = new Set<string>();
   const liveServices = new Set<string>();
@@ -273,25 +312,13 @@ export function productionDeployedTagsFromBuilds(
     (left, right) => right.number - left.number,
   )) {
     const parameters = buildParameters(build);
-    const service = (
-      parameters.SERVICE ?? parameters.SERVICE_NAME
-    )?.toLowerCase();
+    const service = resolveDashboardService(
+      parameters.SERVICE ?? parameters.SERVICE_NAME,
+      services,
+    );
     const tag = parameters.IMAGE_TAG;
-    if (
-      !service ||
-      !serviceSet.has(service) ||
-      !tag
-    ) {
-      continue;
-    }
-    const status =
-      !build.result
-        ? "running"
-        : build.result === "SUCCESS"
-          ? "succeeded"
-          : build.result === "ABORTED"
-            ? "canceled"
-            : "failed";
+    if (!service || !tag) continue;
+    const status = buildStatusFromResult(build.result, build.building);
     const deployment: JenkinsDeployedTag = {
       service,
       tag,
@@ -300,6 +327,7 @@ export function productionDeployedTagsFromBuilds(
       buildNumber: build.number,
       buildUrl: build.url ?? "",
       deployedAt: new Date(build.timestamp ?? 0).toISOString(),
+      jobName: PRODUCTION_DEPLOYMENT_JOB_NAME,
     };
     if (!latestServices.has(service)) {
       deployments.set(`${service}:latest`, deployment);
@@ -323,9 +351,16 @@ async function recentJobBuilds(
     options: { tree: string },
   ) => Promise<{ builds?: JenkinsBuild[] }>;
   const job = await getJob.call(client.job, jobName, {
-    tree: "builds[number,url,result,timestamp,actions[parameters[name,value]]]{0,200}",
+    tree: "builds[number,url,result,building,timestamp,actions[parameters[name,value]]]{0,200}",
   });
   return job.builds ?? [];
+}
+
+function invalidateJenkinsBuildCaches() {
+  deploymentBuildCache.clear();
+  productionDeploymentBuildCache.clear();
+  eitriBuildCache.clear();
+  deploymentCache.clear();
 }
 
 async function recentDeploymentBuilds(
@@ -339,8 +374,8 @@ async function recentDeploymentBuilds(
   const value = (async () => {
     const client = jenkinsClient(config);
     const [qa, staging] = await Promise.all([
-      recentJobBuilds(client, "QA/QA-DEPLOYMENT"),
-      recentJobBuilds(client, "DEV/DEV Deployer"),
+      recentJobBuilds(client, QA_DEPLOYMENT_JOB_NAME),
+      recentJobBuilds(client, STAGING_DEPLOYMENT_JOB_NAME),
     ]);
     return { qa, staging };
   })();
@@ -364,7 +399,7 @@ async function recentProductionDeploymentBuilds(
   }
   const value = recentJobBuilds(
     jenkinsClient(prodConfig),
-    "Prod Deployments/Prod-cluster-deployment",
+    PRODUCTION_DEPLOYMENT_JOB_NAME,
   );
   productionDeploymentBuildCache.set(cacheKey, {
     expiresAt: Date.now() + DEPLOYMENT_CACHE_MS,
@@ -383,8 +418,9 @@ export async function getCurrentDeployments(
   if (services.length === 0) return [];
   const cacheKey = repository.toLowerCase();
   const cached = deploymentCache.get(cacheKey);
-  if (!forceRefresh && cached && cached.expiresAt > Date.now())
-    return cached.value;
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+    return enrichDeploymentsWithStages(config, await cached.value);
+  }
 
   const value = (async () => {
     try {
@@ -407,7 +443,7 @@ export async function getCurrentDeployments(
     value,
   });
   value.catch(() => deploymentCache.delete(cacheKey));
-  return value;
+  return enrichDeploymentsWithStages(config, await value);
 }
 
 export async function getCurrentProductionDeployments(
@@ -422,8 +458,9 @@ export async function getCurrentProductionDeployments(
   const cacheKey =
     `production:${prodConfig.jenkinsUrl}:${repository}`.toLowerCase();
   const cached = deploymentCache.get(cacheKey);
-  if (!forceRefresh && cached && cached.expiresAt > Date.now())
-    return cached.value;
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
+    return enrichDeploymentsWithStages(config, await cached.value);
+  }
 
   const value = (async () => {
     try {
@@ -449,7 +486,7 @@ export async function getCurrentProductionDeployments(
     value,
   });
   value.catch(() => deploymentCache.delete(cacheKey));
-  return value;
+  return enrichDeploymentsWithStages(config, await value);
 }
 
 export async function getCurrentDeploymentsBatch(
@@ -476,7 +513,7 @@ export async function getCurrentDeploymentsBatch(
       : Promise.resolve([]),
   ]);
 
-  return repositories.map((repository) => {
+  const results = repositories.map((repository) => {
     const services = servicesForRepository(repository);
     if (services.length === 0) {
       return {
@@ -520,6 +557,16 @@ export async function getCurrentDeploymentsBatch(
           productionResult.status === "rejected"),
     };
   });
+
+  return Promise.all(
+    results.map(async (result) => ({
+      ...result,
+      deployedTags: await enrichDeploymentsWithStages(
+        config,
+        result.deployedTags,
+      ),
+    })),
+  );
 }
 
 const eitriNamespaces = new Set<EitriNamespace>([
@@ -530,14 +577,65 @@ const eitriNamespaces = new Set<EitriNamespace>([
   "s5",
 ]);
 
-function buildStatusFromResult(
+export function buildStatusFromResult(
   result?: string | null,
   building?: boolean,
 ): EitriBuild["status"] {
-  if (building || !result) return "running";
+  if (building === true) return "running";
   if (result === "SUCCESS") return "succeeded";
   if (result === "ABORTED") return "canceled";
-  return "failed";
+  if (result) return "failed";
+  // Null result with building=false/unknown is still treated as in-flight;
+  // wfapi enrichment reconciles true terminals when Jenkins lags on result.
+  return "running";
+}
+
+export function buildStatusFromPipelineRunStatus(
+  status?: string | null,
+): EitriBuild["status"] | undefined {
+  switch ((status ?? "").toUpperCase()) {
+    case "SUCCESS":
+      return "succeeded";
+    case "FAILED":
+    case "FAILURE":
+    case "UNSTABLE":
+      return "failed";
+    case "ABORTED":
+    case "CANCELLED":
+    case "CANCELED":
+      return "canceled";
+    case "IN_PROGRESS":
+    case "RUNNING":
+    case "PAUSED_PENDING_INPUT":
+      return "running";
+    default:
+      return undefined;
+  }
+}
+
+export function statusFromPipelineStages(
+  stages: EitriBuildStage[],
+): EitriBuild["status"] | undefined {
+  if (stages.length === 0) return undefined;
+  if (stages.some((stage) => stage.status === "running")) return undefined;
+  if (stages.some((stage) => stage.status === "failed")) return "failed";
+  if (stages.some((stage) => stage.status === "canceled")) return "canceled";
+  if (stages.some((stage) => stage.status === "pending")) return undefined;
+  if (stages.every((stage) => stage.status === "succeeded")) return "succeeded";
+  return undefined;
+}
+
+function reconcileRunningStatus(
+  status: EitriBuild["status"] | undefined,
+  stages: EitriBuildStage[],
+  pipelineRunStatus?: string | null,
+): EitriBuild["status"] | undefined {
+  if (status !== "running") return status;
+  return (
+    buildStatusFromPipelineRunStatus(pipelineRunStatus) ??
+    statusFromPipelineStages(stages) ??
+    status
+  );
 }
 
 export function eitriDeploymentSpec(
@@ -610,14 +708,14 @@ export function eitriBuildsFromJobBuilds(
           branch: parameters.BRANCH || undefined,
           commitSha: parameters.COMMIT_SHA || undefined,
           stagingEnvUpdateJob: parameters.STAGING_ENV_UPDATE_JOB || undefined,
-          status: buildStatusFromResult(build.result),
+          status: buildStatusFromResult(build.result, build.building),
           createdAt: new Date(build.timestamp ?? 0).toISOString(),
         } satisfies EitriBuild,
       ];
     });
 }
 
-export function eitriStageStatus(status?: string | null): EitriStageStatus {
+export function pipelineStageStatus(status?: string | null): EitriStageStatus {
   switch ((status ?? "").toUpperCase()) {
     case "SUCCESS":
       return "succeeded";
@@ -638,7 +736,10 @@ export function eitriStageStatus(status?: string | null): EitriStageStatus {
   }
 }
 
-export function eitriStagesFromDescribe(describe: {
+/** @deprecated Prefer pipelineStageStatus */
+export const eitriStageStatus = pipelineStageStatus;
+
+export function pipelineStagesFromDescribe(describe: {
   stages?: Array<{
     id?: string | number;
     name?: string;
@@ -651,7 +752,7 @@ export function eitriStagesFromDescribe(describe: {
     .map((stage) => ({
       id: String(stage.id ?? stage.name),
       name: String(stage.name),
-      status: eitriStageStatus(stage.status),
+      status: pipelineStageStatus(stage.status),
       durationMillis:
         typeof stage.durationMillis === "number"
           ? stage.durationMillis
@@ -659,7 +760,10 @@ export function eitriStagesFromDescribe(describe: {
     }));
 }
 
-export function currentEitriStageName(stages: EitriBuildStage[]) {
+/** @deprecated Prefer pipelineStagesFromDescribe */
+export const eitriStagesFromDescribe = pipelineStagesFromDescribe;
+
+export function currentPipelineStageName(stages: EitriBuildStage[]) {
   return (
     [...stages].reverse().find((stage) => stage.status === "running")?.name ??
     stages.find((stage) => stage.status === "pending")?.name ??
@@ -667,22 +771,100 @@ export function currentEitriStageName(stages: EitriBuildStage[]) {
   );
 }
 
-async function getEitriPipelineStages(
+/** @deprecated Prefer currentPipelineStageName */
+export const currentEitriStageName = currentPipelineStageName;
+
+async function getPipelineDescribe(
   config: ConnectionConfig,
+  jobName: string,
   buildNumber: number,
-): Promise<EitriBuildStage[]> {
+): Promise<{ stages: EitriBuildStage[]; status?: string | null }> {
   const describe = await jenkinsApiGet<{
+    status?: string | null;
     stages?: Array<{
       id?: string | number;
       name?: string;
       status?: string | null;
       durationMillis?: number;
     }>;
-  }>(
-    config,
-    `${jenkinsJobPath(EITRI_JOB_NAME)}/${buildNumber}/wfapi/describe`,
+  }>(config, `${jenkinsJobPath(jobName)}/${buildNumber}/wfapi/describe`);
+  return {
+    stages: pipelineStagesFromDescribe(describe),
+    status: describe.status,
+  };
+}
+
+async function enrichDeploymentsWithStages(
+  config: ConnectionConfig,
+  deployments: JenkinsDeployedTag[],
+): Promise<JenkinsDeployedTag[]> {
+  const running = deployments.filter(
+    (deployment) => deployment.status === "running",
   );
-  return eitriStagesFromDescribe(describe);
+  if (running.length === 0) return deployments;
+
+  const results = await Promise.allSettled(
+    running.map(async (deployment) => {
+      const jobName =
+        deployment.jobName ?? deploymentJobName(deployment.environment);
+      const jenkinsConfig =
+        deployment.environment === "production"
+          ? productionConfig(config)
+          : config;
+      const describe = await getPipelineDescribe(
+        jenkinsConfig,
+        jobName,
+        deployment.buildNumber,
+      );
+      return {
+        buildNumber: deployment.buildNumber,
+        environment: deployment.environment,
+        service: deployment.service,
+        stages: describe.stages,
+        pipelineRunStatus: describe.status,
+      };
+    }),
+  );
+  const stagesByKey = new Map<
+    string,
+    { stages: EitriBuildStage[]; pipelineRunStatus?: string | null }
+  >();
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    stagesByKey.set(
+      `${result.value.environment}:${result.value.service}:${result.value.buildNumber}`,
+      {
+        stages: result.value.stages,
+        pipelineRunStatus: result.value.pipelineRunStatus,
+      },
+    );
+  }
+
+  return deployments.map((deployment) => {
+    const enriched = stagesByKey.get(
+      `${deployment.environment}:${deployment.service}:${deployment.buildNumber}`,
+    );
+    if (!enriched) return deployment;
+    const status = reconcileRunningStatus(
+      deployment.status,
+      enriched.stages,
+      enriched.pipelineRunStatus,
+    );
+    if (enriched.stages.length === 0) {
+      return status === deployment.status
+        ? deployment
+        : { ...deployment, status };
+    }
+    return {
+      ...deployment,
+      status,
+      stages: enriched.stages,
+      currentStage:
+        status === "running"
+          ? currentPipelineStageName(enriched.stages)
+          : undefined,
+    };
+  });
 }
 
 async function enrichEitriBuildStages(
@@ -693,24 +875,51 @@ async function enrichEitriBuildStages(
   if (running.length === 0) return builds;
 
   const results = await Promise.allSettled(
-    running.map(async (build) => ({
-      buildNumber: build.buildNumber,
-      stages: await getEitriPipelineStages(config, build.buildNumber),
-    })),
+    running.map(async (build) => {
+      const describe = await getPipelineDescribe(
+        config,
+        EITRI_JOB_NAME,
+        build.buildNumber,
+      );
+      return {
+        buildNumber: build.buildNumber,
+        stages: describe.stages,
+        pipelineRunStatus: describe.status,
+      };
+    }),
   );
-  const stagesByBuild = new Map<number, EitriBuildStage[]>();
+  const stagesByBuild = new Map<
+    number,
+    { stages: EitriBuildStage[]; pipelineRunStatus?: string | null }
+  >();
   for (const result of results) {
     if (result.status !== "fulfilled") continue;
-    stagesByBuild.set(result.value.buildNumber, result.value.stages);
+    stagesByBuild.set(result.value.buildNumber, {
+      stages: result.value.stages,
+      pipelineRunStatus: result.value.pipelineRunStatus,
+    });
   }
 
   return builds.map((build) => {
-    const stages = stagesByBuild.get(build.buildNumber);
-    if (!stages || stages.length === 0) return build;
+    const enriched = stagesByBuild.get(build.buildNumber);
+    if (!enriched) return build;
+    const status =
+      reconcileRunningStatus(
+        build.status,
+        enriched.stages,
+        enriched.pipelineRunStatus,
+      ) ?? build.status;
+    if (enriched.stages.length === 0) {
+      return status === build.status ? build : { ...build, status };
+    }
     return {
       ...build,
-      stages,
-      currentStage: currentEitriStageName(stages),
+      status,
+      stages: enriched.stages,
+      currentStage:
+        status === "running"
+          ? currentPipelineStageName(enriched.stages)
+          : undefined,
     };
   });
 }
@@ -800,6 +1009,7 @@ export async function triggerEitriDeployment(
     } catch {
       // It is normal for the queue item to take a moment to become available.
     }
+    invalidateJenkinsBuildCaches();
     return {
       queueId,
       queueUrl: `${config.jenkinsUrl.replace(/\/+$/, "")}/queue/item/${queueId}/`,
@@ -973,6 +1183,7 @@ export async function triggerDeployment(
     } catch {
       // It is normal for the queue item to take a moment to become available.
     }
+    invalidateJenkinsBuildCaches();
     return {
       queueId,
       queueUrl: `${config.jenkinsUrl.replace(/\/+$/, "")}/queue/item/${queueId}/`,
@@ -1057,6 +1268,7 @@ export async function triggerProductionDeployment(
     } catch {
       // It is normal for the queue item to take a moment to become available.
     }
+    invalidateJenkinsBuildCaches();
     return {
       queueId,
       queueUrl: `${prodConfig.jenkinsUrl.replace(/\/+$/, "")}/queue/item/${queueId}/`,
@@ -1142,16 +1354,9 @@ export async function getProductionDeploymentBuildStatus(
       result?: string | null;
       url?: string;
     };
-    const status = build.building || !build.result
-      ? "running"
-      : build.result === "SUCCESS"
-        ? "succeeded"
-        : build.result === "ABORTED"
-          ? "canceled"
-          : "failed";
     return {
       buildNumber,
-      status,
+      status: buildStatusFromResult(build.result, build.building),
       buildUrl: build.url,
     };
   } catch (error) {

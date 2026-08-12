@@ -11,10 +11,13 @@ import type {
   RepositoryReleaseState,
   TrackedStagingRelease,
   TrackedProductionRelease,
+  TriggeredDeployment,
+  TriggeredProductionDeployment,
 } from '../../shared/types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DeployDialog } from './DeployDialog'
 import { EitriOperations } from './EitriOperations'
+import { LiveDeploymentChips } from './LiveDeploymentChips'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
 import {
   ReleasePlatformToggle,
@@ -66,20 +69,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       },
     )
   })
-}
-
-function deploymentLabel(deployment: JenkinsDeployedTag) {
-  const environment = deployment.environment.toUpperCase()
-  switch (deployment.status) {
-    case 'running':
-      return `Running in ${environment}`
-    case 'failed':
-      return `Failed in ${environment}`
-    case 'canceled':
-      return `Canceled in ${environment}`
-    default:
-      return `Live in ${environment}`
-  }
 }
 
 function isTagDeployed(
@@ -587,6 +576,81 @@ export function ServiceOperations({
         ].join('\0')
       : ''
 
+  const refreshDeploymentsNow = useCallback(
+    async (optimistic?: JenkinsDeployedTag) => {
+      if (optimistic) {
+        setReleaseState((current) => {
+          if (!current) return current
+          const others = current.deployedTags.filter(
+            (tag) =>
+              !(
+                tag.service === optimistic.service &&
+                tag.environment === optimistic.environment &&
+                tag.status === 'running'
+              ),
+          )
+          return {
+            ...current,
+            deployedTags: [optimistic, ...others],
+            fetchedAt: new Date().toISOString(),
+          }
+        })
+      }
+
+      try {
+        const result = await withTimeout(
+          api.repositoryDeploymentStatus(repository, true),
+          BUILD_POLL_TIMEOUT_MS,
+        )
+        setReleaseState((current) =>
+          current
+            ? {
+                ...current,
+                deployedTags: result.deployedTags,
+                deploymentLookupFailed: result.deploymentLookupFailed,
+                fetchedAt: new Date().toISOString(),
+              }
+            : current,
+        )
+      } catch {
+        // Keep optimistic/last snapshot; the regular poll loop will retry.
+      }
+    },
+    [repository],
+  )
+
+  const handleStagingDeployQueued = useCallback(
+    (deployment: TriggeredDeployment) => {
+      void refreshDeploymentsNow({
+        service: deployment.service,
+        tag: deployment.tag,
+        environment: deployment.environment,
+        status: 'running',
+        buildNumber: 0,
+        buildUrl: deployment.buildUrl ?? deployment.queueUrl,
+        deployedAt: new Date().toISOString(),
+        jobName: deployment.jobName,
+      })
+    },
+    [refreshDeploymentsNow],
+  )
+
+  const handleProductionDeployQueued = useCallback(
+    (deployment: TriggeredProductionDeployment) => {
+      void refreshDeploymentsNow({
+        service: deployment.service,
+        tag: deployment.imageTag,
+        environment: 'production',
+        status: 'running',
+        buildNumber: deployment.buildNumber ?? 0,
+        buildUrl: deployment.buildUrl ?? deployment.queueUrl,
+        deployedAt: new Date().toISOString(),
+        jobName: deployment.jobName,
+      })
+    },
+    [refreshDeploymentsNow],
+  )
+
   useEffect(() => {
     if (!releaseTrackKey) return
 
@@ -1027,23 +1091,7 @@ export function ServiceOperations({
                     {release.environment.toUpperCase()} ·{' '}
                     {timeAgo(release.createdAt)}
                   </span>
-                  {liveDeployments.length > 0 && (
-                    <div className="live-deployments">
-                      {liveDeployments.map((deployment) => (
-                        <a
-                          className={`live-deployment ${deployment.status ?? 'succeeded'}`}
-                          href={deployment.buildUrl || undefined}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={`${deployment.service} · Jenkins build #${deployment.buildNumber}`}
-                          key={`${deployment.service}-${deployment.environment}-${deployment.buildNumber}`}
-                        >
-                          <span aria-hidden="true">●</span>{' '}
-                          {deploymentLabel(deployment)}
-                        </a>
-                      ))}
-                    </div>
-                  )}
+                  <LiveDeploymentChips deployments={liveDeployments} />
                 </div>
                 <span className={`build-status ${release.buildStatus}`}>
                   {buildLabels[release.buildStatus]}
@@ -1171,23 +1219,7 @@ export function ServiceOperations({
                         {release.tag}
                       </a>
                       <span>{timeAgo(release.createdAt)}</span>
-                      {liveDeployments.length > 0 && (
-                        <div className="live-deployments">
-                          {liveDeployments.map((deployment) => (
-                            <a
-                              className={`live-deployment ${deployment.status ?? 'succeeded'}`}
-                              href={deployment.buildUrl || undefined}
-                              target="_blank"
-                              rel="noreferrer"
-                              title={`${deployment.service} · Jenkins build #${deployment.buildNumber}`}
-                              key={`${deployment.service}-${deployment.environment}-${deployment.buildNumber}`}
-                            >
-                              <span aria-hidden="true">●</span>{' '}
-                              {deploymentLabel(deployment)}
-                            </a>
-                          ))}
-                        </div>
-                      )}
+                      <LiveDeploymentChips deployments={liveDeployments} />
                     </div>
                     <span className={`build-status ${release.buildStatus}`}>
                       {buildLabels[release.buildStatus]}
@@ -1514,6 +1546,7 @@ export function ServiceOperations({
           release={deployRelease}
           services={releaseState.jenkinsServices}
           allowAnyVTag={includeAllVReleases}
+          onQueued={handleStagingDeployQueued}
           onClose={() => setDeployRelease(undefined)}
         />
       )}
@@ -1523,6 +1556,7 @@ export function ServiceOperations({
           services={releaseState.jenkinsServices}
           sourceTag={productionDeployRelease.tag}
           deployedTags={releaseState.deployedTags}
+          onDeploymentUpdated={handleProductionDeployQueued}
           onClose={() => setProductionDeployRelease(undefined)}
         />
       )}
