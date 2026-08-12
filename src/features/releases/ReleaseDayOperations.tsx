@@ -14,7 +14,6 @@ import type {
   TriggeredProductionDeployment,
 } from "../../shared/types";
 import { DialogBackdrop } from "./DialogBackdrop";
-import { PipelineStageList } from "./PipelineStageList";
 import { ProductionDeployDialog } from "./ProductionDeployDialog";
 import { ReleaseDevelopersDialog } from "./ReleaseDevelopersDialog";
 import type { ReleaseDeveloper } from "./releaseDevelopers";
@@ -2845,36 +2844,24 @@ export function ReleaseDayOperations({
                           )}
                           {productionDeployments.length > 0 ? (
                             productionDeployments.map((deployment) => (
-                              <div
-                                className="release-day-production-live-item"
+                              <a
+                                className={`release-day-production-live ${deployment.status ?? "succeeded"}`}
+                                href={deployment.buildUrl}
+                                target="_blank"
+                                rel="noreferrer"
                                 key={`${deployment.service}-${deployment.buildNumber}`}
+                                title={`Jenkins build #${deployment.buildNumber}${
+                                  deployment.currentStage
+                                    ? ` · ${deployment.currentStage}`
+                                    : ""
+                                }`}
                               >
-                                <a
-                                  className={`release-day-production-live ${deployment.status ?? "succeeded"}`}
-                                  href={deployment.buildUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  title={`Jenkins build #${deployment.buildNumber}${
-                                    deployment.currentStage
-                                      ? ` · ${deployment.currentStage}`
-                                      : ""
-                                  }`}
-                                >
-                                  {productionDeploymentLabel(deployment)}
-                                  {productionDeployments.length > 1
-                                    ? ` · ${deployment.service}`
-                                    : ""}{" "}
-                                  ↗
-                                </a>
-                                <PipelineStageList
-                                  stages={deployment.stages}
-                                  currentStage={
-                                    deployment.status === "running"
-                                      ? deployment.currentStage
-                                      : undefined
-                                  }
-                                />
-                              </div>
+                                {productionDeploymentLabel(deployment)}
+                                {productionDeployments.length > 1
+                                  ? ` · ${deployment.service}`
+                                  : ""}{" "}
+                                ↗
+                              </a>
                             ))
                           ) : !deploymentProgress ? (
                             <small className="release-day-production-unknown">

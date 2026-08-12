@@ -1108,7 +1108,6 @@ export function ServiceOperations({
                     {release.environment.toUpperCase()} ·{' '}
                     {timeAgo(release.createdAt)}
                   </span>
-                  <LiveDeploymentChips deployments={liveDeployments} />
                 </div>
                 <span className={`build-status ${release.buildStatus}`}>
                   {buildLabels[release.buildStatus]}
@@ -1151,6 +1150,7 @@ export function ServiceOperations({
                     ))
                   )}
                 </div>
+                <LiveDeploymentChips deployments={liveDeployments} />
                 </article>
               )
             })}
@@ -1236,7 +1236,6 @@ export function ServiceOperations({
                         {release.tag}
                       </a>
                       <span>{timeAgo(release.createdAt)}</span>
-                      <LiveDeploymentChips deployments={liveDeployments} />
                     </div>
                     <span className={`build-status ${release.buildStatus}`}>
                       {buildLabels[release.buildStatus]}
@@ -1282,6 +1281,7 @@ export function ServiceOperations({
                         ))
                       )}
                     </div>
+                    <LiveDeploymentChips deployments={liveDeployments} />
                   </article>
                 )
               })}

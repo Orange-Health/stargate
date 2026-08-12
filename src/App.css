@@ -1666,6 +1666,9 @@ body[data-modal-open] {
 
 .reason-row {
   margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .status-pill,
@@ -2263,6 +2266,15 @@ body[data-modal-open] {
   padding: 13px 18px;
 }
 
+.release-build-row:has(> .live-deployments) {
+  align-items: start;
+  row-gap: 10px;
+}
+
+.release-build-row > :not(.live-deployments) {
+  align-self: center;
+}
+
 .build-indicator {
   border-radius: 50%;
   height: 8px;
@@ -2321,14 +2333,17 @@ body[data-modal-open] {
 
 .live-deployments {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 7px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  grid-column: 1 / -1;
+  min-width: 0;
+  padding-left: 20px;
 }
 
 .live-deployment-item {
+  align-items: center;
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
 }
@@ -2337,7 +2352,18 @@ body[data-modal-open] {
   width: fit-content;
 }
 
-.release-build-main .live-deployment {
+.live-deployment-item .pipeline-stage-block {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.live-deployment-item .pipeline-stage-list {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.live-deployment {
   align-items: center;
   background: var(--green-faint);
   border: 1px solid color-mix(in srgb, var(--green) 45%, transparent);
@@ -2351,23 +2377,24 @@ body[data-modal-open] {
   overflow: visible;
   padding: 3px 7px;
   text-overflow: clip;
+  text-decoration: none;
   width: fit-content;
 }
 
-.release-build-main .live-deployment span {
+.live-deployment span {
   color: var(--green);
   font-size: 7px;
   margin: 0;
 }
 
-.release-build-main .live-deployment.running {
+.live-deployment.running {
   background: rgb(245 158 11 / 12%);
   border-color: rgb(245 158 11 / 45%);
   color: var(--warning);
 }
 
-.release-build-main .live-deployment.failed,
-.release-build-main .live-deployment.canceled {
+.live-deployment.failed,
+.live-deployment.canceled {
   background: rgb(239 68 68 / 12%);
   border-color: rgb(239 68 68 / 45%);
   color: var(--danger);
@@ -2657,8 +2684,9 @@ a.eitri-build-link {
 }
 
 .pipeline-stage-block {
+  align-items: center;
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
 }
@@ -2739,17 +2767,6 @@ a.eitri-build-link {
 
 .pipeline-stage.pending {
   opacity: 0.7;
-}
-
-.release-day-production-live-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-
-.release-day-production-live-item .pipeline-stage-list {
-  max-width: 280px;
 }
 
 .eitri-replay-dialog .eitri-replay-params {
@@ -3865,6 +3882,7 @@ label {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
 }
 
 .release-day-production-live {
