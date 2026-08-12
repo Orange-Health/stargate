@@ -18,6 +18,10 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { DeployDialog } from './DeployDialog'
 import { EitriOperations } from './EitriOperations'
 import { LiveDeploymentChips } from './LiveDeploymentChips'
+import {
+  playNotificationSound,
+  unlockNotificationSound,
+} from './notificationSound'
 import { ProductionDeployDialog } from './ProductionDeployDialog'
 import {
   ReleasePlatformToggle,
@@ -227,6 +231,16 @@ export function ServiceOperations({
   }, [browserNotifications])
 
   useEffect(() => {
+    if (!browserNotifications) return
+    const unlock = () => {
+      void unlockNotificationSound()
+      window.removeEventListener('pointerdown', unlock)
+    }
+    window.addEventListener('pointerdown', unlock)
+    return () => window.removeEventListener('pointerdown', unlock)
+  }, [browserNotifications])
+
+  useEffect(() => {
     releaseLimitRef.current = releaseLimit
   }, [releaseLimit])
 
@@ -283,6 +297,7 @@ export function ServiceOperations({
         typeof Notification !== 'undefined' &&
         Notification.permission === 'granted'
       ) {
+        playNotificationSound(latest.buildStatus)
         new Notification(`Release build ${statusLabel}`, {
           body: `${repository.split('/').at(-1)} · ${message}`,
           tag: `release-build-${repository}-${latest.tag}`,
@@ -782,6 +797,8 @@ export function ServiceOperations({
     if (permission === 'granted') {
       window.localStorage.setItem('release-build-notifications', 'true')
       setBrowserNotifications(true)
+      await unlockNotificationSound()
+      playNotificationSound('info')
       setNotificationToast({ message: 'Build alerts enabled.' })
     } else {
       setNotificationToast({

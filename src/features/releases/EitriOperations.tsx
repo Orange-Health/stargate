@@ -3,6 +3,10 @@ import { api } from '../../shared/api'
 import type { EitriBuild, EitriBuildsResult } from '../../shared/types'
 import { EitriDialog } from './EitriDialog'
 import { EitriReplayDialog } from './EitriReplayDialog'
+import {
+  playNotificationSound,
+  unlockNotificationSound,
+} from './notificationSound'
 import { PipelineStageList } from './PipelineStageList'
 
 type Props = {
@@ -88,6 +92,16 @@ export function EitriOperations({
   }, [browserNotifications])
 
   useEffect(() => {
+    if (!browserNotifications) return
+    const unlock = () => {
+      void unlockNotificationSound()
+      window.removeEventListener('pointerdown', unlock)
+    }
+    window.addEventListener('pointerdown', unlock)
+    return () => window.removeEventListener('pointerdown', unlock)
+  }, [browserNotifications])
+
+  useEffect(() => {
     stateRef.current = state
   }, [state])
 
@@ -123,6 +137,7 @@ export function EitriOperations({
         typeof Notification !== 'undefined' &&
         Notification.permission === 'granted'
       ) {
+        playNotificationSound(latest.status)
         new Notification(`EITRI build ${statusLabel}`, {
           body: `${repository.split('/').at(-1)} · ${message}`,
           tag: `eitri-build-${repository}-${latest.buildNumber}`,
@@ -245,6 +260,8 @@ export function EitriOperations({
     }
     window.localStorage.setItem(NOTIFICATION_KEY, 'true')
     setBrowserNotifications(true)
+    await unlockNotificationSound()
+    playNotificationSound('info')
   }
 
   return (
