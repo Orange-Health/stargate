@@ -90,7 +90,7 @@ export function StagingReleaseDialog({
       setCreated(result)
       window.dispatchEvent(
         new CustomEvent('staging-release-created', {
-          detail: { repository },
+          detail: { repository, release: result },
         }),
       )
     } catch (reason) {

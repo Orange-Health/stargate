@@ -3,6 +3,8 @@ import { api } from '../../shared/api'
 import type {
   BackMergeStep,
   BuildStatus,
+  CreatedProductionRelease,
+  CreatedStagingRelease,
   JenkinsDeployedTag,
   PromotionStep,
   RepositoryReleaseData,
@@ -197,9 +199,11 @@ export function ServiceOperations({
   const previousBuilds = useRef(new Map<string, BuildStatus>())
   const buildsInitialized = useRef(false)
   const browserNotificationsRef = useRef(browserNotifications)
-  const loadSequence = useRef(0)
+  const branchLoadSequence = useRef(0)
+  const releaseLoadSequence = useRef(0)
   const releaseLimitRef = useRef(releaseLimit)
   const releaseStateRef = useRef(releaseState)
+  const viewRef = useRef(view)
 
   useEffect(() => {
     browserNotificationsRef.current = browserNotifications
@@ -212,6 +216,10 @@ export function ServiceOperations({
   useEffect(() => {
     releaseStateRef.current = releaseState
   }, [releaseState])
+
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
 
   const announceCompletedBuilds = useCallback(
     (nextState: RepositoryReleaseData) => {
@@ -256,25 +264,31 @@ export function ServiceOperations({
     },
     [repository],
   )
+  const announceCompletedBuildsRef = useRef(announceCompletedBuilds)
+  useEffect(() => {
+    announceCompletedBuildsRef.current = announceCompletedBuilds
+  }, [announceCompletedBuilds])
 
   const loadBranches = useCallback(
     async (silent = false) => {
-      const sequence = ++loadSequence.current
+      const sequence = ++branchLoadSequence.current
       if (!silent) setBranchLoading(true)
       setError('')
       try {
         const nextState = await api.repositoryState(repository)
-        if (sequence !== loadSequence.current) return
+        if (sequence !== branchLoadSequence.current) return
         setState(nextState)
       } catch (reason) {
-        if (sequence !== loadSequence.current) return
+        if (sequence !== branchLoadSequence.current) return
         setError(
           reason instanceof Error
             ? reason.message
             : 'Could not load repository operations.',
         )
       } finally {
-        if (!silent && sequence === loadSequence.current) setBranchLoading(false)
+        if (!silent && sequence === branchLoadSequence.current) {
+          setBranchLoading(false)
+        }
       }
     },
     [repository],
@@ -282,6 +296,7 @@ export function ServiceOperations({
 
   const loadReleases = useCallback(
     async (silent = false, limit = releaseLimitRef.current) => {
+      const sequence = ++releaseLoadSequence.current
       if (!silent) setReleaseLoading(true)
       setError('')
       try {
@@ -290,21 +305,33 @@ export function ServiceOperations({
           includeAllVReleases,
           limit,
         )
+        if (sequence !== releaseLoadSequence.current) return
         announceCompletedBuilds(nextState)
         setReleaseState(nextState)
         setReleaseLimit(limit)
       } catch (reason) {
+        if (sequence !== releaseLoadSequence.current) return
         setError(
           reason instanceof Error
             ? reason.message
             : 'Could not load repository releases.',
         )
       } finally {
-        if (!silent) setReleaseLoading(false)
+        if (!silent && sequence === releaseLoadSequence.current) {
+          setReleaseLoading(false)
+        }
       }
     },
     [announceCompletedBuilds, includeAllVReleases, repository],
   )
+  const loadReleasesRef = useRef(loadReleases)
+  const loadBranchesRef = useRef(loadBranches)
+  useEffect(() => {
+    loadReleasesRef.current = loadReleases
+  }, [loadReleases])
+  useEffect(() => {
+    loadBranchesRef.current = loadBranches
+  }, [loadBranches])
 
   const load = useCallback(
     async (silent = false) => {
@@ -320,6 +347,94 @@ export function ServiceOperations({
     [loadBranches, loadReleases, view],
   )
 
+  const refreshReleasesInBackground = useCallback(async () => {
+    try {
+      await api.refreshRepository(repository)
+    } catch {
+      // Create already cleared server caches; still reload the list.
+    }
+    await loadReleasesRef.current(true)
+  }, [repository])
+
+  const insertCreatedStagingRelease = useCallback(
+    (release: CreatedStagingRelease) => {
+      const tracked: TrackedStagingRelease = {
+        id: release.id,
+        tag: release.tag,
+        environment: release.environment,
+        url: release.url,
+        createdAt: release.createdAt,
+        buildStatus: 'starting',
+        runs: [],
+      }
+      setReleaseState((current) => {
+        if (!current) {
+          return {
+            repository,
+            stagingReleases: [tracked],
+            productionReleases: [],
+            hasMoreStaging: false,
+            hasMoreProduction: false,
+            deployedTags: [],
+            deploymentLookupFailed: false,
+            jenkinsServices: [],
+            fetchedAt: new Date().toISOString(),
+          }
+        }
+        return {
+          ...current,
+          stagingReleases: [
+            tracked,
+            ...current.stagingReleases.filter((item) => item.tag !== tracked.tag),
+          ],
+          fetchedAt: new Date().toISOString(),
+        }
+      })
+      setReleaseLoading(false)
+    },
+    [repository],
+  )
+
+  const insertCreatedProductionRelease = useCallback(
+    (release: CreatedProductionRelease) => {
+      const tracked: TrackedProductionRelease = {
+        id: release.id,
+        tag: release.tag,
+        url: release.url,
+        createdAt: release.createdAt,
+        buildStatus: 'starting',
+        runs: [],
+      }
+      setReleaseState((current) => {
+        if (!current) {
+          return {
+            repository,
+            stagingReleases: [],
+            productionReleases: [tracked],
+            hasMoreStaging: false,
+            hasMoreProduction: false,
+            deployedTags: [],
+            deploymentLookupFailed: false,
+            jenkinsServices: [],
+            fetchedAt: new Date().toISOString(),
+          }
+        }
+        return {
+          ...current,
+          productionReleases: [
+            tracked,
+            ...current.productionReleases.filter(
+              (item) => item.tag !== tracked.tag,
+            ),
+          ],
+          fetchedAt: new Date().toISOString(),
+        }
+      })
+      setReleaseLoading(false)
+    },
+    [repository],
+  )
+
   useEffect(() => {
     setState(undefined)
     setReleaseState(undefined)
@@ -330,48 +445,99 @@ export function ServiceOperations({
     releaseLimitRef.current = 5
     previousBuilds.current = new Map()
     buildsInitialized.current = false
-    void load()
-    const refresh = (event: Event) => {
+    branchLoadSequence.current += 1
+    releaseLoadSequence.current += 1
+    const requests: Promise<void>[] = []
+    if (view === 'all' || view === 'releases') {
+      requests.push(loadReleasesRef.current())
+    }
+    if (view === 'all' || view === 'branches') {
+      requests.push(loadBranchesRef.current())
+    }
+    void Promise.allSettled(requests)
+  }, [includeAllVReleases, repository, view])
+
+  useEffect(() => {
+    const applyRepositoryState = (next: RepositoryReleaseState) => {
+      branchLoadSequence.current += 1
+      releaseLoadSequence.current += 1
+      const releases: RepositoryReleaseData = {
+        repository: next.repository,
+        stagingReleases: next.stagingReleases,
+        productionReleases: next.productionReleases,
+        hasMoreStaging: false,
+        hasMoreProduction: false,
+        deployedTags: next.deployedTags,
+        deploymentLookupFailed: next.deploymentLookupFailed,
+        jenkinsServices: next.jenkinsServices,
+        fetchedAt: next.fetchedAt,
+      }
+      announceCompletedBuildsRef.current(releases)
+      setReleaseState(releases)
+      setState(next)
+      setReleaseLoading(false)
+      setBranchLoading(false)
+      setError('')
+    }
+
+    const onStagingCreated = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          repository?: string
+          release?: CreatedStagingRelease
+        }>
+      ).detail
+      if (detail?.repository && detail.repository !== repository) return
+      if (detail?.release) insertCreatedStagingRelease(detail.release)
+      void refreshReleasesInBackground()
+    }
+
+    const onProductionCreated = (event: Event) => {
+      const detail = (
+        event as CustomEvent<{
+          repository?: string
+          release?: CreatedProductionRelease
+        }>
+      ).detail
+      if (detail?.repository && detail.repository !== repository) return
+      if (detail?.release) insertCreatedProductionRelease(detail.release)
+      void refreshReleasesInBackground()
+    }
+
+    const onServiceRefresh = (event: Event) => {
       const detail = (
         event as CustomEvent<{
           repository?: string
           state?: RepositoryReleaseState
         }>
       ).detail
-      if (!detail?.repository || detail.repository === repository) {
-        if (detail?.state) {
-          loadSequence.current += 1
-          const releases: RepositoryReleaseData = {
-            repository: detail.state.repository,
-            stagingReleases: detail.state.stagingReleases,
-            productionReleases: detail.state.productionReleases,
-            hasMoreStaging: false,
-            hasMoreProduction: false,
-            deployedTags: detail.state.deployedTags,
-            deploymentLookupFailed: detail.state.deploymentLookupFailed,
-            jenkinsServices: detail.state.jenkinsServices,
-            fetchedAt: detail.state.fetchedAt,
-          }
-          announceCompletedBuilds(releases)
-          setReleaseState(releases)
-          setState(detail.state)
-          setReleaseLoading(false)
-          setBranchLoading(false)
-          setError('')
-          return
-        }
-        void load(true)
+      if (detail?.repository && detail.repository !== repository) return
+      if (detail?.state) {
+        applyRepositoryState(detail.state)
+        return
       }
+      const currentView = viewRef.current
+      const requests: Promise<void>[] = [refreshReleasesInBackground()]
+      if (currentView === 'all' || currentView === 'branches') {
+        requests.push(loadBranchesRef.current(true))
+      }
+      void Promise.allSettled(requests)
     }
-    window.addEventListener('staging-release-created', refresh)
-    window.addEventListener('production-release-created', refresh)
-    window.addEventListener('service-refresh-requested', refresh)
+
+    window.addEventListener('staging-release-created', onStagingCreated)
+    window.addEventListener('production-release-created', onProductionCreated)
+    window.addEventListener('service-refresh-requested', onServiceRefresh)
     return () => {
-      window.removeEventListener('staging-release-created', refresh)
-      window.removeEventListener('production-release-created', refresh)
-      window.removeEventListener('service-refresh-requested', refresh)
+      window.removeEventListener('staging-release-created', onStagingCreated)
+      window.removeEventListener('production-release-created', onProductionCreated)
+      window.removeEventListener('service-refresh-requested', onServiceRefresh)
     }
-  }, [announceCompletedBuilds, load, repository, view])
+  }, [
+    insertCreatedProductionRelease,
+    insertCreatedStagingRelease,
+    refreshReleasesInBackground,
+    repository,
+  ])
 
   const releaseTrackKey =
     releaseState && (view === 'all' || view === 'releases')
@@ -386,10 +552,20 @@ export function ServiceOperations({
 
     let active = true
     let inFlight = false
+    let timeout: number | undefined
+
+    const schedule = () => {
+      if (!active || document.hidden) return
+      timeout = window.setTimeout(() => void poll(), BUILD_POLL_INTERVAL_MS)
+    }
+
     const poll = async () => {
       if (!active || inFlight || document.hidden) return
       const current = releaseStateRef.current
-      if (!current) return
+      if (!current) {
+        schedule()
+        return
+      }
       const trackedReleases = [
         ...current.stagingReleases,
         ...current.productionReleases,
@@ -398,7 +574,10 @@ export function ServiceOperations({
         tag: release.tag,
         createdAt: release.createdAt,
       }))
-      if (trackedReleases.length === 0) return
+      if (trackedReleases.length === 0) {
+        schedule()
+        return
+      }
 
       inFlight = true
       try {
@@ -456,16 +635,20 @@ export function ServiceOperations({
         setReleaseState(nextState)
       } finally {
         inFlight = false
+        schedule()
       }
     }
+
     const visibilityChanged = () => {
+      if (timeout !== undefined) window.clearTimeout(timeout)
+      timeout = undefined
       if (!document.hidden) void poll()
     }
     document.addEventListener('visibilitychange', visibilityChanged)
-    const interval = window.setInterval(() => void poll(), BUILD_POLL_INTERVAL_MS)
+    void poll()
     return () => {
       active = false
-      window.clearInterval(interval)
+      if (timeout !== undefined) window.clearTimeout(timeout)
       document.removeEventListener('visibilitychange', visibilityChanged)
     }
   }, [announceCompletedBuilds, releaseTrackKey, repository])

@@ -1737,7 +1737,7 @@ export function ReleaseDayOperations({
       );
       window.dispatchEvent(
         new CustomEvent("production-release-created", {
-          detail: { repository },
+          detail: { repository, release },
         }),
       );
     } catch (reason) {

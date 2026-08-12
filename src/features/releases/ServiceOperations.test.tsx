@@ -138,6 +138,12 @@ beforeEach(() => {
   vi.spyOn(api, 'repositoryReleaseData').mockResolvedValue(
     releaseData(repositoryState),
   )
+  vi.spyOn(api, 'refreshRepository').mockResolvedValue()
+  vi.spyOn(api, 'releaseBuildStatuses').mockResolvedValue([])
+  vi.spyOn(api, 'repositoryDeploymentStatus').mockResolvedValue({
+    deployedTags: repositoryState.deployedTags,
+    deploymentLookupFailed: false,
+  })
 })
 
 afterEach(() => {
@@ -236,7 +242,7 @@ describe('ServiceOperations', () => {
     render(<ServiceOperations repository="Orange-Health/service-api" />)
     await screen.findByText('v-qa-26.0713.2')
 
-    act(() => {
+    await act(async () => {
       window.dispatchEvent(
         new CustomEvent('service-refresh-requested', {
           detail: { repository: 'Orange-Health/service-api' },
@@ -247,6 +253,113 @@ describe('ServiceOperations', () => {
     expect(
       await screen.findByText('v-qa-26.0713.2 succeeded'),
     ).toBeVisible()
+  })
+
+  it('optimistically inserts a newly created staging release and refreshes in the background', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const refreshed = releaseData({
+      ...repositoryState,
+      stagingReleases: [
+        {
+          id: 99,
+          tag: 'v-qa-26.0812.1',
+          environment: 'qa',
+          url: 'https://github.test/release/99',
+          createdAt: '2026-08-12T10:00:00Z',
+          buildStatus: 'running',
+          runs: [],
+        },
+        ...repositoryState.stagingReleases,
+      ],
+    })
+    vi.mocked(api.repositoryReleaseData)
+      .mockResolvedValueOnce(releaseData(repositoryState))
+      .mockResolvedValue(refreshed)
+    const refreshRepository = vi.mocked(api.refreshRepository)
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        view="releases"
+      />,
+    )
+    await screen.findByText('v-qa-26.0713.2')
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('staging-release-created', {
+          detail: {
+            repository: 'Orange-Health/service-api',
+            release: {
+              id: 99,
+              repository: 'Orange-Health/service-api',
+              environment: 'qa',
+              tag: 'v-qa-26.0812.1',
+              sourceBranch: 'dev',
+              url: 'https://github.test/release/99',
+              createdAt: '2026-08-12T10:00:00Z',
+            },
+          },
+        }),
+      )
+    })
+
+    expect(await screen.findByText('v-qa-26.0812.1')).toBeVisible()
+    expect(refreshRepository).toHaveBeenCalledWith('Orange-Health/service-api')
+    expect(screen.getAllByText('Running').length).toBeGreaterThan(0)
+  })
+
+  it('refreshes the release list after a production release is created', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const refreshed = releaseData({
+      ...repositoryState,
+      productionReleases: [
+        {
+          id: 100,
+          tag: 'v26.0812.1',
+          url: 'https://github.test/release/100',
+          createdAt: '2026-08-12T11:00:00Z',
+          buildStatus: 'starting',
+          runs: [],
+        },
+        ...repositoryState.productionReleases,
+      ],
+    })
+    vi.mocked(api.repositoryReleaseData)
+      .mockResolvedValueOnce(releaseData(repositoryState))
+      .mockResolvedValue(refreshed)
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        productionEnabled
+        view="releases"
+      />,
+    )
+    await screen.findByText('v26.0713.1')
+
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent('production-release-created', {
+          detail: {
+            repository: 'Orange-Health/service-api',
+            release: {
+              id: 100,
+              repository: 'Orange-Health/service-api',
+              tag: 'v26.0812.1',
+              sourceBranch: 'master',
+              url: 'https://github.test/release/100',
+              createdAt: '2026-08-12T11:00:00Z',
+            },
+          },
+        }),
+      )
+    })
+
+    expect(await screen.findByText('v26.0812.1')).toBeVisible()
+    expect(api.refreshRepository).toHaveBeenCalledWith(
+      'Orange-Health/service-api',
+    )
   })
 
   it('polls displayed build statuses without reloading repository state', async () => {
@@ -315,7 +428,7 @@ describe('ServiceOperations', () => {
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(1)
   })
 
-  it('refreshes active build status after 15 seconds', async () => {
+  it('polls build status immediately and again after 15 seconds', async () => {
     vi.useFakeTimers()
     vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
     const buildStatusRequest = vi
@@ -347,13 +460,19 @@ describe('ServiceOperations', () => {
 
     render(<ServiceOperations repository="Orange-Health/service-api" />)
     await act(async () => {})
-    expect(screen.getByText('Running')).toBeVisible()
+
+    expect(buildStatusRequest).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByText('Succeeded')).toHaveLength(2)
+    expect(screen.getByRole('link', { name: 'Live in QA' })).toHaveAttribute(
+      'href',
+      'https://jenkins.test/qa/2153/',
+    )
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000)
     })
 
-    expect(buildStatusRequest).toHaveBeenCalledTimes(1)
+    expect(buildStatusRequest).toHaveBeenCalledTimes(2)
     expect(buildStatusRequest).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ tag: 'v-qa-26.0713.2' }),
@@ -363,11 +482,6 @@ describe('ServiceOperations', () => {
     expect(deploymentStatusRequest).toHaveBeenCalledWith(
       'Orange-Health/service-api',
       true,
-    )
-    expect(screen.getAllByText('Succeeded')).toHaveLength(2)
-    expect(screen.getByRole('link', { name: 'Live in QA' })).toHaveAttribute(
-      'href',
-      'https://jenkins.test/qa/2153/',
     )
   })
 
@@ -392,10 +506,6 @@ describe('ServiceOperations', () => {
 
     render(<ServiceOperations repository="Orange-Health/service-api" />)
     await act(async () => {})
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000)
-    })
     expect(buildStatusRequest).toHaveBeenCalledTimes(1)
 
     await act(async () => {
@@ -407,6 +517,11 @@ describe('ServiceOperations', () => {
       await vi.advanceTimersByTimeAsync(15_000)
     })
     expect(buildStatusRequest).toHaveBeenCalledTimes(3)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(4)
   })
 
   it('resumes polling after a hung build-status request times out', async () => {
@@ -431,20 +546,15 @@ describe('ServiceOperations', () => {
 
     render(<ServiceOperations repository="Orange-Health/service-api" />)
     await act(async () => {})
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000)
-    })
     expect(buildStatusRequest).toHaveBeenCalledTimes(1)
 
-    // Hung request times out after 30s; the next 15s interval tick resumes polling.
+    // Hung request times out after 30s, then the next poll is scheduled 15s later.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(45_000)
     })
     expect(buildStatusRequest).toHaveBeenCalledTimes(2)
     expect(screen.getAllByText('Succeeded').length).toBeGreaterThan(0)
   })
-
   it('temporarily allows production deployment while branches differ', async () => {
     vi.spyOn(api, 'repositoryState').mockResolvedValue({
       ...repositoryState,
@@ -499,6 +609,10 @@ describe('ServiceOperations', () => {
     vi.mocked(api.repositoryReleaseData).mockResolvedValue(
       releaseData(stateWithProductionDeployment),
     )
+    vi.mocked(api.repositoryDeploymentStatus).mockResolvedValue({
+      deployedTags: stateWithProductionDeployment.deployedTags,
+      deploymentLookupFailed: false,
+    })
     vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
 
     render(
@@ -531,6 +645,10 @@ describe('ServiceOperations', () => {
     vi.mocked(api.repositoryReleaseData).mockResolvedValue(
       releaseData(stateWithRunningDeployment),
     )
+    vi.mocked(api.repositoryDeploymentStatus).mockResolvedValue({
+      deployedTags: stateWithRunningDeployment.deployedTags,
+      deploymentLookupFailed: false,
+    })
     vi.spyOn(api, 'repositoryState').mockResolvedValue(
       stateWithRunningDeployment,
     )
