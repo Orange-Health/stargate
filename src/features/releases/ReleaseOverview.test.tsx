@@ -1466,6 +1466,8 @@ describe('ReleaseOverview', () => {
     expect(screen.getByRole('button', { name: /OH-123/ })).toBeVisible()
     expect(screen.queryByRole('button', { name: /OH-999/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /OH-200/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^All 1$/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /^Merged 0$/ })).toBeVisible()
 
     await user.selectOptions(
       screen.getByRole('combobox', { name: 'Filter by assignee' }),
@@ -1473,6 +1475,8 @@ describe('ReleaseOverview', () => {
     )
     expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
     expect(screen.queryByRole('button', { name: /OH-123/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^All 1$/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /^Unmatched 1$/ })).toBeVisible()
 
     await user.selectOptions(
       screen.getByRole('combobox', { name: 'Filter by assignee' }),
@@ -1480,7 +1484,9 @@ describe('ReleaseOverview', () => {
     )
     expect(screen.getByRole('button', { name: /OH-123/ })).toBeVisible()
     expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
-
+    expect(screen.getByRole('button', { name: /^All 3$/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /^Merged 1$/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /^Unmatched 1$/ })).toBeVisible()
     expect(screen.getByRole('button', { name: /^Blocked / })).toHaveAttribute(
       'data-tooltip',
       'Shows tickets with an open PR blocked by a hard issue such as missing review, merge conflicts, wrong base branch, or draft status.',

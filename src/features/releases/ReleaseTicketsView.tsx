@@ -140,8 +140,7 @@ export function ReleaseTicketsView({
   const hasUnassigned = tickets.some(
     (ticket) => !ticket.issue.assignee?.trim(),
   );
-  const filtered = tickets.filter((ticket) => {
-    if (!ticketMatchesFilter(ticket, ticketFilter)) return false;
+  const scoped = tickets.filter((ticket) => {
     if (!ticketMatchesAssignee(ticket, ticketAssigneeFilter)) return false;
     if (!query) return true;
     return (
@@ -152,20 +151,27 @@ export function ReleaseTicketsView({
       )
     );
   });
+  const filtered = scoped.filter((ticket) =>
+    ticketMatchesFilter(ticket, ticketFilter),
+  );
   const selected =
     filtered.find((ticket) => ticket.issue.key === selectedIssueKey) ??
     tickets.find((ticket) => ticket.issue.key === selectedIssueKey);
 
   const counts = {
-    all: tickets.length,
-    blocked: tickets.filter((ticket) => ticket.readiness === "blocked").length,
-    "not-merge-ready": tickets.filter(
-      (ticket) =>
-        ticket.readiness === "blocked" || ticket.readiness === "pending",
+    all: scoped.length,
+    blocked: scoped.filter((ticket) =>
+      ticketMatchesFilter(ticket, "blocked"),
     ).length,
-    unmatched: tickets.filter((ticket) => ticket.readiness === "unmatched")
-      .length,
-    merged: tickets.filter((ticket) => ticket.readiness === "merged").length,
+    "not-merge-ready": scoped.filter((ticket) =>
+      ticketMatchesFilter(ticket, "not-merge-ready"),
+    ).length,
+    unmatched: scoped.filter((ticket) =>
+      ticketMatchesFilter(ticket, "unmatched"),
+    ).length,
+    merged: scoped.filter((ticket) =>
+      ticketMatchesFilter(ticket, "merged"),
+    ).length,
   };
 
   return (

@@ -1173,6 +1173,13 @@ export function ReleaseOverview({
     serviceSearch,
     visibleServices,
   ]);
+  const searchScopedServices = useMemo(() => {
+    const query = serviceSearch.trim().toLowerCase();
+    if (!query) return visibleServices;
+    return visibleServices.filter((service) =>
+      service.repository.toLowerCase().includes(query),
+    );
+  }, [serviceSearch, visibleServices]);
   const selectedService = useMemo(
     () =>
       visibleServices.find(
@@ -1187,17 +1194,19 @@ export function ReleaseOverview({
   );
   const totalItems = dashboard?.version.issueCount ?? 0;
   const readyItems = mergedIssueKeys.size;
-  const pendingServiceCount = visibleServices.filter((service) =>
+  const pendingServiceCount = searchScopedServices.filter((service) =>
     service.items.some((item) => item.pullRequest && !item.pullRequest.merged),
   ).length;
-  const issueServiceCount = visibleServices.filter(hasPullRequestIssues).length;
-  const backMergeServiceCount = visibleServices.filter(
+  const issueServiceCount = searchScopedServices.filter(
+    hasPullRequestIssues,
+  ).length;
+  const backMergeServiceCount = searchScopedServices.filter(
     (service) =>
       repositoryRisks[service.repository]?.backMergeOutdated ||
       repositoryRisks[service.repository]?.backMergePending ||
       service.backMergePending,
   ).length;
-  const outdatedServiceCount = visibleServices.filter(
+  const outdatedServiceCount = searchScopedServices.filter(
     (service) => deploymentFreshness[service.repository]?.outdated,
   ).length;
   const releaseMergeActions = useMemo(
@@ -1927,7 +1936,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                         );
                       }}
                     >
-                      All <span>{visibleServices.length}</span>
+                      All <span>{searchScopedServices.length}</span>
                     </button>
                     <button
                       className={serviceFilter === "pending" ? "active" : ""}
