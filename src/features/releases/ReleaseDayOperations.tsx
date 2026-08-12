@@ -1605,6 +1605,7 @@ export function ReleaseDayOperations({
     try {
       const release = await api.createProductionRelease({
         repository,
+        mode: 'release-day',
         date: sessionRef.current.releaseDate,
         // ponytail: omit operationId when default moved past latest tag so
         // GitHub creates a fresh tag instead of returning the idempotent one.

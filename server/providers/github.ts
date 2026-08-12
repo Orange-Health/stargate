@@ -621,6 +621,50 @@ export function productionTagPrefix(repository: string, date: string) {
   return `${prefix}${year.slice(-2)}.${month}${day}.`
 }
 
+const productionTagVersionPattern = /^(?:v-prod-|v-?)(\d{2}\.\d{4}\.\d+)$/
+
+export function productionTagVersion(tag: string) {
+  return productionTagVersionPattern.exec(tag)?.[1]
+}
+
+export function compareProductionTagVersions(left: string, right: string) {
+  const parse = (version: string) => {
+    const match = /^(\d{2})\.(\d{4})\.(\d+)$/.exec(version)
+    if (!match) return [0, 0, 0]
+    return [Number(match[1]), Number(match[2]), Number(match[3])]
+  }
+  const leftParts = parse(left)
+  const rightParts = parse(right)
+  return (
+    leftParts[0] - rightParts[0] ||
+    leftParts[1] - rightParts[1] ||
+    leftParts[2] - rightParts[2]
+  )
+}
+
+export function dateFromProductionTagVersion(version: string) {
+  const match = /^(\d{2})\.(\d{2})(\d{2})\.\d+$/.exec(version)
+  if (!match) throw new Error('Invalid production tag version.')
+  return `20${match[1]}-${match[2]}-${match[3]}`
+}
+
+export function latestProductionTag(tags: string[]) {
+  let latest: string | undefined
+  let latestVersion: string | undefined
+  for (const tag of tags) {
+    const version = productionTagVersion(tag)
+    if (!version) continue
+    if (
+      !latestVersion ||
+      compareProductionTagVersions(version, latestVersion) > 0
+    ) {
+      latest = tag
+      latestVersion = version
+    }
+  }
+  return latest
+}
+
 export function nextProductionTag(
   repository: string,
   date: string,
@@ -653,6 +697,33 @@ async function existingTags(
     `/repos/${repositoryPath(repository)}/git/matching-refs/tags/${encodeURIComponent(prefix)}`,
   )
   return refs.map((item) => item.ref.replace(/^refs\/tags\//, ''))
+}
+
+async function resolveProductionReleaseDate(
+  config: ConnectionConfig,
+  repository: string,
+  date: string | undefined,
+  mode: 'release-day' | 'patch',
+) {
+  if (mode === 'release-day') {
+    if (!date) throw new Error('Release date is required for release-day mode.')
+    return date
+  }
+
+  const tagPrefix = usesFrontendProductionTag(repository) ? 'v-prod-' : 'v'
+  const latest = latestProductionTag(
+    await existingTags(config, repository, tagPrefix),
+  )
+  if (!latest) {
+    throw new Error(
+      'No existing production tag found to patch. Create a release-day tag first.',
+    )
+  }
+  const version = productionTagVersion(latest)
+  if (!version) {
+    throw new Error(`Could not parse production tag ${latest}.`)
+  }
+  return dateFromProductionTagVersion(version)
 }
 
 export async function createStagingRelease(
@@ -719,8 +790,9 @@ export async function createStagingRelease(
 export async function createProductionRelease(
   config: ConnectionConfig,
   repository: string,
-  date: string,
+  date: string | undefined,
   operationId?: string,
+  mode: 'release-day' | 'patch' = date ? 'release-day' : 'patch',
 ): Promise<CreatedProductionRelease> {
   const [owner] = repository.split('/')
   if (owner.toLowerCase() !== config.githubOrg.toLowerCase()) {
@@ -733,7 +805,13 @@ export async function createProductionRelease(
     `/repos/${path}`,
   )
   const sourceBranch = metadata.default_branch
-  const prefix = productionTagPrefix(repository, date)
+  const releaseDate = await resolveProductionReleaseDate(
+    config,
+    repository,
+    date,
+    mode,
+  )
+  const prefix = productionTagPrefix(repository, releaseDate)
   const operationMarker = operationId
     ? `<!-- release-desk-operation:${operationId} -->`
     : undefined
@@ -783,7 +861,7 @@ export async function createProductionRelease(
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const tag = nextProductionTag(
       repository,
-      date,
+      releaseDate,
       await existingTags(config, repository, prefix),
     )
     try {

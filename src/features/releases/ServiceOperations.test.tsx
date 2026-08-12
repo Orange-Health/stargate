@@ -182,8 +182,11 @@ describe('ServiceOperations', () => {
       'https://github.com/Orange-Health/service-api/compare/release...dev',
     )
     const deployButtons = screen.getAllByRole('button', { name: 'Deploy' })
+    expect(deployButtons).toHaveLength(1)
     expect(deployButtons[0]).toBeDisabled()
-    expect(deployButtons[1]).toBeEnabled()
+    expect(
+      screen.getByRole('button', { name: 'Already deployed' }),
+    ).toBeDisabled()
   })
 
   it('shows releases when branch operations fail', async () => {
@@ -511,6 +514,11 @@ describe('ServiceOperations', () => {
     expect(
       await screen.findByRole('link', { name: 'Live in PRODUCTION' }),
     ).toHaveAttribute('href', 'https://jenkins.test/production/2201/')
+    const productionDeploy = document.querySelector(
+      '.production-deploy-button',
+    )
+    expect(productionDeploy).toHaveTextContent('Already deployed')
+    expect(productionDeploy).toBeDisabled()
   })
 
   it('shows externally triggered production deployments while running', async () => {

@@ -20,7 +20,7 @@ type Props = {
   includeAllVReleases?: boolean
   view?: 'all' | 'releases' | 'branches' | 'hidden'
   onCreateStagingRelease?: () => void
-  onCreateProductionRelease?: () => void
+  onCreateProductionRelease?: (latestProductionTag?: string) => void
 }
 
 type PendingServiceMerge = {
@@ -73,6 +73,24 @@ function deploymentLabel(deployment: JenkinsDeployedTag) {
     default:
       return `Live in ${environment}`
   }
+}
+
+function isTagDeployed(
+  tag: string,
+  environment: string,
+  deployedTags: JenkinsDeployedTag[],
+  jenkinsServices: string[],
+) {
+  if (jenkinsServices.length === 0) return false
+  return jenkinsServices.every((jenkinsService) =>
+    deployedTags.some(
+      (deployment) =>
+        deployment.environment === environment &&
+        deployment.service === jenkinsService &&
+        deployment.tag === tag &&
+        (deployment.status === undefined || deployment.status === 'succeeded'),
+    ),
+  )
 }
 
 function timeAgo(value: string) {
@@ -758,6 +776,12 @@ export function ServiceOperations({
               const liveDeployments = releaseState.deployedTags.filter(
                 (deployment) => deployment.tag === release.tag,
               )
+              const alreadyDeployed = isTagDeployed(
+                release.tag,
+                release.environment,
+                releaseState.deployedTags,
+                releaseState.jenkinsServices,
+              )
               return (
                 <article className="release-build-row" key={release.id}>
                 <span
@@ -797,19 +821,22 @@ export function ServiceOperations({
                   className="deploy-button"
                   type="button"
                   disabled={
+                    alreadyDeployed ||
                     release.buildStatus !== 'succeeded' ||
                     releaseState.jenkinsServices.length === 0
                   }
                   title={
-                    releaseState.jenkinsServices.length === 0
-                      ? 'No Jenkins service mapping for this repository'
-                      : release.buildStatus !== 'succeeded'
-                        ? 'Deployment is enabled after a successful build'
-                        : 'Deploy this release'
+                    alreadyDeployed
+                      ? `${release.tag} is already deployed to ${release.environment}`
+                      : releaseState.jenkinsServices.length === 0
+                        ? 'No Jenkins service mapping for this repository'
+                        : release.buildStatus !== 'succeeded'
+                          ? 'Deployment is enabled after a successful build'
+                          : 'Deploy this release'
                   }
                   onClick={() => setDeployRelease(release)}
                 >
-                  Deploy
+                  {alreadyDeployed ? 'Already deployed' : 'Deploy'}
                 </button>
                 <div className="workflow-links">
                   {release.runs.length === 0 ? (
@@ -866,7 +893,11 @@ export function ServiceOperations({
                 <button
                   className="create-release-button"
                   type="button"
-                  onClick={onCreateProductionRelease}
+                  onClick={() =>
+                    onCreateProductionRelease(
+                      releaseState?.productionReleases[0]?.tag,
+                    )
+                  }
                 >
                   <span aria-hidden="true">＋</span> Create production release
                 </button>
@@ -892,6 +923,12 @@ export function ServiceOperations({
                       deployment.environment === 'production' &&
                       deployment.status === 'running',
                   )
+                const alreadyDeployed = isTagDeployed(
+                  release.tag,
+                  'production',
+                  releaseState.deployedTags,
+                  releaseState.jenkinsServices,
+                )
                 return (
                   <article className="release-build-row" key={release.id}>
                     <span
@@ -928,22 +965,25 @@ export function ServiceOperations({
                       className="production-deploy-button"
                       type="button"
                       disabled={
+                        alreadyDeployed ||
                         release.buildStatus !== 'succeeded' ||
                         releaseState.jenkinsServices.length === 0 ||
                         productionDeploymentRunning
                       }
                       title={
-                        productionDeploymentRunning
-                          ? 'A production deployment is already running'
-                          : releaseState.jenkinsServices.length === 0
-                          ? 'No Jenkins service mapping for this repository'
-                          : release.buildStatus !== 'succeeded'
-                            ? 'Deployment is enabled after a successful build'
-                            : 'Deploy this production release'
+                        alreadyDeployed
+                          ? `${release.tag} is already deployed to production`
+                          : productionDeploymentRunning
+                            ? 'A production deployment is already running'
+                            : releaseState.jenkinsServices.length === 0
+                              ? 'No Jenkins service mapping for this repository'
+                              : release.buildStatus !== 'succeeded'
+                                ? 'Deployment is enabled after a successful build'
+                                : 'Deploy this production release'
                       }
                       onClick={() => setProductionDeployRelease(release)}
                     >
-                      Deploy production
+                      {alreadyDeployed ? 'Already deployed' : 'Deploy production'}
                     </button>
                     <div className="workflow-links">
                       {release.runs.length === 0 ? (

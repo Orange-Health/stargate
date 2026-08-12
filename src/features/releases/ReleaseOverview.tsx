@@ -368,7 +368,7 @@ function ServiceDetail({
   service: ServiceRelease
   selectedVersionId: string
   onCreateRelease: () => void
-  onCreateProductionRelease: () => void
+  onCreateProductionRelease: (latestProductionTag?: string) => void
   onDataChanged: () => void | Promise<void>
   onServiceUpdated?: (service: ServiceRelease) => void
   productionEnabled: boolean
@@ -826,8 +826,10 @@ export function ReleaseOverview({
   onDisconnect,
 }: Props) {
   const [releaseRepository, setReleaseRepository] = useState('')
-  const [productionReleaseRepository, setProductionReleaseRepository] =
-    useState('')
+  const [productionReleaseTarget, setProductionReleaseTarget] = useState<{
+    repository: string
+    latestProductionTag?: string
+  }>()
   const [bulkQaReleaseOpen, setBulkQaReleaseOpen] = useState(false)
   const [bulkQaDeployOpen, setBulkQaDeployOpen] = useState(false)
   const [serviceFilter, setServiceFilter] = useState<
@@ -1609,10 +1611,12 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                       }
                       onCreateProductionRelease={
                         connection.productionEnabled
-                          ? () =>
-                              setProductionReleaseRepository(
-                                selectedOrganizationRepository.repository,
-                              )
+                          ? (latestProductionTag) =>
+                              setProductionReleaseTarget({
+                                repository:
+                                  selectedOrganizationRepository.repository,
+                                latestProductionTag,
+                              })
                           : undefined
                       }
                     />
@@ -1991,10 +1995,11 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                   onCreateRelease={() =>
                     setReleaseRepository(selectedServiceWithRisk.repository)
                   }
-                  onCreateProductionRelease={() =>
-                    setProductionReleaseRepository(
-                      selectedServiceWithRisk.repository,
-                    )
+                  onCreateProductionRelease={(latestProductionTag) =>
+                    setProductionReleaseTarget({
+                      repository: selectedServiceWithRisk.repository,
+                      latestProductionTag,
+                    })
                   }
                   onDataChanged={onRefresh}
                   onServiceUpdated={onServiceUpdated}
@@ -2072,10 +2077,11 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           onClose={() => setBulkQaDeployOpen(false)}
         />
       )}
-      {productionReleaseRepository && (
+      {productionReleaseTarget && (
         <ProductionReleaseDialog
-          repository={productionReleaseRepository}
-          onClose={() => setProductionReleaseRepository('')}
+          repository={productionReleaseTarget.repository}
+          latestProductionTag={productionReleaseTarget.latestProductionTag}
+          onClose={() => setProductionReleaseTarget(undefined)}
         />
       )}
       {pendingReleaseBulkMergeCopy && pendingReleaseBulkMerge && (

@@ -8,7 +8,9 @@ import {
   discoverPullRequests,
   buildIssueSearchQuery,
   countSearchBooleanOperators,
+  dateFromProductionTagVersion,
   githubApi,
+  latestProductionTag,
   listOrganizationRepositories,
   listRepositoryBranches,
   nextProductionTag,
@@ -1216,6 +1218,19 @@ describe('production release tags', () => {
     ).toBe('v26.0714.4')
   })
 
+  it('picks the newest production tag and derives its release date', () => {
+    expect(
+      latestProductionTag([
+        'v-qa-26.0801.9',
+        'v26.0714.3',
+        'v26.0801.1',
+        'v26.0714.9',
+        'build-1',
+      ]),
+    ).toBe('v26.0801.1')
+    expect(dateFromProductionTagVersion('26.0714.3')).toBe('2026-07-14')
+  })
+
   it('creates a production release from the default branch using generated notes', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -1513,5 +1528,100 @@ describe('production release tags', () => {
 
     expect(result.tag).toBe('v26.0714.4')
     expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
+
+  it('creates a patch release from the latest production tag', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            { ref: 'refs/tags/v26.0710.2' },
+            { ref: 'refs/tags/v26.0714.3' },
+            { ref: 'refs/tags/v-qa-26.0801.9' },
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([{ ref: 'refs/tags/v26.0714.3' }]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: 110,
+            html_url: 'https://github.test/releases/110',
+            created_at: '2026-08-12T12:00:00Z',
+          }),
+          { status: 201 },
+        ),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    const result = await createProductionRelease(
+      config,
+      'orange/service-api',
+      undefined,
+      undefined,
+      'patch',
+    )
+
+    expect(result.tag).toBe('v26.0714.4')
+    expect(String(fetchMock.mock.calls[1][0])).toContain(
+      '/git/matching-refs/tags/v',
+    )
+    expect(String(fetchMock.mock.calls[2][0])).toContain(
+      '/git/matching-refs/tags/v26.0714.',
+    )
+    expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body))).toMatchObject({
+      tag_name: 'v26.0714.4',
+      target_commitish: 'main',
+    })
+  })
+
+  it('rejects patch mode when no production tag exists', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ default_branch: 'main' }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'orange',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    await expect(
+      createProductionRelease(
+        config,
+        'orange/service-api',
+        undefined,
+        undefined,
+        'patch',
+      ),
+    ).rejects.toThrow(/No existing production tag found to patch/)
   })
 })

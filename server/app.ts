@@ -118,11 +118,23 @@ const repositorySchema = z
   .regex(/^Orange-Health\/[A-Za-z0-9_.-]+$/i)
   .refine((value) => !['.', '..'].includes(value.split('/')[1]))
 
-const productionReleaseSchema = z.object({
-  repository: repositorySchema,
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  operationId: z.uuid().optional(),
-})
+const productionReleaseSchema = z
+  .object({
+    repository: repositorySchema,
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    mode: z.enum(['release-day', 'patch']).optional(),
+    operationId: z.uuid().optional(),
+  })
+  .superRefine((value, context) => {
+    const mode = value.mode ?? (value.date ? 'release-day' : 'patch')
+    if (mode === 'release-day' && !value.date) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Release date is required for release-day mode.',
+        path: ['date'],
+      })
+    }
+  })
 
 const promotionSchema = z.object({
   repository: repositorySchema,
@@ -570,11 +582,14 @@ export function createApp() {
       return
     }
     const config = requireConnection()
+    const mode =
+      parsed.data.mode ?? (parsed.data.date ? 'release-day' : 'patch')
     const release = await createProductionRelease(
       config,
       parsed.data.repository,
       parsed.data.date,
       parsed.data.operationId,
+      mode,
     )
     clearRepositoryCaches(config, parsed.data.repository)
     response.status(201).json(release)

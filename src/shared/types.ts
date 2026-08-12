@@ -192,9 +192,18 @@ export type CreateStagingReleaseInput = {
   sourceBranch?: string
 }
 
+export type ProductionReleaseMode = 'release-day' | 'patch'
+
 export type CreateProductionReleaseInput = {
   repository: string
-  date: string
+  /** Required when mode is `release-day`. Ignored for `patch`. */
+  date?: string
+  /**
+   * `release-day` builds a date-based tag (vYY.MMDD.N).
+   * `patch` increments N on the latest existing production tag.
+   * Defaults to `release-day` when `date` is provided, otherwise `patch`.
+   */
+  mode?: ProductionReleaseMode
   operationId?: string
 }
 
