@@ -7,8 +7,8 @@ import type {
 } from '../../shared/types'
 import {
   CopyableDeployedTag,
-  liveProductionTags,
 } from './CopyableDeployedTag'
+import { liveProductionTags } from './liveProductionTags'
 import { productionTagForFormat } from './productionTags'
 
 type Props = {

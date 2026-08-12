@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { ReleaseDashboard } from '../../shared/types'
 import { ReleaseOverview } from './ReleaseOverview'
+import { removeIssueFromDashboard } from './releaseTickets'
 
 const dashboard: ReleaseDashboard = {
   version: {
@@ -248,9 +249,9 @@ describe('ReleaseOverview', () => {
         selectedVersionId="10351"
         loading
         dashboardProgress={{
-          phase: 'github-search',
-          message: 'Searching GitHub for pull requests linked to OH-123…',
-          current: 3,
+          phase: 'github-details',
+          message: 'Loading pull request details…',
+          current: 1,
           total: 8,
         }}
         onSelectVersion={vi.fn()}
@@ -259,14 +260,14 @@ describe('ReleaseOverview', () => {
       />,
     )
 
-    expect(
-      screen.getByText(
-        'Searching GitHub for pull requests linked to OH-123…',
-      ),
-    ).toBeVisible()
+    expect(screen.getByText('Loading pull request details…')).toBeVisible()
     expect(screen.getByRole('progressbar')).toHaveAttribute(
       'aria-valuenow',
-      '3',
+      '46',
+    )
+    expect(screen.getByRole('progressbar')).toHaveAttribute(
+      'aria-valuemax',
+      '100',
     )
   })
 
@@ -811,6 +812,11 @@ describe('ReleaseOverview', () => {
             avatarUrl: 'https://avatars.test/reviewer.png',
             role: 'reviewer' as const,
           },
+          {
+            login: 'alice',
+            avatarUrl: 'https://avatars.test/alice.png',
+            role: 'author' as const,
+          },
         ],
       },
       eligible: true,
@@ -844,6 +850,15 @@ describe('ReleaseOverview', () => {
     )
 
     expect(screen.getByAltText('reviewer')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'View people involved' }))
+    expect(
+      await screen.findByRole('dialog', { name: '#8 Contributors' }),
+    ).toBeVisible()
+    expect(screen.getByText('alice')).toBeVisible()
+    expect(screen.getByText(/author · 1 PR/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('dialog', { name: '#8 Contributors' })).not.toBeInTheDocument()
+
     expect(screen.getByText('0 of 1 tickets merged to dev')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Merge to dev' }))
     await user.click(screen.getByRole('button', { name: 'Merge' }))
@@ -1382,8 +1397,36 @@ describe('ReleaseOverview', () => {
         },
       ],
     }
-
-    render(
+    let currentDashboard = ticketsDashboard
+    const onIssueRemoved = vi.fn((issueKey: string) => {
+      currentDashboard = removeIssueFromDashboard(currentDashboard, issueKey)
+      view.rerender(
+        <ReleaseOverview
+          connection={{
+            connected: true,
+            githubOrg: 'orange',
+            projectKey: 'OH',
+          }}
+          releases={[
+            dashboard.version,
+            {
+              id: '10400',
+              name: 'OH Release 26.0723',
+              releaseDate: '2026-07-23',
+              overdue: false,
+            },
+          ]}
+          selectedVersionId="10351"
+          dashboard={currentDashboard}
+          loading={false}
+          onSelectVersion={vi.fn()}
+          onRefresh={onRefresh}
+          onIssueRemoved={onIssueRemoved}
+          onDisconnect={vi.fn()}
+        />,
+      )
+    })
+    const view = render(
       <ReleaseOverview
         connection={{
           connected: true,
@@ -1400,10 +1443,11 @@ describe('ReleaseOverview', () => {
           },
         ]}
         selectedVersionId="10351"
-        dashboard={ticketsDashboard}
+        dashboard={currentDashboard}
         loading={false}
         onSelectVersion={vi.fn()}
         onRefresh={onRefresh}
+        onIssueRemoved={onIssueRemoved}
         onDisconnect={vi.fn()}
       />,
     )
@@ -1414,7 +1458,6 @@ describe('ReleaseOverview', () => {
     expect(screen.getByRole('button', { name: /OH-123/ })).toBeVisible()
     expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
     expect(screen.getByRole('heading', { name: 'OH-123' })).toBeVisible()
-    expect(screen.getByText(/service-api #8/)).toBeVisible()
 
     await user.selectOptions(
       screen.getByRole('combobox', { name: 'Filter by assignee' }),
@@ -1458,7 +1501,7 @@ describe('ReleaseOverview', () => {
     await user.click(screen.getByRole('button', { name: /OH-200/ }))
     expect(
       screen.getByRole('button', { name: 'Remove from release' }),
-    ).toBeDisabled()
+    ).toBeEnabled()
 
     await user.click(screen.getByRole('button', { name: /OH-123/ }))
     expect(
@@ -1488,6 +1531,9 @@ describe('ReleaseOverview', () => {
         '10400',
       ),
     )
+    expect(onIssueRemoved).toHaveBeenCalledWith('OH-123')
     expect(onRefresh).toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: /OH-123/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
   })
 })

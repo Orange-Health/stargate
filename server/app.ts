@@ -53,11 +53,13 @@ import {
   getCurrentDeploymentsBatch,
   getCurrentProductionDeployments,
   getDeploymentQueueStatus,
+  getEitriBuilds,
   getProductionDeploymentBuildStatus,
   getProductionDeploymentQueueStatus,
   servicesForRepository,
   testJenkinsConnection,
   triggerDeployment,
+  triggerEitriDeployment,
   triggerProductionDeployment,
 } from './providers/jenkins.js'
 import {
@@ -74,6 +76,8 @@ import {
   completeControlRoomSyncProgress,
   createControlRoomSyncProgress,
   getControlRoomSyncProgress,
+  publishControlRoomServiceState,
+  trackControlRoomEnrichment,
   updateControlRoomProviderProgress,
 } from './services/controlRoomSyncProgress.js'
 
@@ -210,6 +214,26 @@ const productionDeploymentSchema = z
     (input) => !input.qaApprovalRequired || Boolean(input.qaName?.trim()),
     { message: 'QA name is required when approval is enabled.' },
   )
+
+const eitriDeploymentSchema = z
+  .object({
+    repository: repositorySchema,
+    service: z.string().regex(/^[A-Za-z0-9_.-]+$/),
+    namespace: z.enum(['s1', 's2', 's3', 's4', 's5']),
+    branch: z.string().trim().max(255).optional(),
+    commitSha: z.string().trim().max(40).optional(),
+    stagingEnvUpdateJob: z.string().trim().min(1).max(160).optional(),
+  })
+  .superRefine((input, context) => {
+    const commitSha = input.commitSha?.trim()
+    if (commitSha && !/^[A-Fa-f0-9]{7,40}$/.test(commitSha)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['commitSha'],
+        message: 'Commit SHA must be 7–40 hexadecimal characters.',
+      })
+    }
+  })
 
 const repositoryRisksSchema = z.object({
   repositories: z.array(repositorySchema).max(100),
@@ -476,6 +500,8 @@ export function createApp() {
       setDashboardProgress(progressId, {
         phase: 'starting',
         message: 'Preparing release data…',
+        current: 0,
+        total: 1,
       })
     }
     response.json(
@@ -759,55 +785,44 @@ export function createApp() {
           progressId,
           repository,
           'jenkins',
-          'running',
-          'Loading deployment status from Jenkins.',
-          'jenkins-loading',
+          'succeeded',
+          'Deployments load separately from Jenkins.',
+          'jenkins-ready',
         )
       }
     }
-    const [github, deployments] = await Promise.all([
-      getReleaseControlRoomStatesBatch(
-        config,
-        repositories,
-        parsed.data.forceRefresh,
-        progressId
-          ? (repository, status, message, step) =>
-              updateControlRoomProviderProgress(
-                progressId,
-                repository,
-                'github',
-                status,
-                message,
-                step,
-              )
-          : undefined,
-      ),
-      getCurrentDeploymentsBatch(
-        config,
-        repositories,
-        parsed.data.forceRefresh,
-      ).then((results) => {
-        if (progressId) {
-          for (const result of results) {
+    const github = await getReleaseControlRoomStatesBatch(
+      config,
+      repositories,
+      parsed.data.forceRefresh,
+      progressId
+        ? (repository, status, message, step, state) =>
             updateControlRoomProviderProgress(
               progressId,
-              result.repository,
-              'jenkins',
-              result.deploymentLookupFailed ? 'failed' : 'succeeded',
-              result.deploymentLookupFailed
-                ? 'Jenkins deployment status is unavailable.'
-                : 'Jenkins deployment status is ready.',
-              result.deploymentLookupFailed
-                ? 'jenkins-failed'
-                : 'jenkins-ready',
+              repository,
+              'github',
+              status,
+              message,
+              step,
+              state,
             )
+        : undefined,
+      progressId
+        ? {
+            onEnrichment: (enrichment) => {
+              trackControlRoomEnrichment(progressId, enrichment)
+            },
+            publishEnrichedState: (repository, state) =>
+              publishControlRoomServiceState(
+                progressId,
+                repository,
+                state,
+                'Release build and tag details are ready.',
+              ),
           }
-        }
-        return results
-      }),
-    ])
-    const deploymentsByRepository = new Map(
-      deployments.map((deployment) => [deployment.repository, deployment]),
+        : {
+            onEnrichment: (enrichment) => enrichment,
+          },
     )
     if (progressId) completeControlRoomSyncProgress(progressId)
     const durationMs = Math.round(performance.now() - startedAt)
@@ -815,14 +830,12 @@ export function createApp() {
     response.json({
       results: github.results.map((result) => {
         if (!result.state) return result
-        const deployment = deploymentsByRepository.get(result.repository)
         return {
           repository: result.repository,
           state: {
             ...result.state,
-            deployedTags: deployment?.deployedTags ?? [],
-            deploymentLookupFailed:
-              deployment?.deploymentLookupFailed ?? true,
+            deployedTags: result.state.deployedTags ?? [],
+            deploymentLookupFailed: false,
           },
         }
       }),
@@ -1138,6 +1151,48 @@ export function createApp() {
     }
     response.status(201).json(
       await triggerDeployment(requireConnection(), parsed.data),
+    )
+  })
+
+  app.get('/api/jenkins/eitri-builds', async (request, response) => {
+    const repository = String(request.query.repository ?? '')
+    const parsed = repositorySchema.safeParse(repository)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_REPOSITORY',
+          message: 'A valid repository is required.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    const forceRefresh = request.query.forceRefresh === 'true'
+    response.json(
+      await getEitriBuilds(requireConnection(), parsed.data, forceRefresh),
+    )
+  })
+
+  app.post('/api/jenkins/eitri-deployments', async (request, response) => {
+    const parsed = eitriDeploymentSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_EITRI_DEPLOYMENT',
+          message:
+            parsed.error.issues[0]?.message ??
+            'Invalid EITRI deployment details.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    const { commitSha, branch, stagingEnvUpdateJob, ...rest } = parsed.data
+    response.status(201).json(
+      await triggerEitriDeployment(requireConnection(), {
+        ...rest,
+        ...(branch ? { branch } : {}),
+        ...(commitSha ? { commitSha } : {}),
+        ...(stagingEnvUpdateJob ? { stagingEnvUpdateJob } : {}),
+      }),
     )
   })
 

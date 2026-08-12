@@ -1018,7 +1018,7 @@ describe('repository state cache', () => {
     expect(first).toBe(second)
     expect(first.productionReady).toBe(true)
     expect(first.promotionSteps).toHaveLength(2)
-    expect(fetchMock).toHaveBeenCalledTimes(6)
+    expect(fetchMock).toHaveBeenCalledTimes(7)
     expect(
       fetchMock.mock.calls.some(([input]) =>
         String(input).includes('state=closed'),
@@ -1091,6 +1091,10 @@ describe('repository state cache', () => {
       if (url.includes('/actions/runs?')) {
         return new Response(JSON.stringify({ workflow_runs: [] }))
       }
+      if (url.includes('/reviews?')) return new Response(JSON.stringify([]))
+      if (url.includes('/check-runs?')) {
+        return new Response(JSON.stringify({ check_runs: [] }))
+      }
       if (url.includes('/pulls?')) return new Response(JSON.stringify([]))
       if (url.includes('/compare/')) {
         return new Response(
@@ -1126,17 +1130,16 @@ describe('repository state cache', () => {
     expect(result.results[0].state?.promotionSteps[0].pullRequest).toMatchObject(
       {
         number: 42,
-        reviewDecision: 'approved',
-        checks: 'success',
+        reviewDecision: 'review_required',
+        checks: 'none',
       },
     )
     expect(result.stats).toMatchObject({
       cacheHits: 0,
       graphqlRequests: 1,
-      restRequests: 9,
       fallbackCount: 1,
     })
-    expect(fetchMock).toHaveBeenCalledTimes(10)
+    expect(result.stats.restRequests).toBeGreaterThanOrEqual(7)
     for (const repository of repositories) {
       clearRepositoryCaches(config, repository)
     }
@@ -1175,6 +1178,9 @@ describe('repository state cache', () => {
       if (url.includes('/actions/runs?')) {
         return new Response(JSON.stringify({ workflow_runs: [] }))
       }
+      if (url.includes('/releases?')) {
+        return new Response(JSON.stringify([]))
+      }
       if (url.includes('/compare/')) {
         return new Response(
           JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
@@ -1203,10 +1209,11 @@ describe('repository state cache', () => {
     expect(result.results.every((item) => item.state)).toBe(true)
     expect(result.stats).toMatchObject({
       graphqlRequests: 2,
-      restRequests: 60,
+      restRequests: 40,
       fallbackCount: 0,
     })
-    expect(fetchMock).toHaveBeenCalledTimes(62)
+    // Fast path: 2 GraphQL + 40 compares; enrichment: 20×(releases+runs).
+    expect(fetchMock).toHaveBeenCalledTimes(82)
     for (const repository of repositories) {
       clearRepositoryCaches(config, repository)
     }

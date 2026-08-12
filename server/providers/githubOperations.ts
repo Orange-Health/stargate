@@ -99,21 +99,6 @@ type ControlRoomGraphqlPull = {
   headRefOid: string
   headRepository: { nameWithOwner: string } | null
   reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
-  latestReviews: {
-    nodes: Array<{
-      state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED'
-    }>
-  }
-  reviewThreads: {
-    nodes: Array<{
-      isResolved: boolean
-    }>
-  }
-  commits: {
-    nodes: Array<{
-      commit: { statusCheckRollup: { state: string } | null }
-    }>
-  }
 }
 
 type ControlRoomGraphqlRepository = {
@@ -136,7 +121,6 @@ type ControlRoomGraphqlSnapshot = {
   defaultBranch: string
   releases: GitHubRelease[]
   openPulls: GitHubPull[]
-  pullDetails: Map<number, PromotionPullRequest>
 }
 
 type GitHubReview = {
@@ -587,24 +571,6 @@ function controlRoomProductionReleases(
     .slice(0, limit)
 }
 
-async function listControlRoomProductionReleases(
-  config: ConnectionConfig,
-  repository: string,
-  limit = 3,
-): Promise<TrackedProductionRelease[]> {
-  const [releases, recentRuns] = await Promise.all([
-    githubApi<GitHubRelease[]>(
-      config,
-      `/repos/${repositoryPath(repository)}/releases?per_page=30`,
-    ),
-    githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
-      config,
-      `/repos/${repositoryPath(repository)}/actions/runs?per_page=100`,
-    ).then((response) => response.workflow_runs),
-  ])
-  return controlRoomProductionReleases(releases, recentRuns, limit)
-}
-
 export async function getRepositoryReleaseHistory(
   config: ConnectionConfig,
   repository: string,
@@ -692,70 +658,6 @@ function checksStatus(checks: GitHubChecks): CheckStatus {
   )
     ? 'failure'
     : 'success'
-}
-
-function graphqlReviewDecision(
-  decision: ControlRoomGraphqlPull['reviewDecision'],
-  reviews: ControlRoomGraphqlPull['latestReviews']['nodes'],
-  unresolvedThreads = 0,
-): ReviewDecision {
-  if (decision === 'APPROVED') return 'approved'
-  if (decision === 'CHANGES_REQUESTED') return 'changes_requested'
-  if (reviews.some((review) => review.state === 'CHANGES_REQUESTED')) {
-    return 'changes_requested'
-  }
-  const hasApproval = reviews.some((review) => review.state === 'APPROVED')
-  // Prefer approval when unresolved conversations are what actually remain,
-  // so the UI can report unresolved comments instead of "review required".
-  if (decision === 'REVIEW_REQUIRED' && hasApproval && unresolvedThreads > 0) {
-    return 'approved'
-  }
-  if (decision === 'REVIEW_REQUIRED') return 'review_required'
-  if (hasApproval) return 'approved'
-  return 'review_required'
-}
-
-function unresolvedReviewThreadCount(
-  threads: Array<{ isResolved: boolean }>,
-) {
-  return threads.filter((thread) => !thread.isResolved).length
-}
-
-function graphqlChecksStatus(state?: string): CheckStatus {
-  if (!state) return 'none'
-  if (state === 'SUCCESS') return 'success'
-  if (state === 'PENDING' || state === 'EXPECTED') return 'pending'
-  if (state === 'FAILURE' || state === 'ERROR') return 'failure'
-  return 'none'
-}
-
-function graphqlPromotionPull(pull: ControlRoomGraphqlPull): PromotionPullRequest {
-  const unresolvedThreads = unresolvedReviewThreadCount(
-    pull.reviewThreads.nodes,
-  )
-  return {
-    number: pull.number,
-    title: pull.title,
-    body: pull.body ?? undefined,
-    url: pull.url,
-    baseBranch: pull.baseRefName,
-    headBranch: pull.headRefName,
-    draft: pull.isDraft,
-    mergeable:
-      pull.mergeable === 'UNKNOWN'
-        ? null
-        : pull.mergeable === 'MERGEABLE',
-    mergeableState: pull.mergeStateStatus.toLowerCase(),
-    reviewDecision: graphqlReviewDecision(
-      pull.reviewDecision,
-      pull.latestReviews.nodes,
-      unresolvedThreads,
-    ),
-    checks: graphqlChecksStatus(
-      pull.commits.nodes[0]?.commit.statusCheckRollup?.state,
-    ),
-    unresolvedReviewThreads: unresolvedThreads,
-  }
 }
 
 async function promotionPullDetails(
@@ -1323,15 +1225,6 @@ async function fetchControlRoomGraphqlBatch(
             headRepository { nameWithOwner }
             author { login }
             reviewDecision
-            latestReviews(first: 50) {
-              nodes { state }
-            }
-            reviewThreads(first: 100) {
-              nodes { isResolved }
-            }
-            commits(last: 1) {
-              nodes { commit { statusCheckRollup { state } } }
-            }
           }
         }
       }
@@ -1384,12 +1277,6 @@ async function fetchControlRoomGraphqlBatch(
         body: release.description,
       })),
       openPulls,
-      pullDetails: new Map(
-        node.pullRequests.nodes.map((pull) => [
-          pull.number,
-          graphqlPromotionPull(pull),
-        ]),
-      ),
     })
   })
   return snapshots
@@ -1400,13 +1287,9 @@ async function loadReleaseControlRoomStateFromSnapshot(
   repository: string,
   snapshot: ControlRoomGraphqlSnapshot,
 ): Promise<ReleaseControlRoomState> {
-  const recentRuns = await githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
-    config,
-    `/repos/${repositoryPath(repository)}/actions/runs?per_page=100`,
-  ).then((response) => response.workflow_runs)
-  const productionReleases = await controlRoomProductionReleases(
+  const productionReleases = controlRoomProductionReleases(
     snapshot.releases,
-    recentRuns,
+    [],
   )
   const promotionSteps = await Promise.all([
     promotionStep(
@@ -1416,7 +1299,6 @@ async function loadReleaseControlRoomStateFromSnapshot(
       snapshot.defaultBranch,
       snapshot.openPulls,
       false,
-      snapshot.pullDetails,
     ),
     promotionStep(
       config,
@@ -1425,20 +1307,12 @@ async function loadReleaseControlRoomStateFromSnapshot(
       snapshot.defaultBranch,
       snapshot.openPulls,
       false,
-      snapshot.pullDetails,
     ),
   ])
-  const tagDelta = await latestProductionTagDelta(
-    config,
-    repository,
-    snapshot.defaultBranch,
-    productionReleases,
-  )
   return {
     repository,
     defaultBranch: snapshot.defaultBranch,
     productionReleases,
-    latestProductionTagDelta: tagDelta,
     deployedTags: [],
     deploymentLookupFailed: false,
     productionReady: promotionSteps.some(
@@ -1452,6 +1326,96 @@ async function loadReleaseControlRoomStateFromSnapshot(
     promotionSteps,
     jenkinsServices: servicesForRepository(repository),
     fetchedAt: new Date().toISOString(),
+    partial: true,
+  }
+}
+
+async function enrichReleaseControlRoomState(
+  config: ConnectionConfig,
+  state: ReleaseControlRoomState,
+): Promise<ReleaseControlRoomState> {
+  const [releases, recentRuns] = await Promise.all([
+    githubApi<GitHubRelease[]>(
+      config,
+      `/repos/${repositoryPath(state.repository)}/releases?per_page=30`,
+    ),
+    githubApi<{ workflow_runs: GitHubWorkflowRun[] }>(
+      config,
+      `/repos/${repositoryPath(state.repository)}/actions/runs?per_page=100`,
+    ).then((response) => response.workflow_runs),
+  ])
+  const productionReleases = controlRoomProductionReleases(
+    releases,
+    recentRuns,
+  )
+  const tagDelta = await latestProductionTagDelta(
+    config,
+    state.repository,
+    state.defaultBranch,
+    productionReleases,
+  )
+  return {
+    ...state,
+    productionReleases,
+    latestProductionTagDelta: tagDelta,
+    partial: false,
+    fetchedAt: new Date().toISOString(),
+  }
+}
+
+async function loadReleaseControlRoomStateFast(
+  config: ConnectionConfig,
+  repository: string,
+): Promise<ReleaseControlRoomState> {
+  assertConnectedRepository(config, repository)
+  const [metadata, releases, openPulls] = await Promise.all([
+    githubApi<GitHubRepository>(
+      config,
+      `/repos/${repositoryPath(repository)}`,
+    ),
+    githubApi<GitHubRelease[]>(
+      config,
+      `/repos/${repositoryPath(repository)}/releases?per_page=30`,
+    ),
+    listPullsByState(config, repository, 'open'),
+  ])
+  const productionReleases = controlRoomProductionReleases(releases, [])
+  const promotionSteps = await Promise.all([
+    promotionStep(
+      config,
+      repository,
+      'dev-to-release',
+      metadata.default_branch,
+      openPulls,
+      false,
+    ),
+    promotionStep(
+      config,
+      repository,
+      'release-to-default',
+      metadata.default_branch,
+      openPulls,
+      false,
+    ),
+  ])
+  return {
+    repository,
+    defaultBranch: metadata.default_branch,
+    productionReleases,
+    deployedTags: [],
+    deploymentLookupFailed: false,
+    productionReady: promotionSteps.some(
+      (step) =>
+        step.route === 'release-to-default' &&
+        (step.filesChanged === 0 ||
+          (step.filesChanged === undefined &&
+            step.commitsAhead === 0 &&
+            step.commitsBehind === 0)),
+    ),
+    promotionSteps,
+    jenkinsServices: servicesForRepository(repository),
+    fetchedAt: new Date().toISOString(),
+    partial: true,
   }
 }
 
@@ -1459,57 +1423,11 @@ async function loadReleaseControlRoomState(
   config: ConnectionConfig,
   repository: string,
 ): Promise<ReleaseControlRoomState> {
-  assertConnectedRepository(config, repository)
-  const [metadata, productionReleases, openPulls] = await Promise.all([
-    githubApi<GitHubRepository>(
-      config,
-      `/repos/${repositoryPath(repository)}`,
-    ),
-    listControlRoomProductionReleases(config, repository),
-    listPullsByState(config, repository, 'open'),
-  ])
-  const promotionSteps = await Promise.all([
-    promotionStep(
-      config,
-      repository,
-      'dev-to-release',
-      metadata.default_branch,
-      openPulls,
-      false,
-    ),
-    promotionStep(
-      config,
-      repository,
-      'release-to-default',
-      metadata.default_branch,
-      openPulls,
-      false,
-    ),
-  ])
-  const tagDelta = await latestProductionTagDelta(
-    config,
-    repository,
-    metadata.default_branch,
-    productionReleases,
-  )
-  return {
-    repository,
-    defaultBranch: metadata.default_branch,
-    productionReleases,
-    latestProductionTagDelta: tagDelta,
-    deployedTags: [],
-    deploymentLookupFailed: false,
-    productionReady: promotionSteps.some(
-      (step) =>
-        step.route === 'release-to-default' &&
-        (step.filesChanged === 0 ||
-          (step.filesChanged === undefined &&
-            step.commitsAhead === 0 &&
-            step.commitsBehind === 0)),
-    ),
-    promotionSteps,
-    jenkinsServices: servicesForRepository(repository),
-    fetchedAt: new Date().toISOString(),
+  const fast = await loadReleaseControlRoomStateFast(config, repository)
+  try {
+    return await enrichReleaseControlRoomState(config, fast)
+  } catch {
+    return fast
   }
 }
 
@@ -1558,7 +1476,17 @@ export async function getReleaseControlRoomStatesBatch(
     status: 'running' | 'succeeded' | 'failed',
     message: string,
     step?: ReleaseControlSyncStep,
+    state?: ReleaseControlRoomState,
   ) => void,
+  options?: {
+    onEnrichment?: (
+      enrichment: Promise<void>,
+    ) => void | Promise<void>
+    publishEnrichedState?: (
+      repository: string,
+      state: ReleaseControlRoomState,
+    ) => void
+  },
 ): Promise<{
   results: ReleaseControlSyncResult[]
   stats: ReleaseControlSyncStats
@@ -1573,6 +1501,10 @@ export async function getReleaseControlRoomStatesBatch(
   let restRequests = 0
   let fallbackCount = 0
   const hybridEnabled = process.env.RELEASE_CONTROL_SYNC_MODE !== 'legacy'
+  const pendingEnrichment: Array<{
+    repository: string
+    state: ReleaseControlRoomState
+  }> = []
 
   for (const repository of repositories) {
     assertConnectedRepository(config, repository)
@@ -1581,17 +1513,19 @@ export async function getReleaseControlRoomStatesBatch(
     const cached = controlRoomStateCache.get(key)
     if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
       try {
-        results.set(repository, {
-          repository,
-          state: await cached.value,
-        })
+        const state = await cached.value
+        results.set(repository, { repository, state })
         cacheHits += 1
         reportProgress?.(
           repository,
           'succeeded',
           'GitHub state loaded from the recent cache.',
           'github-ready',
+          state,
         )
+        if (state.partial) {
+          pendingEnrichment.push({ repository, state })
+        }
         continue
       } catch {
         controlRoomStateCache.delete(key)
@@ -1620,7 +1554,7 @@ export async function getReleaseControlRoomStatesBatch(
               reportProgress?.(
                 repository,
                 'running',
-                'Checking branches, workflows, and release state.',
+                'Checking promotion branches and release state.',
                 'github-branches',
               )
             }
@@ -1639,7 +1573,7 @@ export async function getReleaseControlRoomStatesBatch(
               reportProgress?.(
                 repository,
                 'running',
-                'Checking promotion branches and release workflows.',
+                'Checking promotion branches.',
                 'github-branches',
               )
               state = await loadReleaseControlRoomStateFromSnapshot(
@@ -1647,7 +1581,11 @@ export async function getReleaseControlRoomStatesBatch(
                 repository,
                 snapshot,
               )
-              restRequests += 3 + (state.productionReleases.length ? 1 : 0)
+              // Two promotion compares; open PR details fetched on demand.
+              restRequests += 2
+              for (const step of state.promotionSteps) {
+                if (step.pullRequest) restRequests += 2
+              }
             } else {
               fallbackCount += 1
               reportProgress?.(
@@ -1656,19 +1594,24 @@ export async function getReleaseControlRoomStatesBatch(
                 'Using the compatibility GitHub sync path.',
                 'github-fallback',
               )
-              state = await loadReleaseControlRoomState(config, repository)
-              restRequests += 6 + (state.productionReleases.length ? 1 : 0)
+              state = await loadReleaseControlRoomStateFast(config, repository)
+              restRequests += 5
+              for (const step of state.promotionSteps) {
+                if (step.pullRequest) restRequests += 2
+              }
             }
             controlRoomStateCache.set(key, {
               expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
               value: Promise.resolve(state),
             })
             results.set(repository, { repository, state })
+            pendingEnrichment.push({ repository, state })
             reportProgress?.(
               repository,
               'succeeded',
-              'GitHub release and promotion state is ready.',
+              'GitHub promotion state is ready.',
               'github-ready',
+              state,
             )
           } catch (reason) {
             results.set(repository, {
@@ -1688,6 +1631,33 @@ export async function getReleaseControlRoomStatesBatch(
       )
     }),
   )
+
+  if (pendingEnrichment.length > 0) {
+    const enrichment = Promise.all(
+      pendingEnrichment.map(async ({ repository, state }) => {
+        try {
+          const enriched = await enrichReleaseControlRoomState(config, state)
+          const key = `${config.githubOrg}:${repository}`.toLowerCase()
+          controlRoomStateCache.set(key, {
+            expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
+            value: Promise.resolve(enriched),
+          })
+          const current = results.get(repository)
+          if (current?.state) {
+            results.set(repository, { repository, state: enriched })
+          }
+          options?.publishEnrichedState?.(repository, enriched)
+        } catch {
+          // Keep the fast-path state; build poll can fill run status later.
+        }
+      }),
+    ).then(() => undefined)
+    if (options?.onEnrichment) {
+      await options.onEnrichment(enrichment)
+    } else {
+      await enrichment
+    }
+  }
 
   return {
     results: repositories.map(

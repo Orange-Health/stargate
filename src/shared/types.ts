@@ -364,7 +364,10 @@ export type ReleaseControlRoomState = Pick<
   | 'promotionSteps'
   | 'jenkinsServices'
   | 'fetchedAt'
->
+> & {
+  /** True while workflow runs / tag-delta enrichment is still pending. */
+  partial?: boolean
+}
 
 export type ReleaseControlSyncError = {
   code: string
@@ -424,6 +427,8 @@ export type ReleaseControlServiceSyncProgress = {
   weight: number
   github: ReleaseControlProviderSyncStatus
   jenkins: ReleaseControlProviderSyncStatus
+  /** Latest known control-room state for progressive UI unlock. */
+  state?: ReleaseControlRoomState
   updatedAt: string
 }
 
@@ -581,6 +586,66 @@ export type TriggeredProductionDeployment = {
   jobName: string
   service: string
   imageTag: string
+}
+
+export type EitriNamespace = Exclude<DeploymentEnvironment, 'qa'>
+
+export type TriggerEitriDeploymentInput = {
+  repository: string
+  service: string
+  namespace: EitriNamespace
+  branch?: string
+  commitSha?: string
+  stagingEnvUpdateJob?: string
+}
+
+export type TriggeredEitriDeployment = {
+  queueId: number
+  queueUrl: string
+  buildUrl?: string
+  buildNumber?: number
+  jobName: string
+  service: string
+  namespace: EitriNamespace
+  branch?: string
+  commitSha?: string
+  stagingEnvUpdateJob: string
+}
+
+export type EitriStageStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled'
+
+export type EitriBuildStage = {
+  id: string
+  name: string
+  status: EitriStageStatus
+  durationMillis?: number
+}
+
+export type EitriBuild = {
+  buildNumber: number
+  buildUrl: string
+  service: string
+  namespace: EitriNamespace
+  branch?: string
+  commitSha?: string
+  stagingEnvUpdateJob?: string
+  status: 'running' | 'succeeded' | 'failed' | 'canceled'
+  createdAt: string
+  stages?: EitriBuildStage[]
+  currentStage?: string
+}
+
+export type EitriBuildsResult = {
+  repository: string
+  jenkinsServices: string[]
+  builds: EitriBuild[]
+  lookupFailed: boolean
+  fetchedAt: string
 }
 
 export type ApiErrorBody = {

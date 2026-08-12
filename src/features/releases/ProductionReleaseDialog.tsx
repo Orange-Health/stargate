@@ -49,7 +49,7 @@ export function ProductionReleaseDialog({
       setCreated(result)
       window.dispatchEvent(
         new CustomEvent('production-release-created', {
-          detail: { repository },
+          detail: { repository, release: result },
         }),
       )
     } catch (reason) {

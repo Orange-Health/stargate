@@ -34,9 +34,12 @@ import type {
   RepositoryPullRequestList,
   RepositoryRisk,
   ServiceRefreshResult,
+  EitriBuildsResult,
   TriggerDeploymentInput,
+  TriggerEitriDeploymentInput,
   TriggerProductionDeploymentInput,
   TriggeredDeployment,
+  TriggeredEitriDeployment,
   TriggeredProductionDeployment,
 } from './types.js'
 
@@ -321,6 +324,15 @@ export const api = {
     ),
   triggerDeployment: (input: TriggerDeploymentInput) =>
     request<TriggeredDeployment>('/api/jenkins/deployments', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  eitriBuilds: (repository: string, forceRefresh = false) =>
+    request<EitriBuildsResult>(
+      `/api/jenkins/eitri-builds?repository=${encodeURIComponent(repository)}${forceRefresh ? '&forceRefresh=true' : ''}`,
+    ),
+  triggerEitriDeployment: (input: TriggerEitriDeploymentInput) =>
+    request<TriggeredEitriDeployment>('/api/jenkins/eitri-deployments', {
       method: 'POST',
       body: JSON.stringify(input),
     }),

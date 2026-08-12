@@ -100,7 +100,7 @@ export function BulkQaReleaseDialog({
         )
         window.dispatchEvent(
           new CustomEvent('staging-release-created', {
-            detail: { repository },
+            detail: { repository, release },
           }),
         )
       } catch (reason) {

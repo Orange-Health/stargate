@@ -5,18 +5,13 @@ import type {
   ServiceRelease,
   TriggeredDeployment,
 } from '../../shared/types'
+import { deployableQaTargets, isMergedToDev } from './deployableQaTargets'
 
 type Props = {
   services: ServiceRelease[]
   freshness: Record<string, DeploymentFreshness>
   releaseName: string
   onClose: () => void
-}
-
-type DeployTarget = {
-  repository: string
-  tag: string
-  jenkinsServices: string[]
 }
 
 type TargetResult =
@@ -32,35 +27,6 @@ const MAX_CONCURRENCY = 3
 
 function serviceName(repository: string) {
   return repository.split('/').at(-1) ?? repository
-}
-
-function isMergedToDev(service: ServiceRelease) {
-  const withPulls = service.items.filter((item) => item.pullRequest)
-  if (withPulls.length === 0) return false
-  return withPulls.every(
-    (item) =>
-      Boolean(item.pullRequest?.merged) &&
-      item.pullRequest?.baseBranch === 'dev',
-  )
-}
-
-export function deployableQaTargets(
-  services: ServiceRelease[],
-  freshness: Record<string, DeploymentFreshness>,
-): DeployTarget[] {
-  // Only repositories present on the selected Jira release dashboard.
-  return services.flatMap((service) => {
-    if (!isMergedToDev(service)) return []
-    const info = freshness[service.repository]
-    if (!info?.latestBuiltQaTag || info.jenkinsServices.length === 0) return []
-    return [
-      {
-        repository: service.repository,
-        tag: info.latestBuiltQaTag,
-        jenkinsServices: info.jenkinsServices,
-      },
-    ]
-  })
 }
 
 async function mapConcurrent<T>(
@@ -209,8 +175,7 @@ export function BulkQaDeployDialog({
 
         <ul className="bulk-qa-service-list" aria-label="QA deploy targets">
           {(started ? results : targets).map((item) => {
-            const repository =
-              'repository' in item ? item.repository : item.repository
+            const repository = item.repository
             const target = targets.find(
               (entry) => entry.repository === repository,
             )

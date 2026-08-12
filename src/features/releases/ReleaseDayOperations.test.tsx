@@ -10,12 +10,14 @@ import type {
 } from '../../shared/types'
 import {
   ReleaseDayOperations,
+} from './ReleaseDayOperations'
+import { developersForReleaseService } from './releaseDayHelpers'
+import {
   cleanGitHubReleaseDescription,
-  developersForReleaseService,
   latestProductionReleaseOnDate,
   releaseCreatedOnDate,
   releaseNotesForDashboard,
-} from './ReleaseDayOperations'
+} from './releaseNotes'
 
 const repository = 'Orange-Health/service-api'
 const dashboard: ReleaseDashboard = {
@@ -159,6 +161,33 @@ describe('ReleaseDayOperations', () => {
     expect(selectAll).not.toBeChecked()
     await user.click(selectAll)
     expect(serviceCheckbox).toBeChecked()
+  })
+
+  it('collapses and expands the operation log', async () => {
+    const user = userEvent.setup()
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const toggle = screen.getByRole('button', { name: 'Operation log' })
+    const logBody = document.getElementById('release-day-operation-log')
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(logBody).not.toHaveAttribute('hidden')
+
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(logBody).toHaveAttribute('hidden')
+
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(logBody).not.toHaveAttribute('hidden')
   })
 
   it('marks every ticket in the Jira release as released', async () => {
@@ -1052,7 +1081,7 @@ describe('ReleaseDayOperations', () => {
       screen.getByRole('progressbar', {
         name: 'Synchronizing release control room',
       }),
-    ).toHaveAttribute('aria-valuenow', '74')
+    ).toHaveAttribute('aria-valuenow', '50')
     expect(
       screen.getByRole('button', { name: 'Syncing 1/2' }),
     ).toBeDisabled()
