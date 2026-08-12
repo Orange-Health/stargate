@@ -603,6 +603,20 @@ export type TriggeredEitriDeployment = {
   stagingEnvUpdateJob: string
 }
 
+export type EitriStageStatus =
+  | 'pending'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled'
+
+export type EitriBuildStage = {
+  id: string
+  name: string
+  status: EitriStageStatus
+  durationMillis?: number
+}
+
 export type EitriBuild = {
   buildNumber: number
   buildUrl: string
@@ -613,6 +627,8 @@ export type EitriBuild = {
   stagingEnvUpdateJob?: string
   status: 'running' | 'succeeded' | 'failed' | 'canceled'
   createdAt: string
+  stages?: EitriBuildStage[]
+  currentStage?: string
 }
 
 export type EitriBuildsResult = {

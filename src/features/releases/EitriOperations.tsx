@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../shared/api'
-import type { EitriBuild, EitriBuildsResult } from '../../shared/types'
+import type {
+  EitriBuild,
+  EitriBuildStage,
+  EitriBuildsResult,
+} from '../../shared/types'
 import { EitriDialog } from './EitriDialog'
+import { EitriReplayDialog } from './EitriReplayDialog'
 
 type Props = {
   repository: string
@@ -17,8 +22,23 @@ const statusLabels: Record<EitriBuild['status'], string> = {
 }
 
 const BUILD_POLL_INTERVAL_MS = 15_000
+const RUNNING_POLL_INTERVAL_MS = 5_000
 const BUILD_POLL_TIMEOUT_MS = 30_000
 const NOTIFICATION_KEY = 'release-build-notifications'
+
+function formatStageDuration(durationMillis?: number) {
+  if (durationMillis == null || durationMillis < 0) return undefined
+  const seconds = Math.round(durationMillis / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return remainder === 0 ? `${minutes}m` : `${minutes}m ${remainder}s`
+}
+
+function stageTitle(stage: EitriBuildStage) {
+  const duration = formatStageDuration(stage.durationMillis)
+  return duration ? `${stage.name} · ${duration}` : stage.name
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -64,6 +84,7 @@ export function EitriOperations({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [replayBuild, setReplayBuild] = useState<EitriBuild>()
   const [browserNotifications, setBrowserNotifications] = useState(
     () =>
       typeof Notification !== 'undefined' &&
@@ -175,14 +196,20 @@ export function EitriOperations({
     let inFlight = false
     let timeout: number | undefined
 
-    const schedule = () => {
+    const schedule = (hasRunning = false) => {
       if (!active || document.hidden) return
-      timeout = window.setTimeout(() => void poll(), BUILD_POLL_INTERVAL_MS)
+      timeout = window.setTimeout(
+        () => void poll(),
+        hasRunning ? RUNNING_POLL_INTERVAL_MS : BUILD_POLL_INTERVAL_MS,
+      )
     }
 
     const poll = async () => {
       if (!active || inFlight || document.hidden) return
       inFlight = true
+      let hasRunning = Boolean(
+        stateRef.current?.builds.some((build) => build.status === 'running'),
+      )
       try {
         const nextState = await withTimeout(
           api.eitriBuilds(repository, true),
@@ -192,11 +219,12 @@ export function EitriOperations({
         announceCompletedBuilds(nextState)
         setState(nextState)
         setError('')
+        hasRunning = nextState.builds.some((build) => build.status === 'running')
       } catch {
         // Keep the last good snapshot; try again on the next tick.
       } finally {
         inFlight = false
-        schedule()
+        schedule(hasRunning)
       }
     }
 
@@ -204,7 +232,11 @@ export function EitriOperations({
       if (!document.hidden) void poll()
     }
 
-    schedule()
+    schedule(
+      Boolean(
+        stateRef.current?.builds.some((build) => build.status === 'running'),
+      ),
+    )
     document.addEventListener('visibilitychange', onVisibility)
     return () => {
       active = false
@@ -299,7 +331,12 @@ export function EitriOperations({
             >
               {browserNotifications ? '● Alerts on' : 'Enable alerts'}
             </button>
-            <span className="auto-refresh">Live · 15s</span>
+            <span className="auto-refresh">
+              Live ·{' '}
+              {state?.builds.some((build) => build.status === 'running')
+                ? '5s'
+                : '15s'}
+            </span>
           </div>
         </div>
 
@@ -316,55 +353,90 @@ export function EitriOperations({
         ) : state?.builds.length ? (
           <div className="release-build-list">
             {state.builds.map((build) => (
-              <article
-                className="release-build-row eitri-build-row"
-                key={build.buildNumber}
-              >
-                <span
-                  className={`build-indicator ${build.status}`}
-                  aria-hidden="true"
-                />
-                <div className="release-build-main">
-                  {build.buildUrl ? (
-                    <a
-                      href={build.buildUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      #{build.buildNumber} · {build.service}
-                    </a>
-                  ) : (
+              <article className="eitri-build-row" key={build.buildNumber}>
+                <div className="eitri-build-top">
+                  <span
+                    className={`build-indicator ${build.status}`}
+                    aria-hidden="true"
+                  />
+                  <div className="release-build-main">
+                    {build.buildUrl ? (
+                      <a
+                        href={build.buildUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        #{build.buildNumber} · {build.service}
+                      </a>
+                    ) : (
+                      <strong>
+                        #{build.buildNumber} · {build.service}
+                      </strong>
+                    )}
                     <span>
-                      #{build.buildNumber} · {build.service}
+                      {build.namespace.toUpperCase()} ·{' '}
+                      {buildSourceLabel(build)} · {timeAgo(build.createdAt)}
+                      {' · '}
+                      {build.stagingEnvUpdateJob || 'DEV/DEV Deployer'}
                     </span>
-                  )}
-                  <span>
-                    {build.namespace.toUpperCase()} · {buildSourceLabel(build)}{' '}
-                    · {timeAgo(build.createdAt)}
+                    {build.status === 'running' &&
+                      build.currentStage &&
+                      !build.stages?.length && (
+                        <span className="eitri-current-stage">
+                          <span className="spinner" aria-hidden="true" />
+                          {build.currentStage}
+                        </span>
+                      )}
+                  </div>
+                  <span className={`build-status ${build.status}`}>
+                    {statusLabels[build.status]}
                   </span>
+                  <div className="eitri-build-actions">
+                    {build.buildUrl ? (
+                      <a
+                        className="deploy-button eitri-build-link"
+                        href={build.buildUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open
+                      </a>
+                    ) : (
+                      <span className="deploy-button eitri-build-link disabled">
+                        Queued
+                      </span>
+                    )}
+                    <button
+                      className="eitri-replay-button"
+                      type="button"
+                      onClick={() => setReplayBuild(build)}
+                      title={`Replay #${build.buildNumber} with the same parameters`}
+                    >
+                      Replay
+                    </button>
+                  </div>
                 </div>
-                <span className={`build-status ${build.status}`}>
-                  {statusLabels[build.status]}
-                </span>
-                {build.buildUrl ? (
-                  <a
-                    className="deploy-button eitri-build-link"
-                    href={build.buildUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                {build.stages && build.stages.length > 0 && (
+                  <div
+                    className="eitri-stage-list"
+                    aria-label="Pipeline stages"
                   >
-                    Open build
-                  </a>
-                ) : (
-                  <span className="deploy-button eitri-build-link disabled">
-                    Queued
-                  </span>
+                    {build.stages.map((stage) => (
+                      <span
+                        className={`eitri-stage ${stage.status}`}
+                        title={stageTitle(stage)}
+                        key={stage.id}
+                      >
+                        <span aria-hidden="true">●</span>
+                        {stage.name}
+                        {stage.durationMillis != null &&
+                          stage.status !== 'pending' && (
+                            <em>{formatStageDuration(stage.durationMillis)}</em>
+                          )}
+                      </span>
+                    ))}
+                  </div>
                 )}
-                <div className="workflow-links">
-                  <small>
-                    {build.stagingEnvUpdateJob || 'DEV/DEV Deployer'}
-                  </small>
-                </div>
               </article>
             ))}
           </div>
@@ -380,6 +452,16 @@ export function EitriOperations({
           repository={repository}
           services={state.jenkinsServices}
           onClose={() => setDialogOpen(false)}
+          onQueued={() => {
+            void load(true, true)
+          }}
+        />
+      )}
+      {replayBuild && (
+        <EitriReplayDialog
+          repository={repository}
+          build={replayBuild}
+          onClose={() => setReplayBuild(undefined)}
           onQueued={() => {
             void load(true, true)
           }}

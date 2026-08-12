@@ -2536,7 +2536,7 @@ button:disabled {
 
 .eitri-dialog-header {
   flex: 0 0 auto;
-  padding: 30px 30px 16px;
+  padding: 30px 30px 0 30px;
 }
 
 .eitri-dialog-header h2 {
@@ -2568,6 +2568,40 @@ button:disabled {
   padding: 30px;
 }
 
+.eitri-build-row {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 18px;
+}
+
+.eitri-build-row:last-child {
+  border-bottom: 0;
+}
+
+.eitri-build-top {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  min-width: 0;
+}
+
+.eitri-build-top .release-build-main strong {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.eitri-build-actions {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
 a.eitri-build-link {
   align-items: center;
   display: inline-flex;
@@ -2579,6 +2613,140 @@ a.eitri-build-link {
   cursor: default;
   opacity: 0.7;
   pointer-events: none;
+}
+
+.eitri-replay-button {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  min-height: 29px;
+  padding: 0 8px;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.eitri-replay-button:hover {
+  background: var(--paper-warm);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.release-build-main .eitri-current-stage {
+  align-items: center;
+  color: #80b8f2;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 650;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.release-build-main .eitri-current-stage .spinner {
+  height: 10px;
+  width: 10px;
+}
+
+.eitri-stage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 20px;
+}
+
+.eitri-stage {
+  align-items: center;
+  background: var(--paper-warm);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 650;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 8px;
+}
+
+.eitri-stage span {
+  font-size: 7px;
+  margin: 0;
+}
+
+.eitri-stage em {
+  color: inherit;
+  font-style: normal;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.eitri-stage.succeeded {
+  background: var(--green-faint);
+  border-color: color-mix(in srgb, var(--green) 40%, transparent);
+  color: var(--green);
+}
+
+.eitri-stage.running {
+  background: #172a3d;
+  border-color: #2d4d6f;
+  color: #80b8f2;
+}
+
+.eitri-stage.failed {
+  background: var(--red-faint);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+  color: var(--red);
+}
+
+.eitri-stage.canceled {
+  background: var(--paper-warm);
+  color: var(--muted);
+}
+
+.eitri-stage.pending {
+  opacity: 0.7;
+}
+
+.eitri-replay-dialog .eitri-replay-params {
+  background: var(--paper-warm);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 0;
+  padding: 13px;
+}
+
+.eitri-replay-params > div {
+  display: grid;
+  gap: 3px;
+}
+
+.eitri-replay-params dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.eitri-replay-params dd {
+  margin: 0;
+}
+
+.eitri-replay-params code {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .created-icon.deploy {
@@ -4121,6 +4289,34 @@ label {
 
   .release-build-row {
     grid-template-columns: auto 1fr auto auto;
+  }
+
+  .eitri-build-top {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "dot main status"
+      "dot actions actions";
+  }
+
+  .eitri-build-top .build-indicator {
+    grid-area: dot;
+  }
+
+  .eitri-build-top .release-build-main {
+    grid-area: main;
+  }
+
+  .eitri-build-top .build-status {
+    grid-area: status;
+  }
+
+  .eitri-build-top .eitri-build-actions {
+    grid-area: actions;
+    justify-content: flex-start;
+  }
+
+  .eitri-stage-list {
+    padding-left: 20px;
   }
 
   .release-day-steps {

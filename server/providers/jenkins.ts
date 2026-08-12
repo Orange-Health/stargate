@@ -3,8 +3,10 @@ import type {
   ConnectionConfig,
   DeploymentEnvironment,
   EitriBuild,
+  EitriBuildStage,
   EitriBuildsResult,
   EitriNamespace,
+  EitriStageStatus,
   JenkinsBuildStatus,
   JenkinsDeployedTag,
   JenkinsQueueStatus,
@@ -174,6 +176,34 @@ function jenkinsClient(config: ConnectionConfig) {
     baseUrl: url.toString().replace(/\/$/, ""),
     crumbIssuer: true,
   });
+}
+
+function jenkinsJobPath(jobName: string) {
+  return jobName
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => `job/${encodeURIComponent(segment)}`)
+    .join("/");
+}
+
+async function jenkinsApiGet<T>(
+  config: ConnectionConfig,
+  path: string,
+): Promise<T> {
+  const base = config.jenkinsUrl.replace(/\/+$/, "");
+  const auth = Buffer.from(
+    `${config.jenkinsUsername}:${config.jenkinsToken}`,
+  ).toString("base64");
+  const response = await fetch(`${base}/${path.replace(/^\//, "")}`, {
+    headers: {
+      Authorization: `Basic ${auth}`,
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Jenkins API ${response.status} for ${path}`);
+  }
+  return (await response.json()) as T;
 }
 
 export function servicesForRepository(repository: string) {
@@ -587,6 +617,104 @@ export function eitriBuildsFromJobBuilds(
     });
 }
 
+export function eitriStageStatus(status?: string | null): EitriStageStatus {
+  switch ((status ?? "").toUpperCase()) {
+    case "SUCCESS":
+      return "succeeded";
+    case "FAILED":
+    case "FAILURE":
+    case "UNSTABLE":
+      return "failed";
+    case "ABORTED":
+    case "CANCELLED":
+    case "CANCELED":
+      return "canceled";
+    case "IN_PROGRESS":
+    case "RUNNING":
+    case "PAUSED_PENDING_INPUT":
+      return "running";
+    default:
+      return "pending";
+  }
+}
+
+export function eitriStagesFromDescribe(describe: {
+  stages?: Array<{
+    id?: string | number;
+    name?: string;
+    status?: string | null;
+    durationMillis?: number;
+  }>;
+}): EitriBuildStage[] {
+  return (describe.stages ?? [])
+    .filter((stage) => stage.name)
+    .map((stage) => ({
+      id: String(stage.id ?? stage.name),
+      name: String(stage.name),
+      status: eitriStageStatus(stage.status),
+      durationMillis:
+        typeof stage.durationMillis === "number"
+          ? stage.durationMillis
+          : undefined,
+    }));
+}
+
+export function currentEitriStageName(stages: EitriBuildStage[]) {
+  return (
+    [...stages].reverse().find((stage) => stage.status === "running")?.name ??
+    stages.find((stage) => stage.status === "pending")?.name ??
+    stages.at(-1)?.name
+  );
+}
+
+async function getEitriPipelineStages(
+  config: ConnectionConfig,
+  buildNumber: number,
+): Promise<EitriBuildStage[]> {
+  const describe = await jenkinsApiGet<{
+    stages?: Array<{
+      id?: string | number;
+      name?: string;
+      status?: string | null;
+      durationMillis?: number;
+    }>;
+  }>(
+    config,
+    `${jenkinsJobPath(EITRI_JOB_NAME)}/${buildNumber}/wfapi/describe`,
+  );
+  return eitriStagesFromDescribe(describe);
+}
+
+async function enrichEitriBuildStages(
+  config: ConnectionConfig,
+  builds: EitriBuild[],
+): Promise<EitriBuild[]> {
+  const running = builds.filter((build) => build.status === "running");
+  if (running.length === 0) return builds;
+
+  const results = await Promise.allSettled(
+    running.map(async (build) => ({
+      buildNumber: build.buildNumber,
+      stages: await getEitriPipelineStages(config, build.buildNumber),
+    })),
+  );
+  const stagesByBuild = new Map<number, EitriBuildStage[]>();
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    stagesByBuild.set(result.value.buildNumber, result.value.stages);
+  }
+
+  return builds.map((build) => {
+    const stages = stagesByBuild.get(build.buildNumber);
+    if (!stages || stages.length === 0) return build;
+    return {
+      ...build,
+      stages,
+      currentStage: currentEitriStageName(stages),
+    };
+  });
+}
+
 async function recentEitriBuilds(
   config: ConnectionConfig,
   forceRefresh = false,
@@ -623,10 +751,14 @@ export async function getEitriBuilds(
   }
   try {
     const builds = await recentEitriBuilds(config, forceRefresh);
+    const mapped = eitriBuildsFromJobBuilds(builds, jenkinsServices).slice(
+      0,
+      25,
+    );
     return {
       repository,
       jenkinsServices,
-      builds: eitriBuildsFromJobBuilds(builds, jenkinsServices).slice(0, 25),
+      builds: await enrichEitriBuildStages(config, mapped),
       lookupFailed: false,
       fetchedAt,
     };
