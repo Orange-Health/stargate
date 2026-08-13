@@ -10,6 +10,7 @@ import type {
   ReleaseControlSyncResponse,
   RepositoryDeploymentStatusResponse,
 } from '../src/shared/types.js'
+import { parseUseReleaseBranch } from '../src/shared/branchModel.js'
 import {
   clearConnection,
   getConnection,
@@ -142,12 +143,12 @@ const productionReleaseSchema = z
 
 const promotionSchema = z.object({
   repository: repositorySchema,
-  route: z.enum(['dev-to-release', 'release-to-default']),
+  route: z.enum(['dev-to-release', 'release-to-default', 'dev-to-default']),
 })
 
 const backMergeSchema = z.object({
   repository: repositorySchema,
-  route: z.enum(['default-to-release', 'release-to-dev']),
+  route: z.enum(['default-to-release', 'release-to-dev', 'default-to-dev']),
 })
 
 const mergePromotionSchema = z.object({
@@ -237,10 +238,12 @@ const eitriDeploymentSchema = z
 
 const repositoryRisksSchema = z.object({
   repositories: z.array(repositorySchema).max(100),
+  useReleaseBranch: z.boolean().optional().default(true),
 })
 const repositoryBatchSchema = z.object({
   repositories: z.array(repositorySchema).min(1).max(100),
   forceRefresh: z.boolean().optional().default(false),
+  useReleaseBranch: z.boolean().optional().default(true),
   progressId: z
     .string()
     .regex(/^[A-Za-z0-9_-]{8,80}$/)
@@ -269,6 +272,7 @@ const serviceRefreshSchema = z.object({
     .min(1)
     .max(200),
   includeRepositoryState: z.boolean().optional().default(true),
+  useReleaseBranch: z.boolean().optional().default(true),
 })
 const markReleaseIssuesSchema = z.object({
   issueKeys: z
@@ -555,7 +559,12 @@ export function createApp() {
           parsed.data.repository,
           parsed.data.issueKeys,
         ),
-        getRepositoryReleaseState(config, parsed.data.repository),
+        getRepositoryReleaseState(
+          config,
+          parsed.data.repository,
+          false,
+          parsed.data.useReleaseBranch,
+        ),
         currentDeployments(config, parsed.data.repository),
       ])
       response.json({
@@ -702,8 +711,16 @@ export function createApp() {
     const config = requireConnection()
     const includeAllVReleases =
       request.query.includeAllVReleases === 'true'
+    const useReleaseBranch = parseUseReleaseBranch(
+      request.query.useReleaseBranch,
+    )
     const [state, deploymentResult] = await Promise.all([
-      getRepositoryReleaseState(config, parsed.data, includeAllVReleases),
+      getRepositoryReleaseState(
+        config,
+        parsed.data,
+        includeAllVReleases,
+        useReleaseBranch,
+      ),
       currentDeployments(config, parsed.data),
     ])
     response.json({
@@ -725,8 +742,11 @@ export function createApp() {
       return
     }
     const config = requireConnection()
+    const useReleaseBranch = parseUseReleaseBranch(
+      request.query.useReleaseBranch,
+    )
     const [state, deploymentResult] = await Promise.all([
-      getReleaseControlRoomState(config, parsed.data),
+      getReleaseControlRoomState(config, parsed.data, useReleaseBranch),
       currentDeployments(config, parsed.data),
     ])
     response.json({
@@ -809,6 +829,7 @@ export function createApp() {
         : undefined,
       progressId
         ? {
+            useReleaseBranch: parsed.data.useReleaseBranch,
             onEnrichment: (enrichment) => {
               trackControlRoomEnrichment(progressId, enrichment)
             },
@@ -821,6 +842,7 @@ export function createApp() {
               ),
           }
         : {
+            useReleaseBranch: parsed.data.useReleaseBranch,
             onEnrichment: (enrichment) => enrichment,
           },
     )
@@ -958,6 +980,7 @@ export function createApp() {
       await getRepositoryRisks(
         requireConnection(),
         parsed.data.repositories,
+        parsed.data.useReleaseBranch,
       ),
     )
   })

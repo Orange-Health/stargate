@@ -2,6 +2,10 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
+import {
+  promotionBranches,
+  USE_RELEASE_BRANCH_STORAGE_KEY,
+} from '../../shared/branchModel'
 import type {
   PromotionStep,
   ReleaseControlSyncResponse,
@@ -48,22 +52,22 @@ function promotionStep(
   route: PromotionStep['route'],
   state: PromotionStep['state'],
 ): PromotionStep {
-  const devRoute = route === 'dev-to-release'
+  const { fromBranch, toBranch } = promotionBranches(route, 'main')
   return {
     route,
-    fromBranch: devRoute ? 'dev' : 'release',
-    toBranch: devRoute ? 'release' : 'main',
+    fromBranch,
+    toBranch,
     commitsAhead: state === 'up_to_date' ? 0 : 1,
     commitsBehind: 0,
     state,
     pullRequest:
       state === 'pr_open'
         ? {
-            number: devRoute ? 12 : 13,
-            title: devRoute ? 'Promote dev to release' : 'Promote release to main',
-            url: `https://github.test/pull/${devRoute ? 12 : 13}`,
-            baseBranch: devRoute ? 'release' : 'main',
-            headBranch: devRoute ? 'dev' : 'release',
+            number: fromBranch === 'dev' ? 12 : 13,
+            title: `Promote ${fromBranch} to ${toBranch}`,
+            url: `https://github.test/pull/${fromBranch === 'dev' ? 12 : 13}`,
+            baseBranch: toBranch,
+            headBranch: fromBranch,
             draft: false,
             mergeable: true,
             mergeableState: 'clean',
@@ -577,6 +581,7 @@ describe('ReleaseDayOperations', () => {
     await waitFor(() =>
       expect(createRelease).toHaveBeenCalledWith({
         repository,
+        mode: 'release-day',
         date: '2026-07-16',
       }),
     )
@@ -656,6 +661,7 @@ describe('ReleaseDayOperations', () => {
     await waitFor(() =>
       expect(createRelease).toHaveBeenCalledWith({
         repository,
+        mode: 'release-day',
         date: '2026-07-16',
         operationId: 'operation-1',
       }),
@@ -1501,5 +1507,31 @@ describe('ReleaseDayOperations', () => {
     expect(
       await screen.findByRole('link', { name: new RegExp(created.tag) }),
     ).toBeVisible()
+  })
+
+  it('uses a Dev → Default wizard when the release branch is disabled', async () => {
+    window.localStorage.setItem(USE_RELEASE_BRANCH_STORAGE_KEY, 'false')
+    vi.spyOn(api, 'repositoryState').mockResolvedValue({
+      ...repositoryState('needs_pr', 'needs_pr'),
+      productionReady: false,
+      promotionSteps: [promotionStep('dev-to-default', 'needs_pr')],
+      backMergeSteps: [],
+    })
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByText('Create Dev → Default PRs'),
+    ).toBeVisible()
+    expect(screen.getByText('Merge Dev → Default PRs')).toBeVisible()
+    expect(screen.queryByText('Create Dev → Release PRs')).not.toBeInTheDocument()
+    expect(screen.queryByText('Release → Default')).not.toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Dev → Default' })).toBeVisible()
   })
 })

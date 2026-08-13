@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../shared/api'
+import { readUseReleaseBranch } from '../../shared/branchModel'
 import type {
   BackMergeStep,
   BuildStatus,
@@ -184,6 +185,7 @@ export function ServiceOperations({
   onCreateStagingRelease,
   onCreateProductionRelease,
 }: Props) {
+  const useReleaseBranch = readUseReleaseBranch()
   const [state, setState] = useState<RepositoryReleaseState>()
   const [releaseState, setReleaseState] = useState<RepositoryReleaseData>()
   const [branchLoading, setBranchLoading] = useState(true)
@@ -1308,7 +1310,8 @@ export function ServiceOperations({
         </div>
         {branchLoading && !state ? (
           <div className="operation-loading">
-            <span className="spinner" /> Checking dev, release, and default
+            <span className="spinner" /> Checking{' '}
+            {useReleaseBranch ? 'dev, release, and default' : 'dev and default'}{' '}
             branches…
           </div>
         ) : (
@@ -1423,7 +1426,8 @@ export function ServiceOperations({
 
         {branchLoading && !state ? (
           <div className="operation-loading">
-            <span className="spinner" /> Loading Dev → Release → Default
+            <span className="spinner" /> Loading{' '}
+            {useReleaseBranch ? 'Dev → Release → Default' : 'Dev → Default'}{' '}
             journey…
           </div>
         ) : (

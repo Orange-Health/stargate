@@ -1,3 +1,4 @@
+import { readUseReleaseBranch } from './branchModel.js'
 import type {
   ApiErrorBody,
   ConnectionConfig,
@@ -177,14 +178,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  repositoryState: (repository: string, includeAllVReleases = false) =>
-    request<RepositoryReleaseState>(
-      `/api/github/repository-state?repository=${encodeURIComponent(repository)}${includeAllVReleases ? '&includeAllVReleases=true' : ''}`,
-    ),
-  releaseControlState: (repository: string) =>
-    request<ReleaseControlRoomState>(
-      `/api/github/release-control-state?repository=${encodeURIComponent(repository)}`,
-    ),
+  repositoryState: (repository: string, includeAllVReleases = false) => {
+    const query = new URLSearchParams({ repository })
+    if (includeAllVReleases) query.set('includeAllVReleases', 'true')
+    if (!readUseReleaseBranch()) query.set('useReleaseBranch', 'false')
+    return request<RepositoryReleaseState>(
+      `/api/github/repository-state?${query}`,
+    )
+  },
+  releaseControlState: (repository: string) => {
+    const query = new URLSearchParams({ repository })
+    if (!readUseReleaseBranch()) query.set('useReleaseBranch', 'false')
+    return request<ReleaseControlRoomState>(
+      `/api/github/release-control-state?${query}`,
+    )
+  },
   releaseControlStates: (
     repositories: string[],
     forceRefresh = false,
@@ -195,7 +203,12 @@ export const api = {
       '/api/github/release-control-states',
       {
         method: 'POST',
-        body: JSON.stringify({ repositories, forceRefresh, progressId }),
+        body: JSON.stringify({
+          repositories,
+          forceRefresh,
+          progressId,
+          useReleaseBranch: readUseReleaseBranch(),
+        }),
         signal,
       },
     ),
@@ -248,7 +261,10 @@ export const api = {
   repositoryRisks: (repositories: string[]) =>
     request<RepositoryRisk[]>('/api/github/repository-risks', {
       method: 'POST',
-      body: JSON.stringify({ repositories }),
+      body: JSON.stringify({
+        repositories,
+        useReleaseBranch: readUseReleaseBranch(),
+      }),
     }),
   deploymentFreshness: (repositories: string[]) =>
     request<DeploymentFreshness[]>('/api/deployment-freshness', {
@@ -274,6 +290,7 @@ export const api = {
           repository,
           issueKeys,
           includeRepositoryState,
+          useReleaseBranch: readUseReleaseBranch(),
         }),
       },
     ),

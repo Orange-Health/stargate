@@ -26,6 +26,14 @@ import type {
   TrackedStagingRelease,
   WorkflowRun,
 } from '../../src/shared/types.js'
+import {
+  backMergeBranches,
+  backMergeRoutes,
+  isBackMergePullRoute,
+  isPromotionPullRoute,
+  promotionBranches,
+  promotionRoutes,
+} from '../../src/shared/branchModel.js'
 import { ProviderError } from '../errors.js'
 import {
   clearGitHubProviderCache,
@@ -164,6 +172,55 @@ const controlRoomStateCache = new Map<
 >()
 const terminalBuildCache = new Map<string, WorkflowRun[]>()
 
+function branchModelCacheSuffix(useReleaseBranch: boolean) {
+  return useReleaseBranch ? 'with-release' : 'direct'
+}
+
+function repositoryCacheBase(config: ConnectionConfig, repository: string) {
+  return `${config.githubOrg}:${repository}`.toLowerCase()
+}
+
+function repositoryStateCacheKey(
+  config: ConnectionConfig,
+  repository: string,
+  useReleaseBranch: boolean,
+  includeAllVReleases = false,
+) {
+  const extra = includeAllVReleases ? ':all-v' : ''
+  return `${repositoryCacheBase(config, repository)}${extra}:${branchModelCacheSuffix(useReleaseBranch)}`
+}
+
+function controlRoomCacheKey(
+  config: ConnectionConfig,
+  repository: string,
+  useReleaseBranch: boolean,
+) {
+  return `${repositoryCacheBase(config, repository)}:${branchModelCacheSuffix(useReleaseBranch)}`
+}
+
+function riskCacheKey(
+  config: ConnectionConfig,
+  repository: string,
+  useReleaseBranch: boolean,
+) {
+  return `${repositoryCacheBase(config, repository)}:${branchModelCacheSuffix(useReleaseBranch)}`
+}
+
+export function isProductionReady(
+  steps: PromotionStep[],
+  useReleaseBranch: boolean,
+) {
+  const route = useReleaseBranch ? 'release-to-default' : 'dev-to-default'
+  return steps.some(
+    (step) =>
+      step.route === route &&
+      (step.filesChanged === 0 ||
+        (step.filesChanged === undefined &&
+          step.commitsAhead === 0 &&
+          step.commitsBehind === 0)),
+  )
+}
+
 export function clearRepositoryCaches(
   config: ConnectionConfig,
   repository: string,
@@ -171,12 +228,14 @@ export function clearRepositoryCaches(
   includeBuilds = false,
 ) {
   clearGitHubProviderCache(repository, searchIssueKeys)
-  const key = `${config.githubOrg}:${repository}`.toLowerCase()
-  riskCache.delete(key)
+  const key = repositoryCacheBase(config, repository)
   qaBuildCache.delete(key)
-  repositoryStateCache.delete(key)
-  repositoryStateCache.delete(`${key}:all-v`)
-  controlRoomStateCache.delete(key)
+  for (const suffix of ['with-release', 'direct'] as const) {
+    riskCache.delete(`${key}:${suffix}`)
+    repositoryStateCache.delete(`${key}:${suffix}`)
+    repositoryStateCache.delete(`${key}:all-v:${suffix}`)
+    controlRoomStateCache.delete(`${key}:${suffix}`)
+  }
   if (includeBuilds) {
     const buildPrefix = `${key}:`
     for (const buildKey of terminalBuildCache.keys()) {
@@ -224,14 +283,7 @@ export function aggregateBuildStatus(runs: WorkflowRun[]): BuildStatus {
   return 'succeeded'
 }
 
-export function promotionBranches(
-  route: PromotionRoute,
-  defaultBranch: string,
-) {
-  return route === 'dev-to-release'
-    ? { fromBranch: 'dev', toBranch: 'release' }
-    : { fromBranch: 'release', toBranch: defaultBranch }
-}
+export { backMergeBranches, promotionBranches }
 
 export function hasActualMergeConflict(
   mergeable: boolean | null,
@@ -943,52 +995,32 @@ async function pendingBackMerges(
   repository: string,
   defaultBranch: string,
 ): Promise<PendingBackMerge[]> {
-  const [
-    defaultToRelease,
-    releaseToDev,
-    defaultToReleaseComparison,
-    releaseToDevComparison,
-  ] = await Promise.all([
-    findPulls(config, repository, 'open', defaultBranch, 'release'),
-    findPulls(config, repository, 'open', 'release', 'dev'),
-    githubApi<GitHubBranchComparison>(
-      config,
-      `/repos/${repositoryPath(repository)}/compare/release...${encodeURIComponent(defaultBranch)}`,
-    ),
-    githubApi<GitHubBranchComparison>(
-      config,
-      `/repos/${repositoryPath(repository)}/compare/dev...release`,
-    ),
-  ])
-  return [
-    ...(comparisonHasSourceFileChanges(defaultToReleaseComparison)
-      ? defaultToRelease.map((pull) => ({
-          number: pull.number,
-          title: pull.title,
-          url: pull.html_url,
-          fromBranch: defaultBranch,
-          toBranch: 'release',
-        }))
-      : []),
-    ...(comparisonHasSourceFileChanges(releaseToDevComparison)
-      ? releaseToDev.map((pull) => ({
-          number: pull.number,
-          title: pull.title,
-          url: pull.html_url,
-          fromBranch: 'release',
-          toBranch: 'dev',
-        }))
-      : []),
+  const routes: BackMergeRoute[] = [
+    'default-to-release',
+    'release-to-dev',
+    'default-to-dev',
   ]
-}
-
-export function backMergeBranches(
-  route: BackMergeRoute,
-  defaultBranch: string,
-) {
-  return route === 'default-to-release'
-    ? { fromBranch: defaultBranch, toBranch: 'release' }
-    : { fromBranch: 'release', toBranch: 'dev' }
+  const results = await Promise.all(
+    routes.map(async (route) => {
+      const { fromBranch, toBranch } = backMergeBranches(route, defaultBranch)
+      const [pulls, comparison] = await Promise.all([
+        findPulls(config, repository, 'open', fromBranch, toBranch),
+        githubApi<GitHubBranchComparison>(
+          config,
+          `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
+        ),
+      ])
+      if (!comparisonHasSourceFileChanges(comparison)) return []
+      return pulls.map((pull) => ({
+        number: pull.number,
+        title: pull.title,
+        url: pull.html_url,
+        fromBranch,
+        toBranch,
+      }))
+    }),
+  )
+  return results.flat()
 }
 
 async function backMergeStep(
@@ -1054,6 +1086,7 @@ async function loadRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
   includeAllVReleases = false,
+  useReleaseBranch = true,
 ): Promise<RepositoryReleaseState> {
   assertConnectedRepository(config, repository)
   const metadata = await githubApi<GitHubRepository>(
@@ -1071,38 +1104,28 @@ async function loadRepositoryReleaseState(
     openPullsPromise,
   ])
   const [promotionSteps, backMergeSteps] = await Promise.all([
-    Promise.all([
-      promotionStep(
-        config,
-        repository,
-        'dev-to-release',
-        metadata.default_branch,
-        openPulls,
+    Promise.all(
+      promotionRoutes(useReleaseBranch).map((route) =>
+        promotionStep(
+          config,
+          repository,
+          route,
+          metadata.default_branch,
+          openPulls,
+        ),
       ),
-      promotionStep(
-        config,
-        repository,
-        'release-to-default',
-        metadata.default_branch,
-        openPulls,
+    ),
+    Promise.all(
+      backMergeRoutes(useReleaseBranch).map((route) =>
+        backMergeStep(
+          config,
+          repository,
+          route,
+          metadata.default_branch,
+          openPulls,
+        ),
       ),
-    ]),
-    Promise.all([
-      backMergeStep(
-        config,
-        repository,
-        'default-to-release',
-        metadata.default_branch,
-        openPulls,
-      ),
-      backMergeStep(
-        config,
-        repository,
-        'release-to-dev',
-        metadata.default_branch,
-        openPulls,
-      ),
-    ]),
+    ),
   ])
   const backMerges = backMergeSteps.flatMap((step) =>
     step.pullRequest
@@ -1131,14 +1154,7 @@ async function loadRepositoryReleaseState(
     latestProductionTagDelta: tagDelta,
     deployedTags: [],
     deploymentLookupFailed: false,
-    productionReady: promotionSteps.some(
-      (step) =>
-        step.route === 'release-to-default' &&
-        (step.filesChanged === 0 ||
-          (step.filesChanged === undefined &&
-            step.commitsAhead === 0 &&
-            step.commitsBehind === 0)),
-    ),
+    productionReady: isProductionReady(promotionSteps, useReleaseBranch),
     promotionSteps,
     backMergeSteps,
     pendingBackMerges: backMerges,
@@ -1151,10 +1167,15 @@ export function getRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
   includeAllVReleases = false,
+  useReleaseBranch = true,
 ): Promise<RepositoryReleaseState> {
   assertConnectedRepository(config, repository)
-  const baseKey = `${config.githubOrg}:${repository}`.toLowerCase()
-  const key = includeAllVReleases ? `${baseKey}:all-v` : baseKey
+  const key = repositoryStateCacheKey(
+    config,
+    repository,
+    useReleaseBranch,
+    includeAllVReleases,
+  )
   const cached = repositoryStateCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
 
@@ -1162,6 +1183,7 @@ export function getRepositoryReleaseState(
     config,
     repository,
     includeAllVReleases,
+    useReleaseBranch,
   )
   repositoryStateCache.set(key, {
     expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
@@ -1286,43 +1308,31 @@ async function loadReleaseControlRoomStateFromSnapshot(
   config: ConnectionConfig,
   repository: string,
   snapshot: ControlRoomGraphqlSnapshot,
+  useReleaseBranch = true,
 ): Promise<ReleaseControlRoomState> {
   const productionReleases = controlRoomProductionReleases(
     snapshot.releases,
     [],
   )
-  const promotionSteps = await Promise.all([
-    promotionStep(
-      config,
-      repository,
-      'dev-to-release',
-      snapshot.defaultBranch,
-      snapshot.openPulls,
-      false,
+  const promotionSteps = await Promise.all(
+    promotionRoutes(useReleaseBranch).map((route) =>
+      promotionStep(
+        config,
+        repository,
+        route,
+        snapshot.defaultBranch,
+        snapshot.openPulls,
+        false,
+      ),
     ),
-    promotionStep(
-      config,
-      repository,
-      'release-to-default',
-      snapshot.defaultBranch,
-      snapshot.openPulls,
-      false,
-    ),
-  ])
+  )
   return {
     repository,
     defaultBranch: snapshot.defaultBranch,
     productionReleases,
     deployedTags: [],
     deploymentLookupFailed: false,
-    productionReady: promotionSteps.some(
-      (step) =>
-        step.route === 'release-to-default' &&
-        (step.filesChanged === 0 ||
-          (step.filesChanged === undefined &&
-            step.commitsAhead === 0 &&
-            step.commitsBehind === 0)),
-    ),
+    productionReady: isProductionReady(promotionSteps, useReleaseBranch),
     promotionSteps,
     jenkinsServices: servicesForRepository(repository),
     fetchedAt: new Date().toISOString(),
@@ -1366,6 +1376,7 @@ async function enrichReleaseControlRoomState(
 async function loadReleaseControlRoomStateFast(
   config: ConnectionConfig,
   repository: string,
+  useReleaseBranch = true,
 ): Promise<ReleaseControlRoomState> {
   assertConnectedRepository(config, repository)
   const [metadata, releases, openPulls] = await Promise.all([
@@ -1380,38 +1391,25 @@ async function loadReleaseControlRoomStateFast(
     listPullsByState(config, repository, 'open'),
   ])
   const productionReleases = controlRoomProductionReleases(releases, [])
-  const promotionSteps = await Promise.all([
-    promotionStep(
-      config,
-      repository,
-      'dev-to-release',
-      metadata.default_branch,
-      openPulls,
-      false,
+  const promotionSteps = await Promise.all(
+    promotionRoutes(useReleaseBranch).map((route) =>
+      promotionStep(
+        config,
+        repository,
+        route,
+        metadata.default_branch,
+        openPulls,
+        false,
+      ),
     ),
-    promotionStep(
-      config,
-      repository,
-      'release-to-default',
-      metadata.default_branch,
-      openPulls,
-      false,
-    ),
-  ])
+  )
   return {
     repository,
     defaultBranch: metadata.default_branch,
     productionReleases,
     deployedTags: [],
     deploymentLookupFailed: false,
-    productionReady: promotionSteps.some(
-      (step) =>
-        step.route === 'release-to-default' &&
-        (step.filesChanged === 0 ||
-          (step.filesChanged === undefined &&
-            step.commitsAhead === 0 &&
-            step.commitsBehind === 0)),
-    ),
+    productionReady: isProductionReady(promotionSteps, useReleaseBranch),
     promotionSteps,
     jenkinsServices: servicesForRepository(repository),
     fetchedAt: new Date().toISOString(),
@@ -1422,8 +1420,13 @@ async function loadReleaseControlRoomStateFast(
 async function loadReleaseControlRoomState(
   config: ConnectionConfig,
   repository: string,
+  useReleaseBranch = true,
 ): Promise<ReleaseControlRoomState> {
-  const fast = await loadReleaseControlRoomStateFast(config, repository)
+  const fast = await loadReleaseControlRoomStateFast(
+    config,
+    repository,
+    useReleaseBranch,
+  )
   try {
     return await enrichReleaseControlRoomState(config, fast)
   } catch {
@@ -1434,12 +1437,17 @@ async function loadReleaseControlRoomState(
 export function getReleaseControlRoomState(
   config: ConnectionConfig,
   repository: string,
+  useReleaseBranch = true,
 ): Promise<ReleaseControlRoomState> {
   assertConnectedRepository(config, repository)
-  const key = `${config.githubOrg}:${repository}`.toLowerCase()
+  const key = controlRoomCacheKey(config, repository, useReleaseBranch)
   const cached = controlRoomStateCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
-  const value = loadReleaseControlRoomState(config, repository)
+  const value = loadReleaseControlRoomState(
+    config,
+    repository,
+    useReleaseBranch,
+  )
   controlRoomStateCache.set(key, {
     expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
     value,
@@ -1486,6 +1494,7 @@ export async function getReleaseControlRoomStatesBatch(
       repository: string,
       state: ReleaseControlRoomState,
     ) => void
+    useReleaseBranch?: boolean
   },
 ): Promise<{
   results: ReleaseControlSyncResult[]
@@ -1493,6 +1502,8 @@ export async function getReleaseControlRoomStatesBatch(
   githubRateLimit: ReturnType<typeof getLatestGitHubRateLimit>
 }> {
   const startedAt = performance.now()
+  const useReleaseBranch = options?.useReleaseBranch ?? true
+  const promotionCompareCount = promotionRoutes(useReleaseBranch).length
   const repositories = [...new Set(requestedRepositories)]
   const results = new Map<string, ReleaseControlSyncResult>()
   const misses: string[] = []
@@ -1509,7 +1520,7 @@ export async function getReleaseControlRoomStatesBatch(
   for (const repository of repositories) {
     assertConnectedRepository(config, repository)
     if (forceRefresh) clearRepositoryCaches(config, repository, [], true)
-    const key = `${config.githubOrg}:${repository}`.toLowerCase()
+    const key = controlRoomCacheKey(config, repository, useReleaseBranch)
     const cached = controlRoomStateCache.get(key)
     if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
       try {
@@ -1565,7 +1576,7 @@ export async function getReleaseControlRoomStatesBatch(
       }
       await Promise.all(
         chunk.map(async (repository) => {
-          const key = `${config.githubOrg}:${repository}`.toLowerCase()
+          const key = controlRoomCacheKey(config, repository, useReleaseBranch)
           const snapshot = snapshots.get(repository)
           try {
             let state: ReleaseControlRoomState
@@ -1580,9 +1591,9 @@ export async function getReleaseControlRoomStatesBatch(
                 config,
                 repository,
                 snapshot,
+                useReleaseBranch,
               )
-              // Two promotion compares; open PR details fetched on demand.
-              restRequests += 2
+              restRequests += promotionCompareCount
               for (const step of state.promotionSteps) {
                 if (step.pullRequest) restRequests += 2
               }
@@ -1594,8 +1605,12 @@ export async function getReleaseControlRoomStatesBatch(
                 'Using the compatibility GitHub sync path.',
                 'github-fallback',
               )
-              state = await loadReleaseControlRoomStateFast(config, repository)
-              restRequests += 5
+              state = await loadReleaseControlRoomStateFast(
+                config,
+                repository,
+                useReleaseBranch,
+              )
+              restRequests += 3 + promotionCompareCount
               for (const step of state.promotionSteps) {
                 if (step.pullRequest) restRequests += 2
               }
@@ -1637,7 +1652,11 @@ export async function getReleaseControlRoomStatesBatch(
       pendingEnrichment.map(async ({ repository, state }) => {
         try {
           const enriched = await enrichReleaseControlRoomState(config, state)
-          const key = `${config.githubOrg}:${repository}`.toLowerCase()
+          const key = controlRoomCacheKey(
+            config,
+            repository,
+            useReleaseBranch,
+          )
           controlRoomStateCache.set(key, {
             expiresAt: Date.now() + REPOSITORY_STATE_CACHE_MS,
             value: Promise.resolve(enriched),
@@ -1708,9 +1727,10 @@ export async function assertProductionBranchesIdentical(
 export async function getRepositoryBackMergeStatus(
   config: ConnectionConfig,
   repository: string,
+  useReleaseBranch = true,
 ) {
   assertConnectedRepository(config, repository)
-  const key = `${config.githubOrg}:${repository}`.toLowerCase()
+  const key = riskCacheKey(config, repository, useReleaseBranch)
   const cached = riskCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
 
@@ -1719,20 +1739,11 @@ export async function getRepositoryBackMergeStatus(
       config,
       `/repos/${repositoryPath(repository)}`,
     )
-    const steps = await Promise.all([
-      backMergeStep(
-        config,
-        repository,
-        'default-to-release',
-        metadata.default_branch,
+    const steps = await Promise.all(
+      backMergeRoutes(useReleaseBranch).map((route) =>
+        backMergeStep(config, repository, route, metadata.default_branch),
       ),
-      backMergeStep(
-        config,
-        repository,
-        'release-to-dev',
-        metadata.default_branch,
-      ),
-    ])
+    )
     const pendingPulls = steps.flatMap((step) =>
       step.state === 'pr_open' && step.pullRequest
         ? [
@@ -1759,6 +1770,7 @@ export async function getRepositoryBackMergeStatus(
 export async function getRepositoryRisks(
   config: ConnectionConfig,
   repositories: string[],
+  useReleaseBranch = true,
 ): Promise<RepositoryRisk[]> {
   const results: RepositoryRisk[] = new Array(repositories.length)
   let cursor = 0
@@ -1770,6 +1782,7 @@ export async function getRepositoryRisks(
         const backMergeStatus = await getRepositoryBackMergeStatus(
           config,
           repository,
+          useReleaseBranch,
         )
         results[index] = {
           repository,
@@ -1987,13 +2000,14 @@ export async function mergePromotionPullRequest(
     config,
     `/repos/${repositoryPath(repository)}/pulls/${pullNumber}`,
   )
-  const validRoute =
-    (pull.head.ref === 'dev' && pull.base.ref === 'release') ||
-    (pull.head.ref === 'release' &&
-      pull.base.ref === metadata.default_branch)
+  const validRoute = isPromotionPullRoute(
+    pull.head.ref,
+    pull.base.ref,
+    metadata.default_branch,
+  )
   if (!validRoute) {
     throw new ProviderError(
-      'Only Dev → Release or Release → default branch PRs can be merged here.',
+      'Only Dev → Release, Release → default, or Dev → default branch PRs can be merged here.',
       'INVALID_PROMOTION_PR',
       'github',
       409,
@@ -2056,13 +2070,14 @@ export async function mergeBackMergePullRequest(
     config,
     `/repos/${repositoryPath(repository)}/pulls/${pullNumber}`,
   )
-  const validRoute =
-    (pull.head.ref === metadata.default_branch &&
-      pull.base.ref === 'release') ||
-    (pull.head.ref === 'release' && pull.base.ref === 'dev')
+  const validRoute = isBackMergePullRoute(
+    pull.head.ref,
+    pull.base.ref,
+    metadata.default_branch,
+  )
   if (!validRoute) {
     throw new ProviderError(
-      'Only default → release or release → dev back-merge PRs can be merged here.',
+      'Only default → release, release → dev, or default → dev back-merge PRs can be merged here.',
       'INVALID_BACK_MERGE_PR',
       'github',
       409,
