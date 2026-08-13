@@ -6,6 +6,7 @@ import type {
   RepositoryPullRequestList,
 } from '../../shared/types'
 import { ConfirmDialog } from './ConfirmDialog'
+import { readUseReleaseBranch } from '../../shared/branchModel'
 
 type Props = {
   repository: string
@@ -23,6 +24,7 @@ function relativeDate(value: string) {
 }
 
 export function RepositoryPullRequests({ repository }: Props) {
+  const useReleaseBranch = readUseReleaseBranch()
   const [stateFilter, setStateFilter] = useState<'open' | 'closed' | 'all'>(
     'open',
   )
@@ -44,6 +46,10 @@ export function RepositoryPullRequests({ repository }: Props) {
     setAuthorFilter('')
     setResult(undefined)
   }, [repository])
+
+  useEffect(() => {
+    if (!useReleaseBranch && baseFilter === 'release') setBaseFilter('')
+  }, [baseFilter, useReleaseBranch])
 
   useEffect(() => {
     let active = true
@@ -116,7 +122,7 @@ export function RepositoryPullRequests({ repository }: Props) {
 
   const branchOptions = [
     'dev',
-    'release',
+    ...(useReleaseBranch ? ['release'] : []),
     ...(result?.defaultBranch &&
     !['dev', 'release'].includes(result.defaultBranch)
       ? [result.defaultBranch]

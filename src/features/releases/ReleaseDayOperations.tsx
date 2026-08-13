@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../shared/api";
+import {
+  promotionBranches,
+  promotionRouteLabel,
+  promotionRoutes,
+  readUseReleaseBranch,
+} from "../../shared/branchModel";
 import type {
   BuildStatus,
   CreatedProductionRelease,
@@ -369,6 +375,10 @@ export function ReleaseDayOperations({
   productionEnabled,
   onClose,
 }: Props) {
+  const useReleaseBranch = readUseReleaseBranch();
+  const hopRoutes = promotionRoutes(useReleaseBranch);
+  const firstHop = hopRoutes[0];
+  const lastHop = hopRoutes[hopRoutes.length - 1];
   const [session, setSession] = useState(() => restoreSession(dashboard));
   const restoredRepositoryStates = useRef(
     restoreRepositoryStates(dashboard),
@@ -1306,22 +1316,21 @@ export function ReleaseDayOperations({
     serviceCount: selected.length,
     priorMsPerService: syncPriorMsRef.current,
   });
-  const devPrsReady = everySelected((repository) => {
-    const step = routeStep(states[repository], "dev-to-release");
+  const firstPrsReady = everySelected((repository) => {
+    const step = routeStep(states[repository], firstHop);
     return step?.state === "pr_open" || step?.state === "up_to_date";
   });
-  const devMerged = everySelected(
+  const firstMerged = everySelected(
     (repository) =>
-      routeStep(states[repository], "dev-to-release")?.state === "up_to_date",
+      routeStep(states[repository], firstHop)?.state === "up_to_date",
   );
-  const defaultPrsReady = everySelected((repository) => {
-    const step = routeStep(states[repository], "release-to-default");
+  const lastPrsReady = everySelected((repository) => {
+    const step = routeStep(states[repository], lastHop);
     return step?.state === "pr_open" || step?.state === "up_to_date";
   });
-  const defaultMerged = everySelected(
+  const lastMerged = everySelected(
     (repository) =>
-      routeStep(states[repository], "release-to-default")?.state ===
-      "up_to_date",
+      routeStep(states[repository], lastHop)?.state === "up_to_date",
   );
   const releasesCreated = everySelected((repository) => {
     const release = session.repositories[repository]?.productionRelease;
@@ -1404,21 +1413,17 @@ export function ReleaseDayOperations({
   }
 
   async function createPullRequests(route: PromotionRoute) {
-    const title =
-      route === "dev-to-release"
-        ? "Create Dev → Release PRs"
-        : "Create Release → Default PRs";
+    const title = `Create ${promotionRouteLabel(route)} PRs`;
     await runAction(
       title,
       async (repository) => {
         const step = routeStep(states[repository], route);
-        const fromBranch =
-          step?.fromBranch ?? (route === "dev-to-release" ? "dev" : "release");
-        const toBranch =
-          step?.toBranch ??
-          (route === "dev-to-release"
-            ? "release"
-            : (states[repository]?.defaultBranch ?? "default"));
+        const fallback = promotionBranches(
+          route,
+          states[repository]?.defaultBranch ?? "main",
+        );
+        const fromBranch = step?.fromBranch ?? fallback.fromBranch;
+        const toBranch = step?.toBranch ?? fallback.toBranch;
         log(
           "info",
           `Checking for an open ${fromBranch} → ${toBranch} PR.`,
@@ -1494,19 +1499,13 @@ export function ReleaseDayOperations({
       {
         sequential: true,
         reconcile: false,
-        attemptLabel:
-          route === "dev-to-release"
-            ? "Dev → Release PR creation"
-            : "Release → Default PR creation",
+        attemptLabel: `${promotionRouteLabel(route)} PR creation`,
       },
     );
   }
 
   async function mergePullRequests(route: PromotionRoute) {
-    const title =
-      route === "dev-to-release"
-        ? "Merge Dev → Release PRs"
-        : "Merge Release → Default PRs";
+    const title = `Merge ${promotionRouteLabel(route)} PRs`;
     await runAction(
       title,
       async (repository) => {
@@ -1607,15 +1606,16 @@ export function ReleaseDayOperations({
                   };
                 }
                 if (
-                  route === "dev-to-release" &&
-                  item.route === "release-to-default"
+                  route === firstHop &&
+                  firstHop !== lastHop &&
+                  item.route === lastHop
                 ) {
                   return { ...item, state: "needs_pr" };
                 }
                 return item;
               }),
               productionReady:
-                route === "release-to-default"
+                route === lastHop
                   ? true
                   : repositoryState.productionReady,
               fetchedAt: new Date().toISOString(),
@@ -1631,10 +1631,7 @@ export function ReleaseDayOperations({
       {
         sequential: true,
         reconcile: false,
-        attemptLabel:
-          route === "dev-to-release"
-            ? "Dev → Release PR merge"
-            : "Release → Default PR merge",
+        attemptLabel: `${promotionRouteLabel(route)} PR merge`,
       },
     );
   }
@@ -2260,7 +2257,7 @@ export function ReleaseDayOperations({
           <article className="release-day-step">
             <span>1</span>
             <div>
-              <strong>Create Dev → Release PRs</strong>
+              <strong>Create {promotionRouteLabel(firstHop)} PRs</strong>
             </div>
             <button
               className="primary-button"
@@ -2268,84 +2265,92 @@ export function ReleaseDayOperations({
               disabled={
                 refreshing || Boolean(busyAction) || selected.length === 0
               }
-              onClick={() => void createPullRequests("dev-to-release")}
+              onClick={() => void createPullRequests(firstHop)}
             >
-              {busyAction === "Create Dev → Release PRs"
+              {busyAction === `Create ${promotionRouteLabel(firstHop)} PRs`
                 ? "Creating…"
-                : devPrsReady
+                : firstPrsReady
                   ? "Recheck / create"
                   : "Create PRs"}
             </button>
           </article>
           <article
-            className={`release-day-step ${!devPrsReady ? "locked" : ""}`}
+            className={`release-day-step ${!firstPrsReady ? "locked" : ""}`}
           >
             <span>2</span>
             <div>
-              <strong>Merge Dev → Release PRs</strong>
+              <strong>Merge {promotionRouteLabel(firstHop)} PRs</strong>
             </div>
             <button
               className="primary-button"
               type="button"
-              disabled={!devPrsReady || refreshing || Boolean(busyAction)}
-              onClick={() => void mergePullRequests("dev-to-release")}
+              disabled={!firstPrsReady || refreshing || Boolean(busyAction)}
+              onClick={() => void mergePullRequests(firstHop)}
             >
-              {busyAction === "Merge Dev → Release PRs"
+              {busyAction === `Merge ${promotionRouteLabel(firstHop)} PRs`
                 ? "Merging…"
-                : devMerged
+                : firstMerged
                   ? "All merged"
                   : "Merge ready PRs"}
             </button>
           </article>
-          <article className={`release-day-step ${!devMerged ? "locked" : ""}`}>
-            <span>3</span>
-            <div>
-              <strong>Create Release → Default PRs</strong>
-            </div>
-            <button
-              className="primary-button"
-              type="button"
-              disabled={!devMerged || refreshing || Boolean(busyAction)}
-              onClick={() => void createPullRequests("release-to-default")}
-            >
-              {busyAction === "Create Release → Default PRs"
-                ? "Creating…"
-                : defaultPrsReady
-                  ? "Recheck / create"
-                  : "Create PRs"}
-            </button>
-          </article>
+          {useReleaseBranch && (
+            <>
+              <article
+                className={`release-day-step ${!firstMerged ? "locked" : ""}`}
+              >
+                <span>3</span>
+                <div>
+                  <strong>Create {promotionRouteLabel(lastHop)} PRs</strong>
+                </div>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={!firstMerged || refreshing || Boolean(busyAction)}
+                  onClick={() => void createPullRequests(lastHop)}
+                >
+                  {busyAction === `Create ${promotionRouteLabel(lastHop)} PRs`
+                    ? "Creating…"
+                    : lastPrsReady
+                      ? "Recheck / create"
+                      : "Create PRs"}
+                </button>
+              </article>
+              <article
+                className={`release-day-step ${!lastPrsReady ? "locked" : ""}`}
+              >
+                <span>4</span>
+                <div>
+                  <strong>Merge {promotionRouteLabel(lastHop)} PRs</strong>
+                </div>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={
+                    !lastPrsReady || refreshing || Boolean(busyAction)
+                  }
+                  onClick={() => void mergePullRequests(lastHop)}
+                >
+                  {busyAction === `Merge ${promotionRouteLabel(lastHop)} PRs`
+                    ? "Merging…"
+                    : lastMerged
+                      ? "All merged"
+                      : "Merge ready PRs"}
+                </button>
+              </article>
+            </>
+          )}
           <article
-            className={`release-day-step ${!defaultPrsReady ? "locked" : ""}`}
+            className={`release-day-step ${!lastMerged ? "locked" : ""}`}
           >
-            <span>4</span>
-            <div>
-              <strong>Merge Release → Default PRs</strong>
-            </div>
-            <button
-              className="primary-button"
-              type="button"
-              disabled={!defaultPrsReady || refreshing || Boolean(busyAction)}
-              onClick={() => void mergePullRequests("release-to-default")}
-            >
-              {busyAction === "Merge Release → Default PRs"
-                ? "Merging…"
-                : defaultMerged
-                  ? "All merged"
-                  : "Merge ready PRs"}
-            </button>
-          </article>
-          <article
-            className={`release-day-step ${!defaultMerged ? "locked" : ""}`}
-          >
-            <span>5</span>
+            <span>{useReleaseBranch ? 5 : 3}</span>
             <div>
               <strong>Create production releases</strong>
             </div>
             <button
               className="primary-button"
               type="button"
-              disabled={!defaultMerged || refreshing || Boolean(busyAction)}
+              disabled={!lastMerged || refreshing || Boolean(busyAction)}
               onClick={() => void createProductionReleases()}
             >
               {busyAction === "Create production releases"
@@ -2358,7 +2363,7 @@ export function ReleaseDayOperations({
           <article
             className={`release-day-step ${!releasesCreated ? "locked" : ""}`}
           >
-            <span>6</span>
+            <span>{useReleaseBranch ? 6 : 4}</span>
             <div>
               <strong>Monitor builds and deploy</strong>
             </div>
@@ -2404,8 +2409,10 @@ export function ReleaseDayOperations({
                   </th>
                   <th scope="col">Service</th>
                   <th scope="col">Developers</th>
-                  <th scope="col">Dev → Release</th>
-                  <th scope="col">Release → Default</th>
+                  <th scope="col">{promotionRouteLabel(firstHop)}</th>
+                  {useReleaseBranch && (
+                    <th scope="col">{promotionRouteLabel(lastHop)}</th>
+                  )}
                   <th scope="col">Production build</th>
                   <th scope="col">Deploy</th>
                 </tr>
@@ -2464,26 +2471,26 @@ export function ReleaseDayOperations({
                             deployment.status === "succeeded"),
                       ),
                     );
-                  const dev = phaseState(
+                  const first = phaseState(
                     states[repository],
-                    "dev-to-release",
-                    devPrsReady ? "merge" : "create",
+                    firstHop,
+                    firstPrsReady ? "merge" : "create",
                     syncStatus,
                   );
-                  const main = phaseState(
+                  const last = phaseState(
                     states[repository],
-                    "release-to-default",
-                    defaultPrsReady ? "merge" : "create",
+                    lastHop,
+                    lastPrsReady ? "merge" : "create",
                     syncStatus,
                   );
-                  const devOperation =
+                  const firstOperation =
                     cellOperation?.repository === repository &&
-                    cellOperation.route === "dev-to-release"
+                    cellOperation.route === firstHop
                       ? cellOperation
                       : undefined;
-                  const mainOperation =
+                  const lastOperation =
                     cellOperation?.repository === repository &&
-                    cellOperation.route === "release-to-default"
+                    cellOperation.route === lastHop
                       ? cellOperation
                       : undefined;
                   return (
@@ -2585,24 +2592,22 @@ export function ReleaseDayOperations({
                         </div>
                       </td>
                       <td>
-                        {devOperation ? (
+                        {firstOperation ? (
                           <span className="release-day-cell-operation">
                             <span className="spinner" />
-                            {devOperation.label}
+                            {firstOperation.label}
                           </span>
                         ) : (
                           <>
-                            <span className={`batch-status ${dev.tone}`}>
-                              {dev.label}
+                            <span className={`batch-status ${first.tone}`}>
+                              {first.label}
                             </span>
-                            {routeStep(states[repository], "dev-to-release")
+                            {routeStep(states[repository], firstHop)
                               ?.pullRequest && (
                               <a
                                 href={
-                                  routeStep(
-                                    states[repository],
-                                    "dev-to-release",
-                                  )?.pullRequest?.url
+                                  routeStep(states[repository], firstHop)
+                                    ?.pullRequest?.url
                                 }
                                 target="_blank"
                                 rel="noreferrer"
@@ -2613,25 +2618,24 @@ export function ReleaseDayOperations({
                           </>
                         )}
                       </td>
+                      {useReleaseBranch && (
                       <td>
-                        {mainOperation ? (
+                        {lastOperation ? (
                           <span className="release-day-cell-operation">
                             <span className="spinner" />
-                            {mainOperation.label}
+                            {lastOperation.label}
                           </span>
                         ) : (
                           <>
-                            <span className={`batch-status ${main.tone}`}>
-                              {main.label}
+                            <span className={`batch-status ${last.tone}`}>
+                              {last.label}
                             </span>
-                            {routeStep(states[repository], "release-to-default")
+                            {routeStep(states[repository], lastHop)
                               ?.pullRequest && (
                               <a
                                 href={
-                                  routeStep(
-                                    states[repository],
-                                    "release-to-default",
-                                  )?.pullRequest?.url
+                                  routeStep(states[repository], lastHop)
+                                    ?.pullRequest?.url
                                 }
                                 target="_blank"
                                 rel="noreferrer"
@@ -2642,6 +2646,7 @@ export function ReleaseDayOperations({
                           </>
                         )}
                       </td>
+                      )}
                       <td>
                         {existingRelease ? (
                           <div className="release-day-production-build">

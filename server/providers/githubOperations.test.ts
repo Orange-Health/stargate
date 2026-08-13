@@ -433,6 +433,13 @@ describe('promotionBranches', () => {
       toBranch: 'master',
     })
   })
+
+  it('promotes directly from dev to the default branch', () => {
+    expect(promotionBranches('dev-to-default', 'main')).toEqual({
+      fromBranch: 'dev',
+      toBranch: 'main',
+    })
+  })
 })
 
 describe('backMergeBranches', () => {
@@ -446,6 +453,13 @@ describe('backMergeBranches', () => {
   it('syncs release changes back to dev', () => {
     expect(backMergeBranches('release-to-dev', 'main')).toEqual({
       fromBranch: 'release',
+      toBranch: 'dev',
+    })
+  })
+
+  it('back-merges the default branch directly into dev', () => {
+    expect(backMergeBranches('default-to-dev', 'master')).toEqual({
+      fromBranch: 'master',
       toBranch: 'dev',
     })
   })
@@ -1271,6 +1285,68 @@ describe('repository state cache', () => {
       ),
     ).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(7)
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+  })
+
+  it('keeps release-branch and direct-mode repository state caches separate', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/service-api')) {
+        return new Response(
+          JSON.stringify({
+            full_name: 'Orange-Health/service-api',
+            default_branch: 'main',
+          }),
+        )
+      }
+      if (url.includes('/releases?')) return new Response(JSON.stringify([]))
+      if (url.includes('/pulls?')) return new Response(JSON.stringify([]))
+      if (url.includes('/compare/')) {
+        return new Response(
+          JSON.stringify({ ahead_by: 0, behind_by: 0, files: [] }),
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    clearRepositoryCaches(config, 'Orange-Health/service-api')
+
+    const withRelease = await getRepositoryReleaseState(
+      config,
+      'Orange-Health/service-api',
+      false,
+      true,
+    )
+    const direct = await getRepositoryReleaseState(
+      config,
+      'Orange-Health/service-api',
+      false,
+      false,
+    )
+
+    expect(withRelease.promotionSteps.map((step) => step.route)).toEqual([
+      'dev-to-release',
+      'release-to-default',
+    ])
+    expect(direct.promotionSteps.map((step) => step.route)).toEqual([
+      'dev-to-default',
+    ])
+    expect(direct.backMergeSteps.map((step) => step.route)).toEqual([
+      'default-to-dev',
+    ])
+    expect(direct.productionReady).toBe(true)
+    expect(withRelease).not.toBe(direct)
+    expect(fetchMock).toHaveBeenCalledTimes(12)
     clearRepositoryCaches(config, 'Orange-Health/service-api')
   })
 

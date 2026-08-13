@@ -274,7 +274,10 @@ export type TrackedProductionRelease = {
   runs: WorkflowRun[]
 }
 
-export type PromotionRoute = 'dev-to-release' | 'release-to-default'
+export type PromotionRoute =
+  | 'dev-to-release'
+  | 'release-to-default'
+  | 'dev-to-default'
 
 export type PromotionPullRequest = {
   number: number
@@ -316,7 +319,10 @@ export type PendingBackMerge = {
   toBranch: string
 }
 
-export type BackMergeRoute = 'default-to-release' | 'release-to-dev'
+export type BackMergeRoute =
+  | 'default-to-release'
+  | 'release-to-dev'
+  | 'default-to-dev'
 
 export type BackMergeStep = {
   route: BackMergeRoute
