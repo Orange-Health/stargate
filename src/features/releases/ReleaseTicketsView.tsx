@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { EligibilityReason, ReleaseItem } from "../../shared/types";
 import {
   listTicketAssignees,
@@ -119,6 +119,7 @@ type Props = {
   onSearchChange: (value: string) => void;
   onSelectTicket: (issueKey: string) => void;
   onRemoveTicket: () => void;
+  onRefreshTicket: (issueKey: string) => Promise<void>;
 };
 
 export function ReleaseTicketsView({
@@ -134,7 +135,10 @@ export function ReleaseTicketsView({
   onSearchChange,
   onSelectTicket,
   onRemoveTicket,
+  onRefreshTicket,
 }: Props) {
+  const [refreshingTicket, setRefreshingTicket] = useState(false);
+  const [refreshError, setRefreshError] = useState("");
   const query = ticketSearch.trim().toLowerCase();
   const assignees = listTicketAssignees(tickets);
   const hasUnassigned = tickets.some(
@@ -157,6 +161,23 @@ export function ReleaseTicketsView({
   const selected =
     filtered.find((ticket) => ticket.issue.key === selectedIssueKey) ??
     tickets.find((ticket) => ticket.issue.key === selectedIssueKey);
+
+  async function refreshSelectedTicket() {
+    if (!selected || refreshingTicket) return;
+    setRefreshingTicket(true);
+    setRefreshError("");
+    try {
+      await onRefreshTicket(selected.issue.key);
+    } catch (reason) {
+      setRefreshError(
+        reason instanceof Error
+          ? reason.message
+          : "Could not refresh this ticket.",
+      );
+    } finally {
+      setRefreshingTicket(false);
+    }
+  }
 
   const counts = {
     all: scoped.length,
@@ -269,7 +290,10 @@ export function ReleaseTicketsView({
                   key={ticket.issue.key}
                   ticket={ticket}
                   selected={selected?.issue.key === ticket.issue.key}
-                  onClick={() => onSelectTicket(ticket.issue.key)}
+                  onClick={() => {
+                    setRefreshError("");
+                    onSelectTicket(ticket.issue.key);
+                  }}
                 />
               ))
             ) : (
@@ -297,12 +321,26 @@ export function ReleaseTicketsView({
               <button
                 className="secondary-button"
                 type="button"
+                onClick={() => void refreshSelectedTicket()}
+                disabled={refreshingTicket}
+              >
+                {refreshingTicket ? "Refreshing…" : "↻ Refresh PRs"}
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
                 onClick={onRemoveTicket}
+                disabled={refreshingTicket}
               >
                 Remove from release
               </button>
             </div>
           </div>
+          {refreshError && (
+            <div className="alert error detail-alert" role="alert">
+              <strong>Could not refresh ticket.</strong> {refreshError}
+            </div>
+          )}
           {removeError && (
             <div className="alert warning detail-alert">
               <strong>Could not remove ticket.</strong> {removeError}

@@ -10,9 +10,11 @@ import type {
   DashboardProgress,
   JiraVersion,
   ReleaseDashboard,
+  ReleaseItem,
   ServiceRelease,
 } from './shared/types'
 import { removeIssueFromDashboard } from './features/releases/releaseTickets'
+import { replaceIssueItemsInDashboard } from './shared/releaseDashboard'
 
 function App() {
   const initialSelection = new URLSearchParams(window.location.search)
@@ -202,6 +204,14 @@ function App() {
     )
   }
 
+  function updateTicket(issueKey: string, items: ReleaseItem[]) {
+    setDashboard((current) =>
+      current
+        ? replaceIssueItemsInDashboard(current, issueKey, items)
+        : current,
+    )
+  }
+
   if (checkingConnection) {
     return (
       <main className="boot-state">
@@ -234,6 +244,7 @@ function App() {
       }
       onServiceUpdated={updateService}
       onIssueRemoved={removeIssue}
+      onTicketRefreshed={updateTicket}
       onDisconnect={() => void disconnect()}
     />
   )

@@ -462,6 +462,10 @@ export type ServiceRefreshResult = {
   repositoryState?: RepositoryReleaseState
 }
 
+export type TicketRefreshResult = {
+  items: ReleaseItem[]
+}
+
 export type RepositoryRisk = {
   repository: string
   backMergePending: boolean

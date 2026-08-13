@@ -1407,6 +1407,7 @@ body[data-modal-open] {
 .ticket-detail-panel .detail-actions {
   align-items: center;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .ticket-detail-panel .service-operations {

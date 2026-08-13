@@ -54,17 +54,16 @@ export function ticketReadiness(items: ReleaseTicketItem[]): TicketReadiness {
   const withPulls = items.filter((item) => item.pullRequest)
   if (withPulls.length === 0) return 'unmatched'
   if (withPulls.every(isMergedItem)) return 'merged'
-  if (withPulls.some((item) => item.eligible)) return 'ready'
+  const open = withPulls.filter((item) => !isMergedItem(item))
   if (
-    withPulls.some(
-      (item) =>
-        !isMergedItem(item) &&
-        item.blockingReasons.some((reason) => HARD_BLOCKERS.includes(reason)),
+    open.some((item) =>
+      item.blockingReasons.some((reason) => HARD_BLOCKERS.includes(reason)),
     )
   ) {
     return 'blocked'
   }
-  return 'pending'
+  if (open.some((item) => !item.eligible)) return 'pending'
+  return 'ready'
 }
 
 export function groupReleaseTickets(

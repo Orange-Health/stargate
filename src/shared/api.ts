@@ -34,6 +34,7 @@ import type {
   RepositoryPullRequestList,
   RepositoryRisk,
   ServiceRefreshResult,
+  TicketRefreshResult,
   EitriBuildsResult,
   TriggerDeploymentInput,
   TriggerEitriDeploymentInput,
@@ -275,6 +276,18 @@ export const api = {
           issueKeys,
           includeRepositoryState,
         }),
+      },
+    ),
+  refreshTicket: (
+    versionId: string,
+    issueKey: string,
+    repositories: string[] = [],
+  ) =>
+    request<TicketRefreshResult>(
+      `/api/releases/${encodeURIComponent(versionId)}/ticket-refresh`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ issueKey, repositories }),
       },
     ),
   createPromotionPullRequest: (input: CreatePromotionPullRequestInput) =>

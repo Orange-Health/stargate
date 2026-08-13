@@ -9,6 +9,7 @@ import {
   ticketReadiness,
   UNASSIGNED_ASSIGNEE,
 } from './releaseTickets'
+import { replaceIssueItemsInDashboard } from '../../shared/releaseDashboard'
 
 function item(
   key: string,
@@ -153,6 +154,35 @@ describe('groupReleaseTickets', () => {
         }),
       ]),
     ).toBe('pending')
+    expect(
+      ticketReadiness([
+        item('OH-F', { eligible: true, blockingReasons: [] }),
+        item('OH-F', {
+          blockingReasons: ['REVIEW_REQUIRED'],
+          pull: { id: 2, number: 9, repository: 'orange/service-web' },
+        }),
+      ]),
+    ).toBe('blocked')
+    expect(
+      ticketReadiness([
+        item('OH-G', { eligible: true, blockingReasons: [] }),
+        item('OH-G', {
+          eligible: false,
+          blockingReasons: [],
+          warningReasons: ['CHECKS_PENDING'],
+          pull: { id: 2, number: 9, repository: 'orange/service-web' },
+        }),
+      ]),
+    ).toBe('pending')
+    expect(
+      ticketReadiness([
+        item('OH-H', { eligible: true, blockingReasons: [] }),
+        item('OH-H', {
+          blockingReasons: ['ALREADY_MERGED'],
+          pull: { id: 2, number: 9, merged: true, repository: 'orange/service-web' },
+        }),
+      ]),
+    ).toBe('ready')
   })
 
   it('filters ticket lists', () => {
@@ -226,5 +256,40 @@ describe('groupReleaseTickets', () => {
         service.items.map((item) => item.issue.key),
       ),
     ).toEqual(['OH-1', 'OH-2', 'OH-1', 'OH-3'])
+  })
+
+  it('replaces one ticket\'s PR rows without a full dashboard reload', () => {
+    const ready = item('OH-2', {
+      eligible: true,
+      blockingReasons: [],
+      pull: { reviewDecision: 'approved', mergeable: true },
+    })
+    const updated = replaceIssueItemsInDashboard(dashboard, 'OH-2', [ready])
+    const serviceApi = updated.services.find(
+      (service) => service.repository === 'orange/service-api',
+    )
+    expect(serviceApi?.items.map((entry) => entry.issue.key)).toEqual([
+      'OH-1',
+      'OH-2',
+    ])
+    expect(serviceApi?.items.find((entry) => entry.issue.key === 'OH-2')?.eligible).toBe(
+      true,
+    )
+    expect(serviceApi?.blockedCount).toBe(0)
+    expect(serviceApi?.eligibleCount).toBe(2)
+    expect(updated.unmatched.map((entry) => entry.issue.key)).toEqual(['OH-9'])
+
+    const unmatched = replaceIssueItemsInDashboard(dashboard, 'OH-2', [
+      item('OH-2', { pull: null, blockingReasons: ['NO_MATCHING_PR'] }),
+    ])
+    expect(
+      unmatched.services
+        .find((service) => service.repository === 'orange/service-api')
+        ?.items.map((entry) => entry.issue.key),
+    ).toEqual(['OH-1'])
+    expect(unmatched.unmatched.map((entry) => entry.issue.key)).toEqual([
+      'OH-2',
+      'OH-9',
+    ])
   })
 })

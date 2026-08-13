@@ -124,6 +124,7 @@ type Props = {
   onRefresh: () => void | Promise<void>;
   onServiceUpdated?: (service: ServiceRelease) => void;
   onIssueRemoved?: (issueKey: string) => void;
+  onTicketRefreshed?: (issueKey: string, items: ReleaseItem[]) => void;
   onDisconnect: () => void;
 };
 
@@ -866,6 +867,7 @@ export function ReleaseOverview({
   onRefresh,
   onServiceUpdated,
   onIssueRemoved,
+  onTicketRefreshed,
   onDisconnect,
 }: Props) {
   const [releaseRepository, setReleaseRepository] = useState("");
@@ -1892,6 +1894,27 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                   if (!selectedIssueKey) return;
                   setRemoveTicketError("");
                   setPendingRemoveIssueKey(selectedIssueKey);
+                }}
+                onRefreshTicket={async (issueKey) => {
+                  const ticket = releaseTickets.find(
+                    (entry) => entry.issue.key === issueKey,
+                  );
+                  const repositories = [
+                    ...new Set(
+                      (ticket?.items ?? [])
+                        .map((item) => item.repository)
+                        .filter(
+                          (repository): repository is string =>
+                            Boolean(repository),
+                        ),
+                    ),
+                  ];
+                  const result = await api.refreshTicket(
+                    selectedVersionId,
+                    issueKey,
+                    repositories,
+                  );
+                  onTicketRefreshed?.(issueKey, result.items);
                 }}
               />
             ) : (

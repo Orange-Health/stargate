@@ -148,11 +148,40 @@ function cacheConditionalResponse(
   }
 }
 
+function clearSearchCaches(searchIssueKeys: string[]) {
+  const normalizedIssueKeys = searchIssueKeys.map((key) => key.toLowerCase())
+  if (normalizedIssueKeys.length === 0) return
+  for (const key of searchCache.keys()) {
+    if (
+      normalizedIssueKeys.some((issueKey) =>
+        key.toLowerCase().endsWith(`:${issueKey}`),
+      )
+    ) {
+      searchCache.delete(key)
+    }
+  }
+  for (const cache of knownConditionalCaches) {
+    for (const key of cache.keys()) {
+      const normalized = key.toLowerCase()
+      if (
+        normalized.includes('/search/') &&
+        normalizedIssueKeys.some((issueKey) => normalized.includes(issueKey))
+      ) {
+        cache.delete(key)
+      }
+    }
+  }
+}
+
 export function clearGitHubProviderCache(
   repository?: string,
   searchIssueKeys: string[] = [],
 ) {
   if (!repository) {
+    if (searchIssueKeys.length > 0) {
+      clearSearchCaches(searchIssueKeys)
+      return
+    }
     pullCache.clear()
     searchCache.clear()
     latestRateLimit = undefined
@@ -165,29 +194,11 @@ export function clearGitHubProviderCache(
   for (const key of pullCache.keys()) {
     if (key.startsWith(prefix)) pullCache.delete(key)
   }
-  const normalizedIssueKeys = searchIssueKeys.map((key) => key.toLowerCase())
-  for (const key of searchCache.keys()) {
-    if (
-      normalizedIssueKeys.some((issueKey) =>
-        key.toLowerCase().endsWith(`:${issueKey}`),
-      )
-    ) {
-      searchCache.delete(key)
-    }
-  }
+  clearSearchCaches(searchIssueKeys)
   const repositoryMarker = `/repos/${repository.toLowerCase()}`
   for (const cache of knownConditionalCaches) {
     for (const key of cache.keys()) {
-      const normalized = key.toLowerCase()
-      if (
-        normalized.includes(repositoryMarker) ||
-        (normalized.includes('/search/') &&
-          normalizedIssueKeys.some((issueKey) =>
-            normalized.includes(issueKey),
-          ))
-      ) {
-        cache.delete(key)
-      }
+      if (key.toLowerCase().includes(repositoryMarker)) cache.delete(key)
     }
   }
 }

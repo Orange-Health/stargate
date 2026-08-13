@@ -215,15 +215,12 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_REPOSITORY')
   })
 
-  it('validates focused service data refresh requests', async () => {
+  it('validates focused ticket data refresh requests', async () => {
     const response = await request(createApp())
-      .post('/api/releases/10351/service-refresh')
-      .send({
-        repository: 'Orange-Health/accounts',
-        issueKeys: ['not-a-ticket'],
-      })
+      .post('/api/releases/10351/ticket-refresh')
+      .send({ issueKey: 'not-a-ticket' })
     expect(response.status).toBe(400)
-    expect(response.body.error.code).toBe('INVALID_SERVICE_REFRESH')
+    expect(response.body.error.code).toBe('INVALID_TICKET_REFRESH')
   })
 
   it('validates remove-issue-from-release requests', async () => {

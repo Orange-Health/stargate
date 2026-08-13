@@ -815,6 +815,47 @@ describe('targeted search invalidation', () => {
     ).toHaveLength(1)
   })
 
+  it('invalidates one issue search without a repository', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.includes('/search/issues')) {
+        return new Response(
+          JSON.stringify({ items: [], incomplete_results: false }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+    const issues = [{ key: 'OH-123' }, { key: 'OH-456' }]
+
+    await discoverPullRequests(config, issues)
+    clearGitHubProviderCache(undefined, ['OH-123'])
+    await discoverPullRequests(config, issues)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        decodeURIComponent(String(input)).includes('OH-123'),
+      ),
+    ).toHaveLength(2)
+    expect(
+      fetchMock.mock.calls.filter(([input]) =>
+        decodeURIComponent(String(input)).includes('OH-456'),
+      ),
+    ).toHaveLength(1)
+  })
+
   it('batches multiple issue keys into one OR search query', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = decodeURIComponent(String(input))

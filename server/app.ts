@@ -66,6 +66,7 @@ import {
   aggregateRelease,
   clearReleaseCache,
   refreshServiceRelease,
+  refreshTicketRelease,
 } from './services/releaseAggregator.js'
 import { getDeploymentFreshness } from './services/deploymentFreshness.js'
 import {
@@ -269,6 +270,19 @@ const serviceRefreshSchema = z.object({
     .min(1)
     .max(200),
   includeRepositoryState: z.boolean().optional().default(true),
+})
+const ticketRefreshSchema = z.object({
+  issueKey: z.string().regex(/^[A-Z][A-Z0-9]+-\d+$/i),
+  repositories: z
+    .array(
+      z
+        .string()
+        .regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/)
+        .refine((value) => !['.', '..'].includes(value.split('/')[1])),
+    )
+    .max(50)
+    .optional()
+    .default([]),
 })
 const markReleaseIssuesSchema = z.object({
   issueKeys: z
@@ -565,6 +579,31 @@ export function createApp() {
           deployedTags: deploymentResult.deployedTags,
           deploymentLookupFailed: deploymentResult.failed,
         },
+      })
+    },
+  )
+
+  app.post(
+    '/api/releases/:versionId/ticket-refresh',
+    async (request, response) => {
+      const { versionId } = request.params
+      const parsed = ticketRefreshSchema.safeParse(request.body)
+      if (!/^\d+$/.test(versionId) || !parsed.success) {
+        response.status(400).json({
+          error: {
+            code: 'INVALID_TICKET_REFRESH',
+            message: 'A valid release and Jira ticket key are required.',
+          },
+        } satisfies ApiErrorBody)
+        return
+      }
+      response.json({
+        items: await refreshTicketRelease(
+          requireConnection(),
+          versionId,
+          parsed.data.issueKey,
+          parsed.data.repositories,
+        ),
       })
     },
   )

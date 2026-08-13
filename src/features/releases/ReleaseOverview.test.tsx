@@ -2,9 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
-import type { ReleaseDashboard } from '../../shared/types'
+import type { ReleaseDashboard, ReleaseItem } from '../../shared/types'
 import { ReleaseOverview } from './ReleaseOverview'
 import { removeIssueFromDashboard } from './releaseTickets'
+import { replaceIssueItemsInDashboard } from '../../shared/releaseDashboard'
 
 const dashboard: ReleaseDashboard = {
   version: {
@@ -1541,5 +1542,71 @@ describe('ReleaseOverview', () => {
     expect(onRefresh).toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: /OH-123/ })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /OH-999/ })).toBeVisible()
+  })
+
+  it('refreshes PR status for the selected ticket without reloading the release', async () => {
+    const user = userEvent.setup()
+    const blockedItem = dashboard.services[0].items[0]
+    const refreshedItem: ReleaseItem = {
+      ...blockedItem,
+      eligible: true,
+      blockingReasons: [],
+      warningReasons: [],
+      pullRequest: {
+        ...blockedItem.pullRequest!,
+        baseBranch: 'dev',
+        reviewDecision: 'approved' as const,
+        checks: 'success' as const,
+        title: 'OH-123 Ready after review',
+      },
+    }
+    const refreshTicket = vi.spyOn(api, 'refreshTicket').mockResolvedValue({
+      items: [refreshedItem],
+    })
+    const onRefresh = vi.fn().mockResolvedValue(undefined)
+    const onTicketRefreshed = vi.fn()
+    let currentDashboard = dashboard
+    const overviewProps = () => ({
+      connection: {
+        connected: true as const,
+        githubOrg: 'orange',
+        projectKey: 'OH',
+      },
+      releases: [dashboard.version],
+      selectedVersionId: '10351',
+      dashboard: currentDashboard,
+      loading: false,
+      onSelectVersion: vi.fn(),
+      onRefresh,
+      onTicketRefreshed: (issueKey: string, items: ReleaseItem[]) => {
+        onTicketRefreshed(issueKey, items)
+        currentDashboard = replaceIssueItemsInDashboard(
+          currentDashboard,
+          issueKey,
+          items,
+        )
+        view.rerender(<ReleaseOverview {...overviewProps()} />)
+      },
+      onDisconnect: vi.fn(),
+    })
+    const view = render(<ReleaseOverview {...overviewProps()} />)
+
+    await user.click(screen.getByRole('tab', { name: 'Tickets' }))
+    expect(screen.getAllByText('Blocked').length).toBeGreaterThan(0)
+
+    await user.click(screen.getByRole('button', { name: '↻ Refresh PRs' }))
+
+    await waitFor(() =>
+      expect(refreshTicket).toHaveBeenCalledWith('10351', 'OH-123', [
+        'orange/service-api',
+      ]),
+    )
+    expect(onRefresh).not.toHaveBeenCalled()
+    expect(onTicketRefreshed).toHaveBeenCalledWith('OH-123', [refreshedItem])
+    await waitFor(() =>
+      expect(screen.getByText(/OH-123 Ready after review/)).toBeVisible(),
+    )
+    expect(screen.getAllByText('Ready').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: /^Blocked 0$/ })).toBeVisible()
   })
 })

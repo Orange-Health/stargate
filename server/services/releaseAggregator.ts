@@ -9,7 +9,13 @@ import type {
   ServiceRelease,
 } from '../../src/shared/types.js'
 import { isClosedWithoutMerge } from '../../src/shared/pullRequests.js'
-import { discoverPullRequests, getRepositoryDefaultBranch } from '../providers/github.js'
+import { replaceIssueItemsInDashboard } from '../../src/shared/releaseDashboard.js'
+import { ProviderError } from '../errors.js'
+import {
+  clearGitHubProviderCache,
+  discoverPullRequests,
+  getRepositoryDefaultBranch,
+} from '../providers/github.js'
 import { getVersion, listVersionIssues } from '../providers/jira.js'
 
 const CACHE_TTL_MS = 60_000
@@ -276,4 +282,99 @@ export async function refreshServiceRelease(
     })
   }
   return service
+}
+
+function findIssueInDashboard(
+  dashboard: ReleaseDashboard | undefined,
+  issueKey: string,
+) {
+  if (!dashboard) return undefined
+  const key = issueKey.toUpperCase()
+  for (const service of dashboard.services) {
+    const match = service.items.find(
+      (item) => item.issue.key.toUpperCase() === key,
+    )
+    if (match) return match.issue
+  }
+  return dashboard.unmatched.find((item) => item.issue.key.toUpperCase() === key)
+    ?.issue
+}
+
+function repositoriesForIssue(
+  dashboard: ReleaseDashboard | undefined,
+  issueKey: string,
+) {
+  if (!dashboard) return []
+  const key = issueKey.toUpperCase()
+  const repositories: string[] = []
+  for (const service of dashboard.services) {
+    if (
+      service.items.some((item) => item.issue.key.toUpperCase() === key) &&
+      !repositories.some(
+        (repository) =>
+          repository.toLowerCase() === service.repository.toLowerCase(),
+      )
+    ) {
+      repositories.push(service.repository)
+    }
+  }
+  return repositories
+}
+
+export async function refreshTicketRelease(
+  config: ConnectionConfig,
+  versionId: string,
+  issueKey: string,
+  repositories: string[] = [],
+): Promise<ReleaseItem[]> {
+  const key = issueKey.toUpperCase()
+  const cacheKey = `${config.jiraSite}:${config.jiraProject ?? 'OH'}:${config.githubOrg}:${versionId}`
+  const cached = cache.get(cacheKey)
+  const reposToClear = new Map<string, string>()
+  for (const repository of [
+    ...repositories,
+    ...repositoriesForIssue(cached?.dashboard, key),
+  ]) {
+    reposToClear.set(repository.toLowerCase(), repository)
+  }
+  if (reposToClear.size === 0) {
+    clearGitHubProviderCache(undefined, [issueKey])
+  } else {
+    for (const repository of reposToClear.values()) {
+      clearGitHubProviderCache(repository, [issueKey])
+    }
+  }
+
+  let issue = findIssueInDashboard(cached?.dashboard, key)
+  issue ??= (await listVersionIssues(config, versionId)).find(
+    (entry) => entry.key.toUpperCase() === key,
+  )
+  if (!issue) {
+    throw new ProviderError(
+      'This ticket is not part of the Jira release.',
+      'ISSUE_NOT_IN_RELEASE',
+      'jira',
+      400,
+    )
+  }
+
+  const discovery = await discoverPullRequests(config, [
+    {
+      key: issue.key,
+      developmentSummary: issue.developmentSummary,
+    },
+  ])
+  const pulls = discovery.byIssue.get(issue.key) ?? []
+  const items =
+    pulls.length === 0
+      ? [evaluateEligibility(issue)]
+      : pulls.map((pull) => evaluateEligibility(issue, pull))
+
+  if (cached) {
+    cache.set(cacheKey, {
+      expiresAt: cached.expiresAt,
+      dashboard: replaceIssueItemsInDashboard(cached.dashboard, key, items),
+    })
+  }
+  return items
 }
