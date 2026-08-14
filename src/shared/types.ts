@@ -192,6 +192,18 @@ export type CreateStagingReleaseInput = {
   sourceBranch?: string
 }
 
+export type StagingTagListInput = {
+  repositories: string[]
+  environment?: StagingEnvironment
+  date: string
+}
+
+export type RepositoryStagingTags = {
+  repository: string
+  tags: string[]
+  checkFailed: boolean
+}
+
 export type ProductionReleaseMode = 'release-day' | 'patch'
 
 export type CreateProductionReleaseInput = {

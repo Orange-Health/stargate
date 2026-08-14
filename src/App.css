@@ -1307,6 +1307,7 @@ body[data-modal-open] {
   border-radius: 9px;
   display: grid;
   gap: 4px;
+  margin-block: 10px;
   padding: 13px;
 }
 
@@ -1429,43 +1430,229 @@ body[data-modal-open] {
   width: min(560px, 100%);
 }
 
+.bulk-qa-deploy-dialog {
+  max-width: 640px;
+  width: min(640px, 100%);
+}
+
+.bulk-qa-deploy-dialog .dialog-copy {
+  margin-bottom: 18px;
+}
+
+.bulk-qa-deploy-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 0 28px 8px 0;
+}
+
+.bulk-qa-deploy-heading h2 {
+  margin: 0;
+}
+
+.bulk-qa-deploy-heading .notification-toggle {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.bulk-qa-deploy-group + .bulk-qa-deploy-group {
+  margin-top: 6px;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-service-list {
+  gap: 6px;
+  margin: 0 0 14px;
+  max-height: min(32vh, 280px);
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-service-list li {
+  align-items: center;
+  column-gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(96px, 1fr) minmax(128px, 1.2fr) auto;
+  min-height: 42px;
+  padding: 9px 12px;
+  row-gap: 8px;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-service-list li:has(.live-deployments) {
+  align-items: start;
+  padding-bottom: 12px;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-service-list strong {
+  flex: unset;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-tag-placeholder,
+.bulk-qa-deploy-dialog .bulk-qa-service-list > li > a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-tag-placeholder {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-service-list > li > .bulk-qa-status {
+  max-width: none;
+}
+
+.bulk-qa-deploy-detail,
+.bulk-qa-deploy-dialog .live-deployments {
+  grid-column: 1 / -1;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-service-list .live-deployments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  overflow: visible;
+  padding: 0;
+  width: 100%;
+}
+
+.bulk-qa-deploy-dialog .live-deployment-item {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.bulk-qa-deploy-dialog .live-deployment {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.bulk-qa-deploy-dialog .live-deployment-item .pipeline-stage-block,
+.bulk-qa-deploy-dialog .live-deployment-item .pipeline-stage-list {
+  display: contents;
+}
+
+.bulk-qa-deploy-dialog .live-deployment-item .pipeline-stage {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bulk-qa-deploy-detail {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-deployed,
+.bulk-qa-deploy-dialog .bulk-qa-muted {
+  background: transparent;
+  opacity: 0.82;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-ready {
+  background: color-mix(in srgb, var(--green) 8%, var(--paper-warm));
+}
+
 .bulk-qa-service-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   list-style: none;
-  margin: 0;
-  max-height: min(40vh, 320px);
+  margin: 16px 0 16px;
+  max-height: min(48vh, 380px);
   overflow: auto;
+  padding: 0 0 2px;
+}
+
+.bulk-qa-select-all,
+.bulk-qa-service-select {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: row;
+  font-size: 12px;
+  font-weight: 500;
+  gap: 10px;
+}
+
+.bulk-qa-select-all {
+  margin: 12px 0 8px;
+}
+
+.bulk-qa-select-all input,
+.bulk-qa-service-list input[type="checkbox"] {
+  appearance: auto;
+  accent-color: var(--green);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  flex: 0 0 auto;
+  height: 16px;
+  margin: 0;
+  min-height: 0;
   padding: 0;
+  width: 16px;
+}
+
+.bulk-qa-select-all input:focus,
+.bulk-qa-service-list input[type="checkbox"]:focus {
+  box-shadow: none;
 }
 
 .bulk-qa-service-list li {
-  align-items: flex-start;
+  align-items: center;
   background: var(--paper-warm);
   border: 1px solid var(--line);
   border-radius: 10px;
   display: flex;
   gap: 12px;
   justify-content: space-between;
-  padding: 10px 12px;
+  min-height: 40px;
+  padding: 8px 12px;
 }
 
-.bulk-qa-service-list li > div {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.bulk-qa-service-list li.bulk-qa-unselected {
+  opacity: 0.62;
+}
+
+.bulk-qa-service-select {
+  flex: 1;
   min-width: 0;
 }
 
 .bulk-qa-service-list strong {
+  color: var(--ink);
+  flex: 1;
   font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .bulk-qa-service-list small,
 .bulk-qa-service-list > li > span {
   color: var(--muted);
+  flex: 0 0 auto;
   font-size: 11px;
+}
+
+.bulk-qa-existing-tags {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .bulk-qa-service-list a {
@@ -1476,16 +1663,80 @@ body[data-modal-open] {
   white-space: nowrap;
 }
 
-.bulk-qa-success {
+.bulk-qa-success,
+.bulk-qa-deployed {
   border-color: color-mix(in srgb, var(--green) 35%, var(--line));
 }
 
-.bulk-qa-error > span {
+.bulk-qa-ready {
+  border-color: color-mix(in srgb, var(--green) 22%, var(--line));
+}
+
+.bulk-qa-running,
+.bulk-qa-building,
+.bulk-qa-queued,
+.bulk-qa-pending {
+  border-color: color-mix(in srgb, #3973b7 35%, var(--line));
+}
+
+.bulk-qa-failed {
+  border-color: color-mix(in srgb, var(--red) 35%, var(--line));
+}
+
+.bulk-qa-error > span,
+.bulk-qa-service-list > li > .bulk-qa-status.error {
   color: var(--red);
   max-width: 48%;
   overflow: hidden;
   text-align: right;
   text-overflow: ellipsis;
+}
+
+.bulk-qa-service-list > li > .bulk-qa-status {
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  max-width: 42%;
+  text-align: right;
+}
+
+.bulk-qa-service-list > li > .bulk-qa-status.deployed,
+.bulk-qa-service-list > li > .bulk-qa-status.ready,
+.bulk-qa-service-list > li > .bulk-qa-status.queued {
+  color: var(--green);
+}
+
+.bulk-qa-service-list > li > .bulk-qa-status.building,
+.bulk-qa-service-list > li > .bulk-qa-status.running,
+.bulk-qa-service-list > li > .bulk-qa-status.pending {
+  color: #3973b7;
+}
+
+.bulk-qa-service-list > li > .bulk-qa-status.failed {
+  color: var(--red);
+}
+
+.bulk-qa-service-list .live-deployments {
+  grid-column: auto;
+  margin-top: 2px;
+}
+
+.bulk-qa-service-list small a {
+  font-size: 11px;
+}
+
+.bulk-qa-section-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.bulk-qa-no-builds-list {
+  max-height: min(18vh, 140px);
 }
 
 .remove-ticket-target {

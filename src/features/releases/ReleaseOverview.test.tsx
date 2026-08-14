@@ -97,6 +97,18 @@ describe('ReleaseOverview', () => {
           checkFailed: false,
         })),
     )
+    vi.spyOn(api, 'listStagingTags').mockImplementation(async (input) =>
+      input.repositories.map((repository) => ({
+        repository,
+        tags: [],
+        checkFailed: false,
+      })),
+    )
+    vi.spyOn(api, 'repositoryDeploymentStatuses').mockResolvedValue({
+      results: [],
+      fetchedAt: '2026-07-16T12:00:00Z',
+    })
+    vi.spyOn(api, 'releaseBuildStatuses').mockResolvedValue([])
   })
 
   afterEach(() => {
@@ -1237,7 +1249,7 @@ describe('ReleaseOverview', () => {
     )
     expect(
       screen.getByRole('heading', {
-        name: 'Create QA tags for all services',
+        name: 'Create QA tags',
       }),
     ).toBeVisible()
     expect(screen.getByText('v-qa-26.0716.N')).toBeVisible()

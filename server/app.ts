@@ -22,6 +22,7 @@ import {
   clearGitHubProviderCache,
   createProductionRelease,
   createStagingRelease,
+  listStagingTagsForRepositories,
   listOrganizationRepositories,
   listRepositoryBranches,
   testGitHubConnection,
@@ -118,6 +119,13 @@ const stagingReleaseSchema = z.object({
   environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5', 's6']),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   sourceBranch: z.string().trim().min(1).max(255).optional(),
+})
+const stagingTagsSchema = z.object({
+  repositories: z
+    .array(z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/))
+    .max(100),
+  environment: z.enum(['qa', 's1', 's2', 's3', 's4', 's5', 's6']).default('qa'),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 })
 const repositorySchema = z
   .string()
@@ -640,6 +648,29 @@ export function createApp() {
     )
     clearRepositoryCaches(config, parsed.data.repository)
     response.status(201).json(release)
+  })
+
+  app.post('/api/github/staging-tags', async (request, response) => {
+    const parsed = stagingTagsSchema.safeParse(request.body)
+    if (!parsed.success) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_STAGING_TAGS',
+          message:
+            parsed.error.issues[0]?.message ??
+            'A valid list of repositories and release date is required.',
+        },
+      } satisfies ApiErrorBody)
+      return
+    }
+    response.json(
+      await listStagingTagsForRepositories(
+        requireConnection(),
+        parsed.data.repositories,
+        parsed.data.environment,
+        parsed.data.date,
+      ),
+    )
   })
 
   app.post('/api/github/production-releases', async (request, response) => {

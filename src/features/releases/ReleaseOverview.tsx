@@ -1829,14 +1829,14 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                         loading ||
                         bulkMerging ||
                         freshnessLoading ||
-                        qaDeployTargets.length === 0
+                        visibleServices.length === 0
                       }
                     >
                       {freshnessLoading
                         ? "Checking QA deploys…"
                         : qaDeployTargets.length > 0
                           ? `Deploy QA (${qaDeployTargets.length})`
-                          : "No QA deploys ready"}
+                          : "Deploy QA"}
                     </button>
                   </div>
                 </div>
@@ -2154,6 +2154,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           services={visibleServices}
           freshness={deploymentFreshness}
           releaseName={dashboard.version.name}
+          releaseDate={dashboard.version.releaseDate ?? ""}
           onClose={() => setBulkQaDeployOpen(false)}
         />
       )}

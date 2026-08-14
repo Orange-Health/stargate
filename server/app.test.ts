@@ -44,6 +44,17 @@ describe('local API', () => {
     expect(response.body.error.code).toBe('INVALID_STAGING_RELEASE')
   })
 
+  it('rejects malformed staging tag list requests', async () => {
+    const response = await request(createApp())
+      .post('/api/github/staging-tags')
+      .send({
+        repositories: ['../outside'],
+        date: 'not-a-date',
+      })
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('INVALID_STAGING_TAGS')
+  })
+
   it('validates production release requests', async () => {
     const response = await request(createApp())
       .post('/api/github/production-releases')

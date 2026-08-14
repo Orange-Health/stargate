@@ -5,9 +5,7 @@ function deploymentLabel(deployment: JenkinsDeployedTag) {
   const environment = deployment.environment.toUpperCase()
   switch (deployment.status) {
     case 'running':
-      return deployment.currentStage
-        ? `Running in ${environment} · ${deployment.currentStage}`
-        : `Running in ${environment}`
+      return `Running in ${environment}`
     case 'failed':
       return `Failed in ${environment}`
     case 'canceled':

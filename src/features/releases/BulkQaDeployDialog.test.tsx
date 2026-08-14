@@ -1,10 +1,15 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { DeploymentFreshness, ServiceRelease } from '../../shared/types'
 import { BulkQaDeployDialog } from './BulkQaDeployDialog'
-import { deployableQaTargets } from './deployableQaTargets'
+import {
+  deployableQaTargets,
+  latestQaTagAlreadyDeployed,
+  pendingQaDeployTargets,
+  servicesWithoutQaBuilds,
+} from './deployableQaTargets'
 
 const mergedService: ServiceRelease = {
   repository: 'orange/service-api',
@@ -94,6 +99,45 @@ const freshness: Record<string, DeploymentFreshness> = {
   },
 }
 
+function mockStatusApis() {
+  vi.spyOn(api, 'listStagingTags').mockResolvedValue([
+    {
+      repository: 'orange/service-api',
+      tags: ['v-qa-26.0716.1'],
+      checkFailed: false,
+    },
+    {
+      repository: 'orange/service-web',
+      tags: [],
+      checkFailed: false,
+    },
+  ])
+  vi.spyOn(api, 'repositoryDeploymentStatuses').mockResolvedValue({
+    results: [
+      {
+        repository: 'orange/service-api',
+        deployedTags: [],
+        deploymentLookupFailed: false,
+      },
+      {
+        repository: 'orange/service-web',
+        deployedTags: [],
+        deploymentLookupFailed: false,
+      },
+    ],
+    fetchedAt: '2026-07-16T12:00:00Z',
+  })
+  vi.spyOn(api, 'releaseBuildStatuses').mockResolvedValue([
+    {
+      repository: 'orange/service-api',
+      tag: 'v-qa-26.0716.1',
+      createdAt: '2026-07-16T00:00:00Z',
+      buildStatus: 'succeeded',
+      runs: [],
+    },
+  ])
+}
+
 describe('deployableQaTargets', () => {
   it('only includes release services whose PRs are merged to dev', () => {
     const mergedToMain: ServiceRelease = {
@@ -135,13 +179,67 @@ describe('deployableQaTargets', () => {
       },
     ])
   })
+
+  it('lists release services that do not have a successful QA build', () => {
+    expect(
+      servicesWithoutQaBuilds(
+        [mergedService, openService],
+        {
+          'orange/service-api': freshness['orange/service-api'],
+          'orange/service-web': {
+            repository: 'orange/service-web',
+            liveQaTags: [],
+            jenkinsServices: ['service-web'],
+            outdated: false,
+            checkFailed: false,
+          },
+        },
+      ),
+    ).toEqual([openService])
+  })
+
+  it('skips targets whose latest QA tag is already live or currently deploying', () => {
+    const targets = deployableQaTargets([mergedService], freshness)
+    expect(
+      pendingQaDeployTargets(targets, freshness, {
+        'orange/service-api': [
+          {
+            service: 'service-api',
+            tag: 'v-qa-26.0716.1',
+            environment: 'qa',
+            status: 'succeeded',
+            buildNumber: 12,
+            buildUrl: 'https://jenkins.test/qa/12',
+            deployedAt: '2026-07-16T12:00:00Z',
+          },
+        ],
+      }),
+    ).toEqual([])
+    expect(
+      latestQaTagAlreadyDeployed('v-qa-26.0716.1', ['service-api'], [
+        {
+          service: 'service-api',
+          tag: 'v-qa-26.0716.1',
+          environment: 'qa',
+          status: 'succeeded',
+          buildNumber: 12,
+          buildUrl: 'https://jenkins.test/qa/12',
+          deployedAt: '2026-07-16T12:00:00Z',
+        },
+      ]),
+    ).toBe(true)
+  })
 })
 
 describe('BulkQaDeployDialog', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
 
   it('queues QA deployments for eligible merged services', async () => {
     const user = userEvent.setup()
+    mockStatusApis()
     const triggerDeployment = vi
       .spyOn(api, 'triggerDeployment')
       .mockResolvedValue({
@@ -158,12 +256,13 @@ describe('BulkQaDeployDialog', () => {
         services={[mergedService, openService]}
         freshness={freshness}
         releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
         onClose={vi.fn()}
       />,
     )
 
     expect(screen.getByText('service-api')).toBeVisible()
-    expect(screen.queryByText('service-web')).not.toBeInTheDocument()
+    expect(await screen.findByText('Ready', { exact: true })).toBeVisible()
 
     await user.click(
       screen.getByRole('button', { name: 'Deploy to QA (1)' }),
@@ -182,5 +281,250 @@ describe('BulkQaDeployDialog', () => {
         name: 'Queued 1/1 QA deploys',
       }),
     ).toBeVisible()
+  })
+
+  it('shows when the latest QA tag is already deployed', async () => {
+    mockStatusApis()
+    vi.mocked(api.repositoryDeploymentStatuses).mockResolvedValue({
+      results: [
+        {
+          repository: 'orange/service-api',
+          deployedTags: [
+            {
+              service: 'service-api',
+              tag: 'v-qa-26.0716.1',
+              environment: 'qa',
+              status: 'succeeded',
+              buildNumber: 44,
+              buildUrl: 'https://jenkins.test/qa/44',
+              deployedAt: '2026-07-16T11:00:00Z',
+            },
+          ],
+          deploymentLookupFailed: false,
+        },
+        {
+          repository: 'orange/service-web',
+          deployedTags: [],
+          deploymentLookupFailed: false,
+        },
+      ],
+      fetchedAt: '2026-07-16T12:00:00Z',
+    })
+
+    render(
+      <BulkQaDeployDialog
+        services={[mergedService, openService]}
+        freshness={{
+          ...freshness,
+          'orange/service-api': {
+            ...freshness['orange/service-api'],
+            liveQaTags: ['v-qa-26.0716.1'],
+            outdated: false,
+          },
+        }}
+        releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('Live', { exact: true })).toBeVisible()
+    expect(screen.getByText('Already live (1)')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'All services already live' }),
+    ).toBeDisabled()
+  })
+
+  it('polls in-progress QA deployments', async () => {
+    vi.useFakeTimers()
+    mockStatusApis()
+    const deploymentStatus = vi
+      .mocked(api.repositoryDeploymentStatuses)
+      .mockResolvedValueOnce({
+        results: [
+          {
+            repository: 'orange/service-api',
+            deployedTags: [
+              {
+                service: 'service-api',
+                tag: 'v-qa-26.0716.1',
+                environment: 'qa',
+                status: 'running',
+                currentStage: 'Deploy',
+                buildNumber: 45,
+                buildUrl: 'https://jenkins.test/qa/45',
+                deployedAt: '2026-07-16T12:00:00Z',
+              },
+            ],
+            deploymentLookupFailed: false,
+          },
+        ],
+        fetchedAt: '2026-07-16T12:00:00Z',
+      })
+      .mockResolvedValue({
+        results: [
+          {
+            repository: 'orange/service-api',
+            deployedTags: [
+              {
+                service: 'service-api',
+                tag: 'v-qa-26.0716.1',
+                environment: 'qa',
+                status: 'succeeded',
+                buildNumber: 45,
+                buildUrl: 'https://jenkins.test/qa/45',
+                deployedAt: '2026-07-16T12:04:00Z',
+              },
+            ],
+            deploymentLookupFailed: false,
+          },
+        ],
+        fetchedAt: '2026-07-16T12:04:00Z',
+      })
+
+    render(
+      <BulkQaDeployDialog
+        services={[mergedService]}
+        freshness={freshness}
+        releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
+        onClose={vi.fn()}
+      />,
+    )
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(screen.getByText('Deploying', { exact: true })).toBeVisible()
+    expect(screen.getByRole('link', { name: 'Running in QA' })).toBeVisible()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+
+    expect(deploymentStatus.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText('Live', { exact: true })).toBeVisible()
+  })
+
+  it('lists release services that do not have QA builds yet', async () => {
+    mockStatusApis()
+    vi.mocked(api.listStagingTags).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tags: ['v-qa-26.0716.1'],
+        checkFailed: false,
+      },
+      {
+        repository: 'orange/service-web',
+        tags: ['v-qa-26.0716.1'],
+        checkFailed: false,
+      },
+    ])
+    vi.mocked(api.releaseBuildStatuses).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tag: 'v-qa-26.0716.1',
+        createdAt: '2026-07-16T00:00:00Z',
+        buildStatus: 'succeeded',
+        runs: [],
+      },
+      {
+        repository: 'orange/service-web',
+        tag: 'v-qa-26.0716.1',
+        createdAt: '2026-07-16T00:00:00Z',
+        buildStatus: 'running',
+        runs: [],
+      },
+    ])
+
+    render(
+      <BulkQaDeployDialog
+        services={[mergedService, openService]}
+        freshness={{
+          'orange/service-api': freshness['orange/service-api'],
+          'orange/service-web': {
+            repository: 'orange/service-web',
+            liveQaTags: [],
+            jenkinsServices: ['service-web'],
+            outdated: false,
+            checkFailed: false,
+          },
+        }}
+        releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByRole('list', { name: 'Services without QA builds' }),
+    ).toBeVisible()
+    expect(screen.getByText('No QA builds yet (1)')).toBeVisible()
+    expect(await screen.findByText('Building', { exact: true })).toBeVisible()
+    expect(
+      within(
+        screen.getByRole('list', { name: 'Services without QA builds' }),
+      ).getByRole('link', { name: 'v-qa-26.0716.1' }),
+    ).toBeVisible()
+  })
+
+  it('does not mark a failed QA build as ready to deploy', async () => {
+    mockStatusApis()
+    vi.mocked(api.releaseBuildStatuses).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tag: 'v-qa-26.0716.1',
+        createdAt: '2026-07-16T00:00:00Z',
+        buildStatus: 'failed',
+        runs: [],
+      },
+    ])
+
+    render(
+      <BulkQaDeployDialog
+        services={[mergedService]}
+        freshness={freshness}
+        releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('Failed', { exact: true })).toBeVisible()
+    expect(screen.getByText('Build failed (1)')).toBeVisible()
+    expect(screen.queryByText('Ready', { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Ready to deploy/)).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'No QA deploys ready' }),
+    ).toBeDisabled()
+  })
+
+  it('refreshes tags and deployment status on demand', async () => {
+    const user = userEvent.setup()
+    mockStatusApis()
+
+    render(
+      <BulkQaDeployDialog
+        services={[mergedService]}
+        freshness={freshness}
+        releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('Ready', { exact: true })).toBeVisible()
+    const tags = vi.mocked(api.listStagingTags)
+    const deployments = vi.mocked(api.repositoryDeploymentStatuses)
+    const initialTags = tags.mock.calls.length
+    const initialDeployments = deployments.mock.calls.length
+
+    await user.click(screen.getByRole('button', { name: 'Refresh QA status' }))
+
+    await waitFor(() => {
+      expect(tags.mock.calls.length).toBeGreaterThan(initialTags)
+      expect(deployments.mock.calls.length).toBeGreaterThan(initialDeployments)
+    })
   })
 })

@@ -13,6 +13,7 @@ import {
   latestProductionTag,
   listOrganizationRepositories,
   listRepositoryBranches,
+  listStagingTags,
   nextProductionTag,
   nextStagingTag,
   stagingTagPrefix,
@@ -1115,6 +1116,42 @@ describe('staging release tags', () => {
   it('rejects impossible calendar dates', () => {
     expect(() => stagingTagPrefix('qa', '2026-02-31')).toThrow(
       'Release date is invalid.',
+    )
+  })
+
+  it('lists numeric staging tags for a release day', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          { ref: 'refs/tags/v-qa-26.0713.2' },
+          { ref: 'refs/tags/v-qa-26.0713.1' },
+          { ref: 'refs/tags/v-qa-26.0713.beta' },
+        ]),
+        { status: 200 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const tags = await listStagingTags(
+      {
+        jiraSite: 'https://jira.test',
+        jiraEmail: 'rm@test.com',
+        jiraToken: 'jira',
+        githubOrg: 'orange',
+        githubToken: 'github',
+        jenkinsUrl: 'https://jenkins.test',
+        jenkinsUsername: 'rm',
+        jenkinsToken: 'jenkins',
+      },
+      'orange/service-api',
+      'qa',
+      '2026-07-13',
+    )
+
+    expect(tags).toEqual(['v-qa-26.0713.1', 'v-qa-26.0713.2'])
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.github.com/repos/orange/service-api/git/matching-refs/tags/v-qa-26.0713.',
+      expect.any(Object),
     )
   })
 

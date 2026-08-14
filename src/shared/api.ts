@@ -8,6 +8,7 @@ import type {
   CreatePromotionPullRequestInput,
   CreatedStagingRelease,
   CreateStagingReleaseInput,
+  StagingTagListInput,
   CreateProductionReleaseInput,
   DashboardProgress,
   DeploymentFreshness,
@@ -27,6 +28,7 @@ import type {
   ReleaseControlSyncProgress,
   ReleaseControlSyncResponse,
   ReleaseDashboard,
+  RepositoryStagingTags,
   RepositoryDeploymentStatus,
   RepositoryDeploymentStatusResponse,
   RepositoryReleaseData,
@@ -171,6 +173,11 @@ export const api = {
     ),
   createStagingRelease: (input: CreateStagingReleaseInput) =>
     request<CreatedStagingRelease>('/api/github/staging-releases', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  listStagingTags: (input: StagingTagListInput) =>
+    request<RepositoryStagingTags[]>('/api/github/staging-tags', {
       method: 'POST',
       body: JSON.stringify(input),
     }),

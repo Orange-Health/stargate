@@ -710,6 +710,43 @@ async function existingTags(
   return refs.map((item) => item.ref.replace(/^refs\/tags\//, ''))
 }
 
+export async function listStagingTags(
+  config: ConnectionConfig,
+  repository: string,
+  environment: StagingEnvironment,
+  date: string,
+) {
+  const prefix = stagingTagPrefix(environment, date)
+  return (await existingTags(config, repository, prefix))
+    .filter((tag) => /^\d+$/.test(tag.slice(prefix.length)))
+    .sort(
+      (left, right) =>
+        Number(left.slice(prefix.length)) - Number(right.slice(prefix.length)),
+    )
+}
+
+export async function listStagingTagsForRepositories(
+  config: ConnectionConfig,
+  repositories: string[],
+  environment: StagingEnvironment,
+  date: string,
+): Promise<Array<{ repository: string; tags: string[]; checkFailed: boolean }>> {
+  const results = await mapConcurrent(repositories, 6, async (repository) => ({
+    repository,
+    tags: await listStagingTags(config, repository, environment, date),
+    checkFailed: false,
+  }))
+  return results.map((result, index) =>
+    result.status === 'fulfilled'
+      ? result.value
+      : {
+          repository: repositories[index],
+          tags: [],
+          checkFailed: true,
+        },
+  )
+}
+
 async function resolveProductionReleaseDate(
   config: ConnectionConfig,
   repository: string,
