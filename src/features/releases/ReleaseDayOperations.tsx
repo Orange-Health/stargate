@@ -37,7 +37,6 @@ import {
 } from "./releaseNotes";
 import { computeControlRoomProgress } from "./releaseProgress";
 import { ReleaseProgressBar } from "./ReleaseProgressBar";
-import { groupReleaseTickets } from "./releaseTickets";
 import {
   displaySyncPercent,
   EXPECTED_SYNC_MS_PER_SERVICE,
@@ -1378,22 +1377,12 @@ export function ReleaseDayOperations({
   const hasSavedProgress =
     session.logs.length > 0 ||
     Object.values(session.repositories).some((item) => item.productionRelease);
-  const controlRoomTickets = useMemo(
-    () =>
-      groupReleaseTickets({
-        ...dashboard,
-        services: dashboard.services.filter((service) =>
-          selectedSet.has(service.repository),
-        ),
-      }),
-    [dashboard, selectedSet],
-  );
   const controlRoomProgress = useMemo(
     () =>
       computeControlRoomProgress({
         versionId: `${dashboard.version.id}:control-room`,
-        tickets: controlRoomTickets,
         selectedRepositories: selected,
+        firstHop,
         lastHop,
         states,
         productionReleases: Object.fromEntries(
@@ -1405,8 +1394,8 @@ export function ReleaseDayOperations({
         releaseDate: session.releaseDate,
       }),
     [
-      controlRoomTickets,
       dashboard.version.id,
+      firstHop,
       lastHop,
       selected,
       session.releaseDate,

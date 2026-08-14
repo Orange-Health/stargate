@@ -51,6 +51,8 @@ describe('ReleaseProgressBar celebration', () => {
     )
 
     expect(screen.getByRole('status')).toHaveTextContent('You are the best RM')
+    expect(screen.getByRole('status').className).toContain('rm-celebration')
+    expect(document.body.contains(screen.getByRole('status'))).toBe(true)
     await act(async () => {
       await vi.advanceTimersByTimeAsync(STEP_CELEBRATION_MS)
     })

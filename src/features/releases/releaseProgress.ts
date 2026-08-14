@@ -16,6 +16,7 @@ export type ProgressCount = {
 }
 
 export type PendingProgressRepositories = {
+  prsCreated?: string[]
   prsMerged: string[]
   tagsCreated: string[]
   deployedOnQa: string[]
@@ -29,6 +30,7 @@ export type ReleaseProgressSnapshot = {
   deployedOnQa: ProgressCount
   pendingRepositories: PendingProgressRepositories
   updatedAt: string
+  createdLabel?: string
   deployedLabel?: string
 }
 
@@ -157,6 +159,7 @@ export function computeReleaseProgress(input: {
       total: taggedRepositories.length,
     },
     pendingRepositories: {
+      prsCreated: [],
       prsMerged: input.services
         .filter(serviceHasUnmergedPullRequests)
         .map((service) => service.repository),
@@ -167,6 +170,15 @@ export function computeReleaseProgress(input: {
     },
     updatedAt: input.now ?? new Date().toISOString(),
   }
+}
+
+export function firstHopPromotionCreated(
+  state: ReleaseControlRoomState | undefined,
+  firstHop: PromotionRoute,
+) {
+  const hop = state?.promotionSteps.find((step) => step.route === firstHop)
+    ?.state
+  return hop === 'pr_open' || hop === 'up_to_date'
 }
 
 export function lastHopPromotionMerged(
@@ -216,8 +228,8 @@ export function productionTagDeployedToProd(
 
 export function computeControlRoomProgress(input: {
   versionId: string
-  tickets: ReleaseTicket[]
   selectedRepositories: string[]
+  firstHop: PromotionRoute
   lastHop: PromotionRoute
   states: Record<string, ReleaseControlRoomState | undefined>
   productionReleases: Record<
@@ -228,6 +240,9 @@ export function computeControlRoomProgress(input: {
   now?: string
 }): ReleaseProgressSnapshot {
   const repositories = input.selectedRepositories
+  const createdRepositories = repositories.filter((repository) =>
+    firstHopPromotionCreated(input.states[repository], input.firstHop),
+  )
   const mergedRepositories = repositories.filter((repository) =>
     lastHopPromotionMerged(input.states[repository], input.lastHop),
   )
@@ -248,8 +263,8 @@ export function computeControlRoomProgress(input: {
   return {
     versionId: input.versionId,
     ticketsFinalised: {
-      current: input.tickets.filter(isCompatibleTicket).length,
-      total: input.tickets.length,
+      current: createdRepositories.length,
+      total: repositories.length,
     },
     prsMerged: {
       current: mergedRepositories.length,
@@ -264,6 +279,10 @@ export function computeControlRoomProgress(input: {
       total: taggedRepositories.length,
     },
     pendingRepositories: {
+      prsCreated: repositories.filter(
+        (repository) =>
+          !firstHopPromotionCreated(input.states[repository], input.firstHop),
+      ),
       prsMerged: repositories.filter(
         (repository) =>
           !lastHopPromotionMerged(input.states[repository], input.lastHop),
@@ -279,12 +298,14 @@ export function computeControlRoomProgress(input: {
       deployedOnQa: undeployedRepositories,
     },
     updatedAt: input.now ?? new Date().toISOString(),
+    createdLabel: "PR's created",
     deployedLabel: 'Deployed to prod',
   }
 }
 
 export function emptyPendingRepositories(): PendingProgressRepositories {
   return {
+    prsCreated: [],
     prsMerged: [],
     tagsCreated: [],
     deployedOnQa: [],
@@ -298,8 +319,8 @@ export function releaseProgressSteps(
   return [
     {
       id: 'tickets-finalised',
-      label: 'Tickets finalised',
-      pendingRepositories: [],
+      label: snapshot.createdLabel ?? 'Tickets finalised',
+      pendingRepositories: pending.prsCreated ?? [],
       ...snapshot.ticketsFinalised,
     },
     {
@@ -403,6 +424,7 @@ function isPendingRepositories(
   if (!value || typeof value !== 'object') return false
   const pending = value as PendingProgressRepositories
   return (
+    (pending.prsCreated === undefined || isStringArray(pending.prsCreated)) &&
     isStringArray(pending.prsMerged) &&
     isStringArray(pending.tagsCreated) &&
     isStringArray(pending.deployedOnQa)

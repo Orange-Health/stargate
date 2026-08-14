@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import {
   completedProgressStepIds,
@@ -17,13 +17,14 @@ type Props = {
 }
 
 const PENDING_STEP_HINT: Partial<Record<ReleaseProgressStep['id'], string>> = {
+  'tickets-finalised': 'Yet to create',
   'prs-merged': 'Yet to merge',
   'tags-created': 'Yet to tag',
   'deployed-qa': 'Yet to deploy',
 }
 
 export const STEP_CELEBRATION_MS = 5_000
-const CONFETTI_COUNT = 56
+const CONFETTI_COUNT = 160
 const CONFETTI_COLORS = [
   '#34d399',
   '#7db9ff',
@@ -58,12 +59,15 @@ function pendingLabel(step: ReleaseProgressStep) {
 function confettiPieces() {
   return Array.from({ length: CONFETTI_COUNT }, (_, index) => ({
     id: index,
-    left: `${(index * 17 + 11) % 100}%`,
-    delay: `${(index % 12) * 0.08}s`,
-    duration: `${3.4 + (index % 8) * 0.2}s`,
+    left: `${(index * 7 + (index % 11) * 3) % 100}%`,
+    top: `${((index * 13) % 90) - 12}%`,
+    delay: `${(index % 18) * 0.05}s`,
+    duration: `${2.6 + (index % 12) * 0.18}s`,
     color: CONFETTI_COLORS[index % CONFETTI_COLORS.length],
-    rotate: `${(index * 47) % 360}deg`,
-    width: `${6 + (index % 5)}px`,
+    width: `${5 + (index % 8)}px`,
+    height: `${8 + (index % 14)}px`,
+    drift: `${(index % 2 === 0 ? 1 : -1) * (16 + (index % 48))}px`,
+    spin: `${(index % 2 === 0 ? 1 : -1) * (540 + (index % 6) * 120)}deg`,
   }))
 }
 
@@ -77,14 +81,19 @@ function StepCelebration() {
           <span
             className="rm-confetti-piece"
             key={piece.id}
-            style={{
-              background: piece.color,
-              left: piece.left,
-              width: piece.width,
-              animationDelay: piece.delay,
-              animationDuration: piece.duration,
-              transform: `rotate(${piece.rotate})`,
-            }}
+            style={
+              {
+                background: piece.color,
+                left: piece.left,
+                top: piece.top,
+                width: piece.width,
+                height: piece.height,
+                animationDelay: piece.delay,
+                animationDuration: piece.duration,
+                '--rm-drift': piece.drift,
+                '--rm-spin': piece.spin,
+              } as CSSProperties
+            }
           />
         ))}
       </div>

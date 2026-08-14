@@ -136,6 +136,7 @@ describe('releaseProgress', () => {
     expect(snapshot.tagsCreated).toEqual({ current: 1, total: 2 })
     expect(snapshot.deployedOnQa).toEqual({ current: 1, total: 1 })
     expect(snapshot.pendingRepositories).toEqual({
+      prsCreated: [],
       prsMerged: ['orange/bifrost'],
       tagsCreated: ['orange/bifrost'],
       deployedOnQa: [],
@@ -240,8 +241,11 @@ describe('releaseProgress', () => {
 function controlRoomState(
   repository: string,
   lastHopState: 'up_to_date' | 'needs_pr' | 'pr_open',
-  extras: Partial<ReleaseControlRoomState> = {},
+  extras: Partial<ReleaseControlRoomState> & {
+    firstHopState?: 'up_to_date' | 'needs_pr' | 'pr_open'
+  } = {},
 ): ReleaseControlRoomState {
+  const { firstHopState = 'up_to_date', ...stateExtras } = extras
   return {
     repository,
     defaultBranch: 'main',
@@ -254,9 +258,9 @@ function controlRoomState(
         route: 'dev-to-release',
         fromBranch: 'dev',
         toBranch: 'release',
-        commitsAhead: 0,
+        commitsAhead: firstHopState === 'up_to_date' ? 0 : 1,
         commitsBehind: 0,
-        state: 'up_to_date',
+        state: firstHopState,
       },
       {
         route: 'release-to-default',
@@ -269,7 +273,7 @@ function controlRoomState(
     ],
     jenkinsServices: [repository.split('/').at(-1) ?? repository],
     fetchedAt: '2026-08-14T10:00:00Z',
-    ...extras,
+    ...stateExtras,
   }
 }
 
@@ -277,11 +281,11 @@ describe('computeControlRoomProgress', () => {
   const apiRepo = 'Orange-Health/service-api'
   const webRepo = 'Orange-Health/service-web'
 
-  it('counts last-hop merges, production tags, and prod deploys for selected repos', () => {
+  it('counts first-hop PRs created against release or default, then last-hop merges', () => {
     const snapshot = computeControlRoomProgress({
       versionId: 'release-1:control-room',
-      tickets: [ticket('OH-1', 'merged'), ticket('OH-2', 'unmatched')],
       selectedRepositories: [apiRepo, webRepo],
+      firstHop: 'dev-to-release',
       lastHop: 'release-to-default',
       states: {
         [apiRepo]: controlRoomState(apiRepo, 'up_to_date', {
@@ -307,7 +311,9 @@ describe('computeControlRoomProgress', () => {
             },
           ],
         }),
-        [webRepo]: controlRoomState(webRepo, 'needs_pr'),
+        [webRepo]: controlRoomState(webRepo, 'needs_pr', {
+          firstHopState: 'needs_pr',
+        }),
       },
       productionReleases: {
         [apiRepo]: {
@@ -324,21 +330,76 @@ describe('computeControlRoomProgress', () => {
     expect(snapshot.tagsCreated).toEqual({ current: 1, total: 2 })
     expect(snapshot.deployedOnQa).toEqual({ current: 1, total: 1 })
     expect(snapshot.pendingRepositories).toEqual({
+      prsCreated: [webRepo],
       prsMerged: [webRepo],
       tagsCreated: [webRepo],
       deployedOnQa: [],
     })
+    expect(snapshot.createdLabel).toBe("PR's created")
     expect(snapshot.deployedLabel).toBe('Deployed to prod')
-    expect(releaseProgressSteps(snapshot).at(-1)?.label).toBe(
+    expect(releaseProgressSteps(snapshot).map((step) => step.label)).toEqual([
+      "PR's created",
+      "PR's merged",
+      'Tags created',
       'Deployed to prod',
-    )
+    ])
+  })
+
+  it('treats an open first-hop PR as created even when the last hop is still pending', () => {
+    const snapshot = computeControlRoomProgress({
+      versionId: 'release-1:control-room',
+      selectedRepositories: [apiRepo],
+      firstHop: 'dev-to-release',
+      lastHop: 'release-to-default',
+      states: {
+        [apiRepo]: controlRoomState(apiRepo, 'needs_pr', {
+          firstHopState: 'pr_open',
+        }),
+      },
+      productionReleases: {},
+      releaseDate: '2026-07-16',
+    })
+
+    expect(snapshot.ticketsFinalised).toEqual({ current: 1, total: 1 })
+    expect(snapshot.prsMerged).toEqual({ current: 0, total: 1 })
+    expect(snapshot.pendingRepositories.prsCreated).toEqual([])
+    expect(snapshot.pendingRepositories.prsMerged).toEqual([apiRepo])
+  })
+
+  it('counts PRs created against default when the release branch is off', () => {
+    const snapshot = computeControlRoomProgress({
+      versionId: 'release-1:control-room',
+      selectedRepositories: [apiRepo],
+      firstHop: 'dev-to-default',
+      lastHop: 'dev-to-default',
+      states: {
+        [apiRepo]: {
+          ...controlRoomState(apiRepo, 'needs_pr'),
+          promotionSteps: [
+            {
+              route: 'dev-to-default',
+              fromBranch: 'dev',
+              toBranch: 'main',
+              commitsAhead: 1,
+              commitsBehind: 0,
+              state: 'pr_open',
+            },
+          ],
+        },
+      },
+      productionReleases: {},
+      releaseDate: '2026-07-16',
+    })
+
+    expect(snapshot.ticketsFinalised).toEqual({ current: 1, total: 1 })
+    expect(snapshot.prsMerged).toEqual({ current: 0, total: 1 })
   })
 
   it('lists tagged repos that are not live on production as remaining deploys', () => {
     const snapshot = computeControlRoomProgress({
       versionId: 'release-1:control-room',
-      tickets: [ticket('OH-1', 'merged')],
       selectedRepositories: [apiRepo],
+      firstHop: 'dev-to-release',
       lastHop: 'release-to-default',
       states: {
         [apiRepo]: controlRoomState(apiRepo, 'up_to_date', {
@@ -372,8 +433,8 @@ describe('computeControlRoomProgress', () => {
   it('ignores canceled production tags', () => {
     const snapshot = computeControlRoomProgress({
       versionId: 'release-1:control-room',
-      tickets: [],
       selectedRepositories: [apiRepo],
+      firstHop: 'dev-to-release',
       lastHop: 'release-to-default',
       states: {
         [apiRepo]: controlRoomState(apiRepo, 'up_to_date', {

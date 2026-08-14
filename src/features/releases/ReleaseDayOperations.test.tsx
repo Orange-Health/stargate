@@ -1540,47 +1540,13 @@ describe('ReleaseDayOperations', () => {
     const twoServiceDashboard: ReleaseDashboard = {
       ...dashboard,
       services: [
-        {
-          ...dashboard.services[0],
-          items: [
-            {
-              issue: {
-                key: 'OH-1',
-                summary: 'Ship API',
-                status: 'Done',
-                url: 'https://jira.test/OH-1',
-              },
-              pullRequest: {
-                id: 1,
-                number: 8,
-                repository,
-                title: 'Ship API',
-                url: 'https://github.test/pull/8',
-                state: 'closed',
-                draft: false,
-                merged: true,
-                baseBranch: 'dev',
-                headBranch: 'feature/x',
-                author: 'dev',
-                assignees: [],
-                reviewDecision: 'approved',
-                mergeable: true,
-                mergeableState: 'clean',
-                checks: 'success',
-                updatedAt: '2026-07-16T08:00:00Z',
-              },
-              eligible: true,
-              blockingReasons: ['ALREADY_MERGED'],
-              warningReasons: [],
-            },
-          ],
-        },
-        { ...dashboard.services[0], repository: secondRepository, items: [] },
+        dashboard.services[0],
+        { ...dashboard.services[0], repository: secondRepository },
       ],
     }
     vi.spyOn(api, 'repositoryState').mockImplementation(async (repositoryName) =>
       repositoryState(
-        'up_to_date',
+        repositoryName === repository ? 'up_to_date' : 'needs_pr',
         repositoryName === repository ? 'up_to_date' : 'needs_pr',
         repositoryName,
       ),
@@ -1595,19 +1561,25 @@ describe('ReleaseDayOperations', () => {
     )
 
     const progress = await screen.findByRole('list', { name: 'Release progress' })
-    expect(progress).toHaveTextContent('Tickets finalised')
+    expect(progress).toHaveTextContent("PR's created")
     expect(progress).toHaveTextContent("PR's merged")
     expect(progress).toHaveTextContent('Tags created')
     expect(progress).toHaveTextContent('Deployed to prod')
+    expect(progress).not.toHaveTextContent('Tickets finalised')
     expect(progress).not.toHaveTextContent('Deployed on QA')
 
     await waitFor(() =>
       expect(
         screen.getByRole('listitem', {
-          name: /PR's merged.*Yet to merge: service-web/i,
+          name: /PR's created.*Yet to create: service-web/i,
         }),
       ).toBeVisible(),
     )
+    expect(
+      screen.getByRole('listitem', {
+        name: /PR's merged.*Yet to merge: service-web/i,
+      }),
+    ).toBeVisible()
     expect(
       screen.getByRole('listitem', {
         name: /Tags created.*Yet to tag: service-api, service-web/i,

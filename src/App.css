@@ -847,26 +847,31 @@ button:disabled {
 }
 
 .rm-celebration {
+  height: 100vh;
+  height: 100dvh;
   inset: 0;
+  left: 0;
   overflow: hidden;
   pointer-events: none;
   position: fixed;
-  z-index: 80;
+  top: 0;
+  width: 100vw;
+  z-index: 9999;
 }
 
 .rm-celebration-confetti {
+  height: 100%;
   inset: 0;
   position: absolute;
+  width: 100%;
 }
 
 .rm-confetti-piece {
-  animation-name: rm-confetti-fall;
-  animation-timing-function: linear;
   animation-fill-mode: forwards;
+  animation-name: rm-confetti-fall;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
   border-radius: 1px;
-  height: 10px;
   position: absolute;
-  top: -16px;
 }
 
 .rm-celebration-banner {
@@ -883,8 +888,8 @@ button:disabled {
   margin: 0;
   padding: 14px 28px;
   position: absolute;
-  top: 18%;
-  transform: translateX(-50%);
+  top: 50%;
+  transform: translate(-50%, -50%);
   white-space: nowrap;
 }
 
@@ -894,8 +899,9 @@ button:disabled {
     transform: translate3d(0, 0, 0) rotate(0deg);
   }
   100% {
-    opacity: 0.85;
-    transform: translate3d(18px, 110vh, 0) rotate(720deg);
+    opacity: 0.15;
+    transform: translate3d(var(--rm-drift, 24px), 120vh, 0)
+      rotate(var(--rm-spin, 720deg));
   }
 }
 
