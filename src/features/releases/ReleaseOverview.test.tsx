@@ -1620,5 +1620,62 @@ describe('ReleaseOverview', () => {
     )
     expect(screen.getAllByText('Ready').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /^Blocked 0$/ })).toBeVisible()
+    expect(screen.getByText('All criteria met')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Merge to dev' })).toBeEnabled()
+  })
+
+  it('merges a ready feature PR from the tickets view', async () => {
+    const user = userEvent.setup()
+    const onRefresh = vi.fn()
+    const merge = vi
+      .spyOn(api, 'mergeFeaturePullRequest')
+      .mockResolvedValue({ merged: true, message: 'Merged' })
+    const readyItem = {
+      ...dashboard.services[0].items[0],
+      pullRequest: {
+        ...dashboard.services[0].items[0].pullRequest!,
+        baseBranch: 'dev',
+        reviewDecision: 'approved' as const,
+        checks: 'failure' as const,
+      },
+      eligible: true,
+      blockingReasons: [],
+      warningReasons: ['CHECKS_FAILED' as const],
+    }
+    const readyDashboard: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [],
+      services: [
+        {
+          ...dashboard.services[0],
+          eligibleCount: 1,
+          blockedCount: 0,
+          items: [readyItem],
+        },
+      ],
+    }
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[readyDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={readyDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={onRefresh}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await user.click(screen.getByRole('tab', { name: 'Tickets' }))
+    expect(screen.getByText('Checks failed')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Merge to dev' }))
+    await user.click(screen.getByRole('button', { name: 'Merge' }))
+    expect(merge).toHaveBeenCalledWith({
+      repository: 'orange/service-api',
+      pullNumber: 8,
+      retargetToDev: false,
+    })
+    expect(onRefresh).toHaveBeenCalled()
   })
 })

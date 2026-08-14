@@ -1,5 +1,18 @@
-import { useState, type ReactNode } from "react";
-import type { EligibilityReason, ReleaseItem } from "../../shared/types";
+import { useEffect, useState, type ReactNode } from "react";
+import { api } from "../../shared/api";
+import type {
+  EligibilityReason,
+  ReleaseItem,
+  ServiceRelease,
+} from "../../shared/types";
+import { ConfirmDialog } from "./ConfirmDialog";
+import {
+  featureMergeActions,
+  isFeatureForceMergeReady,
+  isFeatureMergeReady,
+  isFeatureRetargetReady,
+  type FeatureMergeAction,
+} from "./featureMerge";
 import {
   listTicketAssignees,
   ticketMatchesAssignee,
@@ -7,6 +20,7 @@ import {
   ticketReadinessLabel,
   UNASSIGNED_ASSIGNEE,
   type ReleaseTicket,
+  type ReleaseTicketItem,
   type TicketFilter,
 } from "./releaseTickets";
 import {
@@ -14,6 +28,11 @@ import {
   scheduleScrollDashboardGridIntoView,
   scrollDashboardGridIntoView,
 } from "./scrollDashboard";
+
+type PendingTicketMerge = FeatureMergeAction & {
+  retargetToDev: boolean;
+  bypassBranchProtection: boolean;
+};
 
 const reasonLabels: Record<EligibilityReason, string> = {
   NO_MATCHING_PR: "No matching PR",
@@ -29,15 +48,58 @@ const reasonLabels: Record<EligibilityReason, string> = {
   ALREADY_MERGED: "Merged",
 };
 
-function reasonLabel(reason: EligibilityReason, item: ReleaseItem) {
+function reasonLabel(
+  reason: EligibilityReason,
+  item: ReleaseItem,
+  defaultBranch?: string,
+) {
   if (
     reason === "WRONG_BASE_BRANCH" &&
-    item.pullRequest &&
-    item.pullRequest.baseBranch !== "dev"
+    item.pullRequest?.baseBranch === defaultBranch
   ) {
-    return `Targets ${item.pullRequest.baseBranch}`;
+    return "Targets default branch";
   }
   return reasonLabels[reason];
+}
+
+function serviceForItem(
+  item: ReleaseTicketItem,
+  services: ServiceRelease[],
+) {
+  if (!item.repository) return undefined;
+  return services.find((service) => service.repository === item.repository);
+}
+
+function mergeKey(repository: string, pullNumber: number) {
+  return `${repository}:${pullNumber}`;
+}
+
+function skippedPullsForItem(
+  item: ReleaseTicketItem,
+  skippedKeys: Set<string>,
+) {
+  const pull = item.pullRequest;
+  const repository = item.repository ?? pull?.repository;
+  if (!pull || !repository) return new Set<number>();
+  if (!skippedKeys.has(mergeKey(repository, pull.number))) {
+    return new Set<number>();
+  }
+  return new Set([pull.number]);
+}
+
+function ticketReadyMergeActions(
+  ticket: ReleaseTicket,
+  services: ServiceRelease[],
+  skippedKeys: Set<string>,
+): FeatureMergeAction[] {
+  return ticket.items.flatMap((item) => {
+    const service = serviceForItem(item, services);
+    if (!service) return [];
+    return featureMergeActions(
+      { ...service, items: [item] },
+      skippedPullsForItem(item, skippedKeys),
+    );
+  });
 }
 
 function TicketCard({
@@ -108,6 +170,7 @@ function TicketCard({
 
 type Props = {
   tickets: ReleaseTicket[];
+  services: ServiceRelease[];
   ticketFilter: TicketFilter;
   ticketAssigneeFilter: string;
   ticketSearch: string;
@@ -120,10 +183,12 @@ type Props = {
   onSelectTicket: (issueKey: string) => void;
   onRemoveTicket: () => void;
   onRefreshTicket: (issueKey: string) => Promise<void>;
+  onDataChanged: () => void | Promise<void>;
 };
 
 export function ReleaseTicketsView({
   tickets,
+  services,
   ticketFilter,
   ticketAssigneeFilter,
   ticketSearch,
@@ -136,9 +201,18 @@ export function ReleaseTicketsView({
   onSelectTicket,
   onRemoveTicket,
   onRefreshTicket,
+  onDataChanged,
 }: Props) {
   const [refreshingTicket, setRefreshingTicket] = useState(false);
   const [refreshError, setRefreshError] = useState("");
+  const [merging, setMerging] = useState<string>();
+  const [bulkMerging, setBulkMerging] = useState(false);
+  const [mergeError, setMergeError] = useState("");
+  const [optimisticallyMerged, setOptimisticallyMerged] = useState<Set<string>>(
+    new Set(),
+  );
+  const [pendingMerge, setPendingMerge] = useState<PendingTicketMerge>();
+  const [pendingBulkMerge, setPendingBulkMerge] = useState(false);
   const query = ticketSearch.trim().toLowerCase();
   const assignees = listTicketAssignees(tickets);
   const hasUnassigned = tickets.some(
@@ -161,11 +235,24 @@ export function ReleaseTicketsView({
   const selected =
     filtered.find((ticket) => ticket.issue.key === selectedIssueKey) ??
     tickets.find((ticket) => ticket.issue.key === selectedIssueKey);
+  const readyMergeActions = selected
+    ? ticketReadyMergeActions(selected, services, optimisticallyMerged)
+    : [];
+  const mergeBusy = bulkMerging || merging !== undefined;
+
+  useEffect(() => {
+    setRefreshError("");
+    setMergeError("");
+    setPendingMerge(undefined);
+    setPendingBulkMerge(false);
+    setOptimisticallyMerged(new Set());
+  }, [selectedIssueKey]);
 
   async function refreshSelectedTicket() {
-    if (!selected || refreshingTicket) return;
+    if (!selected || refreshingTicket || mergeBusy) return;
     setRefreshingTicket(true);
     setRefreshError("");
+    setMergeError("");
     try {
       await onRefreshTicket(selected.issue.key);
     } catch (reason) {
@@ -178,6 +265,122 @@ export function ReleaseTicketsView({
       setRefreshingTicket(false);
     }
   }
+
+  function requestMerge(
+    action: FeatureMergeAction,
+    options: { retargetToDev?: boolean; bypassBranchProtection?: boolean } = {},
+  ) {
+    setPendingBulkMerge(false);
+    setPendingMerge({
+      ...action,
+      retargetToDev: options.retargetToDev ?? Boolean(action.retargetToDev),
+      bypassBranchProtection:
+        options.bypassBranchProtection ??
+        Boolean(action.bypassBranchProtection),
+    });
+  }
+
+  function requestBulkMerge() {
+    if (readyMergeActions.length === 0 || mergeBusy) return;
+    setPendingMerge(undefined);
+    setPendingBulkMerge(true);
+  }
+
+  async function mergePullRequest(pending: PendingTicketMerge) {
+    const { repository, pullNumber, retargetToDev, bypassBranchProtection } =
+      pending;
+    setPendingMerge(undefined);
+    setMerging(mergeKey(repository, pullNumber));
+    setMergeError("");
+    try {
+      await api.mergeFeaturePullRequest({
+        repository,
+        pullNumber,
+        retargetToDev,
+        ...(bypassBranchProtection ? { bypassBranchProtection: true } : {}),
+      });
+      setOptimisticallyMerged((current) =>
+        new Set(current).add(mergeKey(repository, pullNumber)),
+      );
+      await onDataChanged();
+    } catch (reason) {
+      setMergeError(
+        reason instanceof Error ? reason.message : "Could not merge the PR.",
+      );
+    } finally {
+      setMerging(undefined);
+    }
+  }
+
+  async function mergeAllReadyPullRequests() {
+    if (readyMergeActions.length === 0 || mergeBusy) return;
+    setPendingBulkMerge(false);
+    setBulkMerging(true);
+    setMergeError("");
+    const merged = new Set<string>();
+    const failures: string[] = [];
+    for (const action of readyMergeActions) {
+      const key = mergeKey(action.repository, action.pullNumber);
+      try {
+        await api.mergeFeaturePullRequest({
+          repository: action.repository,
+          pullNumber: action.pullNumber,
+          retargetToDev: Boolean(action.retargetToDev),
+        });
+        merged.add(key);
+      } catch (reason) {
+        failures.push(
+          `#${action.pullNumber}: ${
+            reason instanceof Error ? reason.message : "Could not merge the PR."
+          }`,
+        );
+      }
+    }
+    if (merged.size > 0) {
+      setOptimisticallyMerged((current) => new Set([...current, ...merged]));
+      await onDataChanged();
+    }
+    if (failures.length > 0) {
+      setMergeError(
+        `Merged ${merged.size}/${readyMergeActions.length}. ${failures.join(" ")}`,
+      );
+    }
+    setBulkMerging(false);
+  }
+
+  const pendingMergeCopy = pendingMerge
+    ? pendingMerge.bypassBranchProtection
+      ? {
+          title: "Force merge to dev?",
+          message: `Force merge feature PR #${pendingMerge.pullNumber} into dev?\n\nThis bypasses approvals and required checks. Your GitHub token must have branch-protection bypass access.`,
+          confirmLabel: "Force merge",
+        }
+      : pendingMerge.retargetToDev
+        ? {
+            title: "Retarget and merge?",
+            message: `Retarget feature PR #${pendingMerge.pullNumber} to dev and merge it?`,
+            confirmLabel: "Retarget and merge",
+          }
+        : {
+            title: "Merge to dev?",
+            message: `Merge feature PR #${pendingMerge.pullNumber} into dev?`,
+            confirmLabel: "Merge",
+          }
+    : undefined;
+
+  const bulkMergeRetargetCount = readyMergeActions.filter(
+    (action) => action.retargetToDev,
+  ).length;
+  const pendingBulkMergeCopy = pendingBulkMerge
+    ? {
+        title: "Merge all ready to dev?",
+        message:
+          bulkMergeRetargetCount > 0
+            ? `Merge ${readyMergeActions.length} ready PR(s) into dev for ${selected?.issue.key}?\n\n${bulkMergeRetargetCount} will be retargeted from the default branch first.`
+            : `Merge ${readyMergeActions.length} ready PR(s) into dev for ${selected?.issue.key}?`,
+        confirmLabel: "Merge all",
+      }
+    : undefined;
 
   const counts = {
     all: scoped.length,
@@ -322,7 +525,7 @@ export function ReleaseTicketsView({
                 className="secondary-button"
                 type="button"
                 onClick={() => void refreshSelectedTicket()}
-                disabled={refreshingTicket}
+                disabled={refreshingTicket || mergeBusy}
               >
                 {refreshingTicket ? "Refreshing…" : "↻ Refresh PRs"}
               </button>
@@ -330,7 +533,7 @@ export function ReleaseTicketsView({
                 className="secondary-button"
                 type="button"
                 onClick={onRemoveTicket}
-                disabled={refreshingTicket}
+                disabled={refreshingTicket || mergeBusy}
               >
                 Remove from release
               </button>
@@ -341,12 +544,40 @@ export function ReleaseTicketsView({
               <strong>Could not refresh ticket.</strong> {refreshError}
             </div>
           )}
+          {mergeError && (
+            <div className="alert error detail-alert" role="alert">
+              {mergeError}
+            </div>
+          )}
           {removeError && (
             <div className="alert warning detail-alert">
               <strong>Could not remove ticket.</strong> {removeError}
             </div>
           )}
           <div className="service-operations">
+            {selected.readiness !== "unmatched" && (
+              <div className="service-tab-panel-actions">
+                <div className="service-bulk-merge-actions">
+                  <button
+                    className="merge-feature-button"
+                    type="button"
+                    aria-label="Merge all ready PRs into dev for this ticket"
+                    onClick={() => requestBulkMerge()}
+                    disabled={
+                      readyMergeActions.length === 0 ||
+                      mergeBusy ||
+                      refreshingTicket
+                    }
+                  >
+                    {bulkMerging
+                      ? "Merging all…"
+                      : readyMergeActions.length > 0
+                        ? `Merge all ready to dev (${readyMergeActions.length})`
+                        : "No ready PRs to merge"}
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="operation-section">
               <div className="operation-heading">
                 <div>
@@ -373,35 +604,50 @@ export function ReleaseTicketsView({
                     .filter((item) => item.pullRequest)
                     .map((item) => {
                       const pull = item.pullRequest!;
-                      const reasons = [
-                        ...item.blockingReasons,
-                        ...item.warningReasons,
-                      ].filter(
-                        (reason) =>
-                          !(pull.merged && reason === "ALREADY_MERGED"),
+                      const service = serviceForItem(item, services);
+                      const repository =
+                        item.repository ?? pull.repository;
+                      const skipped = skippedPullsForItem(
+                        item,
+                        optimisticallyMerged,
+                      );
+                      const alreadyMerged =
+                        pull.merged ||
+                        skipped.has(pull.number);
+                      const mergeReady = Boolean(
+                        service &&
+                          isFeatureMergeReady(item, service, skipped),
+                      );
+                      const retargetReady = Boolean(
+                        service &&
+                          isFeatureRetargetReady(item, service, skipped),
+                      );
+                      const forceMergeReady = Boolean(
+                        service &&
+                          !mergeReady &&
+                          pull.baseBranch === "dev" &&
+                          isFeatureForceMergeReady(item, service, skipped),
                       );
                       return (
                         <article
                           className="pr-row"
-                          key={`${item.repository}-${pull.id}`}
+                          key={`${repository}-${pull.id}`}
                         >
                           <div className="pr-main">
                             <div className="pr-title-row">
                               <strong>
-                                {(item.repository ?? pull.repository)
-                                  .split("/")
-                                  .at(-1)}
+                                {repository.split("/").at(-1)}
                               </strong>
                               <span
                                 className={`status-pill ${
-                                  pull.merged
+                                  alreadyMerged
                                     ? "merged"
                                     : item.eligible
                                       ? "ready"
                                       : "blocked"
                                 }`}
                               >
-                                {pull.merged
+                                {alreadyMerged
                                   ? "Merged"
                                   : item.eligible
                                     ? "Ready"
@@ -422,14 +668,97 @@ export function ReleaseTicketsView({
                               <span>→</span>
                               <code>{pull.baseBranch}</code>
                             </p>
-                            {reasons.length > 0 && (
-                              <div className="reason-row">
-                                {reasons.map((reason) => (
-                                  <span className="reason" key={reason}>
-                                    {reasonLabel(reason, item)}
-                                  </span>
-                                ))}
-                              </div>
+                          </div>
+                          <div className="reason-list">
+                            {[
+                              ...item.blockingReasons,
+                              ...item.warningReasons,
+                            ]
+                              .filter(
+                                (reason) =>
+                                  !(
+                                    alreadyMerged &&
+                                    reason === "ALREADY_MERGED"
+                                  ),
+                              )
+                              .map((reason) => (
+                                <span
+                                  className={`reason ${item.warningReasons.includes(reason) ? "warning" : ""}`}
+                                  key={reason}
+                                >
+                                  {reasonLabel(
+                                    reason,
+                                    item,
+                                    service?.defaultBranch,
+                                  )}
+                                </span>
+                              ))}
+                            {item.eligible &&
+                              item.warningReasons.length === 0 &&
+                              !alreadyMerged && (
+                                <span className="reason success">
+                                  All criteria met
+                                </span>
+                              )}
+                            {retargetReady && (
+                              <button
+                                className="merge-feature-button"
+                                type="button"
+                                disabled={mergeBusy}
+                                onClick={() =>
+                                  requestMerge(
+                                    {
+                                      repository,
+                                      pullNumber: pull.number,
+                                    },
+                                    { retargetToDev: true },
+                                  )
+                                }
+                              >
+                                {merging ===
+                                mergeKey(repository, pull.number)
+                                  ? "Retargeting…"
+                                  : "Retarget to dev and merge"}
+                              </button>
+                            )}
+                            {mergeReady && (
+                              <button
+                                className="merge-feature-button"
+                                type="button"
+                                disabled={mergeBusy}
+                                onClick={() =>
+                                  requestMerge({
+                                    repository,
+                                    pullNumber: pull.number,
+                                  })
+                                }
+                              >
+                                {merging ===
+                                mergeKey(repository, pull.number)
+                                  ? "Merging…"
+                                  : "Merge to dev"}
+                              </button>
+                            )}
+                            {forceMergeReady && (
+                              <button
+                                className="merge-feature-button"
+                                type="button"
+                                disabled={mergeBusy}
+                                onClick={() =>
+                                  requestMerge(
+                                    {
+                                      repository,
+                                      pullNumber: pull.number,
+                                    },
+                                    { bypassBranchProtection: true },
+                                  )
+                                }
+                              >
+                                {merging ===
+                                mergeKey(repository, pull.number)
+                                  ? "Force merging…"
+                                  : "Force merge to dev"}
+                              </button>
                             )}
                           </div>
                         </article>
@@ -445,6 +774,24 @@ export function ReleaseTicketsView({
           <h2>Select a ticket</h2>
           <p>Choose a ticket to review linked service PRs or remove it.</p>
         </section>
+      )}
+      {pendingMergeCopy && pendingMerge && (
+        <ConfirmDialog
+          title={pendingMergeCopy.title}
+          message={pendingMergeCopy.message}
+          confirmLabel={pendingMergeCopy.confirmLabel}
+          onCancel={() => setPendingMerge(undefined)}
+          onConfirm={() => void mergePullRequest(pendingMerge)}
+        />
+      )}
+      {pendingBulkMergeCopy && pendingBulkMerge && (
+        <ConfirmDialog
+          title={pendingBulkMergeCopy.title}
+          message={pendingBulkMergeCopy.message}
+          confirmLabel={pendingBulkMergeCopy.confirmLabel}
+          onCancel={() => setPendingBulkMerge(false)}
+          onConfirm={() => void mergeAllReadyPullRequests()}
+        />
       )}
     </div>
   );

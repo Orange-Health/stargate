@@ -1868,6 +1868,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             {overviewView === "tickets" ? (
               <ReleaseTicketsView
                 tickets={releaseTickets}
+                services={dashboard.services}
                 ticketFilter={ticketFilter}
                 ticketAssigneeFilter={ticketAssigneeFilter}
                 ticketSearch={ticketSearch}
@@ -1916,6 +1917,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                   );
                   onTicketRefreshed?.(issueKey, result.items);
                 }}
+                onDataChanged={onRefresh}
               />
             ) : (
               <div className="dashboard-grid">

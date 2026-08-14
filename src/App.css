@@ -2404,6 +2404,10 @@ body[data-modal-open] {
   gap: 10px;
 }
 
+.operation-heading-actions .merge-feature-button {
+  margin-top: 0;
+}
+
 .notification-toggle {
   background: transparent;
   border: 1px solid var(--line);
