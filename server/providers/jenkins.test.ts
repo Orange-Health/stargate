@@ -92,7 +92,7 @@ describe('Jenkins service mapping', () => {
       'clr-web',
     ])
     expect(servicesForRepository('Orange-Health/scheduler-api')).toEqual([
-      'scheduler-api',
+      'scheduler',
     ])
     expect(servicesForRepository('Orange-Health/citrus')).toEqual(['citrus'])
     expect(servicesForRepository('Orange-Health/unknown')).toEqual([])

@@ -667,15 +667,243 @@ button:disabled {
 }
 
 .overview-strip {
-  align-items: stretch;
+  --progress: #34d399;
+  --progress-ink: #06281c;
+  --progress-faint: #14392c;
+  --progress-track: #3d5474;
   background: var(--surface-strong);
   border-radius: 14px;
   color: var(--on-strong);
   display: flex;
+  flex-direction: column;
   margin-bottom: 26px;
   min-height: 104px;
-  overflow: hidden;
+  overflow: visible;
   position: relative;
+}
+
+.overview-strip-body {
+  align-items: stretch;
+  display: flex;
+  min-height: 104px;
+  position: relative;
+}
+
+.release-progress {
+  border-bottom: 1px solid var(--line-strong);
+  display: flex;
+  gap: 0;
+  padding: 18px 24px 16px;
+}
+
+.release-progress-step {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+
+.release-progress-node {
+  align-items: center;
+  background: var(--paper-warm);
+  border: 2px solid var(--progress-track);
+  border-radius: 50%;
+  color: var(--on-strong-muted);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  height: 28px;
+  justify-content: center;
+  position: relative;
+  width: 28px;
+  z-index: 1;
+}
+
+.release-progress-node svg {
+  height: 14px;
+  width: 14px;
+}
+
+.release-progress-step.complete .release-progress-node {
+  background: var(--progress);
+  border-color: var(--progress);
+  color: var(--progress-ink);
+}
+
+.release-progress-step.current .release-progress-node {
+  background: var(--progress-faint);
+  border-color: var(--progress);
+  color: var(--progress);
+}
+
+.release-progress-track {
+  background: var(--progress-track);
+  border-radius: 999px;
+  height: 3px;
+  left: calc(50% + 18px);
+  position: absolute;
+  right: calc(-50% + 18px);
+  top: 12px;
+}
+
+.release-progress-track span {
+  background: var(--progress);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  max-width: 100%;
+}
+
+.release-progress-copy {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+  min-width: 0;
+  padding: 0 6px;
+  text-align: center;
+}
+
+.release-progress-copy strong {
+  color: var(--on-strong);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.release-progress-copy small {
+  color: var(--on-strong-muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.release-progress-step.complete .release-progress-copy strong,
+.release-progress-step.current .release-progress-copy strong {
+  color: var(--progress);
+}
+
+.release-progress-step.has-pending {
+  cursor: help;
+  z-index: 2;
+}
+
+.release-progress-step.has-pending:hover,
+.release-progress-step.has-pending:focus-within {
+  z-index: 4;
+}
+
+.release-progress-step.has-pending::after {
+  background: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  color: var(--paper);
+  content: attr(data-tooltip);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 500;
+  left: 50%;
+  line-height: 1.45;
+  max-width: 240px;
+  opacity: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+  position: absolute;
+  text-align: left;
+  top: calc(100% + 8px);
+  transform: translate(-50%, -4px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  visibility: hidden;
+  white-space: normal;
+  width: max-content;
+  z-index: 6;
+}
+
+.release-progress-step.has-pending.tooltip-end::after {
+  left: auto;
+  right: 0;
+  transform: translate(0, -4px);
+}
+
+.release-progress-step.has-pending:hover::after,
+.release-progress-step.has-pending:focus-within::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  visibility: visible;
+}
+
+.release-progress-step.has-pending.tooltip-end:hover::after,
+.release-progress-step.has-pending.tooltip-end:focus-within::after {
+  transform: translate(0, 0);
+}
+
+.rm-celebration {
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: 80;
+}
+
+.rm-celebration-confetti {
+  inset: 0;
+  position: absolute;
+}
+
+.rm-confetti-piece {
+  animation-name: rm-confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  border-radius: 1px;
+  height: 10px;
+  position: absolute;
+  top: -16px;
+}
+
+.rm-celebration-banner {
+  background: #06281c;
+  border: 1px solid #34d399;
+  border-radius: 999px;
+  box-shadow: 0 12px 40px rgb(6 40 28 / 45%);
+  color: #34d399;
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  left: 50%;
+  letter-spacing: -0.03em;
+  margin: 0;
+  padding: 14px 28px;
+  position: absolute;
+  top: 18%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+@keyframes rm-confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  100% {
+    opacity: 0.85;
+    transform: translate3d(18px, 110vh, 0) rotate(720deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-confetti-piece {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 .readiness-score {
@@ -4577,7 +4805,7 @@ label {
     display: none;
   }
 
-  .overview-strip {
+  .overview-strip-body {
     flex-wrap: wrap;
   }
 

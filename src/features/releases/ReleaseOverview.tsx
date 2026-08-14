@@ -38,6 +38,13 @@ import { RemoveTicketDialog } from "./RemoveTicketDialog";
 import { RepositoryPullRequests } from "./RepositoryPullRequests";
 import { groupReleaseTickets, type TicketFilter } from "./releaseTickets";
 import {
+  computeReleaseProgress,
+  readStoredReleaseProgress,
+  releaseProgressDate,
+  writeStoredReleaseProgress,
+} from "./releaseProgress";
+import { ReleaseProgressBar } from "./ReleaseProgressBar";
+import {
   FILTER_SCROLL_DELAY_MS,
   scheduleScrollDashboardGridIntoView,
   scrollDashboardGridIntoView,
@@ -924,6 +931,13 @@ export function ReleaseOverview({
     Record<string, DeploymentFreshness>
   >({});
   const [freshnessLoading, setFreshnessLoading] = useState(false);
+  const [stagingTags, setStagingTags] = useState<Record<string, string[]>>(
+    {},
+  );
+  const [stagingTagsReady, setStagingTagsReady] = useState(false);
+  const [qaTagRevision, setQaTagRevision] = useState(0);
+  const [qaDeployRevision, setQaDeployRevision] = useState(0);
+  const stagingTagsVersionRef = useRef(selectedVersionId);
   const [bulkMerging, setBulkMerging] = useState(false);
   const [bulkMergeError, setBulkMergeError] = useState("");
   const [pendingReleaseBulkMerge, setPendingReleaseBulkMerge] = useState(false);
@@ -1134,7 +1148,58 @@ export function ReleaseOverview({
     return () => {
       active = false;
     };
-  }, [repositoryScope]);
+  }, [qaDeployRevision, repositoryScope]);
+
+  useEffect(() => {
+    if (stagingTagsVersionRef.current === selectedVersionId) return;
+    stagingTagsVersionRef.current = selectedVersionId;
+    setStagingTags({});
+    setStagingTagsReady(false);
+  }, [selectedVersionId]);
+
+  useEffect(() => {
+    const repositories = repositoryScope ? repositoryScope.split("\n") : [];
+    const date = releaseProgressDate(dashboard?.version.releaseDate);
+    if (!dashboard || allServicesSelected) {
+      setStagingTags({});
+      setStagingTagsReady(true);
+      return;
+    }
+    if (repositories.length === 0) {
+      setStagingTags({});
+      setStagingTagsReady(true);
+      return;
+    }
+    let active = true;
+    api
+      .listStagingTags({
+        repositories,
+        environment: "qa",
+        date,
+      })
+      .then((items) => {
+        if (!active) return;
+        const next: Record<string, string[]> = {};
+        for (const item of items) next[item.repository] = item.tags;
+        setStagingTags(next);
+      })
+      .catch(() => {
+        if (!active) return;
+      })
+      .finally(() => {
+        if (active) setStagingTagsReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    allServicesSelected,
+    dashboard?.fetchedAt,
+    dashboard?.version.releaseDate,
+    qaTagRevision,
+    repositoryScope,
+    selectedVersionId,
+  ]);
 
   const filteredServices = useMemo(() => {
     if (!dashboard) return [];
@@ -1219,6 +1284,48 @@ export function ReleaseOverview({
     () => deployableQaTargets(visibleServices, deploymentFreshness),
     [deploymentFreshness, visibleServices],
   );
+  const liveReleaseProgress = useMemo(() => {
+    if (!dashboard) return undefined;
+    return computeReleaseProgress({
+      versionId: selectedVersionId,
+      tickets: releaseTickets,
+      mergedIssueCount: readyItems,
+      issueCount: totalItems,
+      services: visibleServices,
+      stagingTags,
+      freshness: deploymentFreshness,
+    });
+  }, [
+    dashboard,
+    deploymentFreshness,
+    readyItems,
+    releaseTickets,
+    selectedVersionId,
+    stagingTags,
+    totalItems,
+    visibleServices,
+  ]);
+  const releaseProgress = useMemo(() => {
+    if (!liveReleaseProgress) return undefined;
+    if (stagingTagsReady) return liveReleaseProgress;
+    const stored = readStoredReleaseProgress(selectedVersionId);
+    if (!stored) return liveReleaseProgress;
+    return {
+      ...liveReleaseProgress,
+      tagsCreated: stored.tagsCreated,
+      deployedOnQa: stored.deployedOnQa,
+      pendingRepositories: {
+        ...liveReleaseProgress.pendingRepositories,
+        tagsCreated: stored.pendingRepositories.tagsCreated,
+        deployedOnQa: stored.pendingRepositories.deployedOnQa,
+      },
+    };
+  }, [liveReleaseProgress, selectedVersionId, stagingTagsReady]);
+
+  useEffect(() => {
+    if (!releaseProgress || !stagingTagsReady) return;
+    writeStoredReleaseProgress(releaseProgress);
+  }, [releaseProgress, stagingTagsReady]);
   const selectedServiceWithRisk = useMemo(() => {
     if (!selectedService) return undefined;
     return {
@@ -1775,6 +1882,10 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
         {!allServicesSelected && dashboard && (
           <>
             <section className="overview-strip">
+              {releaseProgress && (
+                <ReleaseProgressBar progress={releaseProgress} />
+              )}
+              <div className="overview-strip-body">
               <div className="readiness-score">
                 <div className="readiness-percent">
                   <span>
@@ -1854,6 +1965,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                 <span>GitHub calls left</span>
               </div>
               {dashboard.cached && <span className="cache-pill">Cached</span>}
+              </div>
             </section>
 
             {dashboard.warnings.map((warning, index) => (
@@ -2146,7 +2258,10 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           repositories={visibleServices.map((service) => service.repository)}
           releaseDate={dashboard.version.releaseDate ?? ""}
           releaseName={dashboard.version.name}
-          onClose={() => setBulkQaReleaseOpen(false)}
+          onClose={() => {
+            setBulkQaReleaseOpen(false);
+            setQaTagRevision((current) => current + 1);
+          }}
         />
       )}
       {bulkQaDeployOpen && dashboard && (
@@ -2155,7 +2270,10 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           freshness={deploymentFreshness}
           releaseName={dashboard.version.name}
           releaseDate={dashboard.version.releaseDate ?? ""}
-          onClose={() => setBulkQaDeployOpen(false)}
+          onClose={() => {
+            setBulkQaDeployOpen(false);
+            setQaDeployRevision((current) => current + 1);
+          }}
         />
       )}
       {productionReleaseTarget && (

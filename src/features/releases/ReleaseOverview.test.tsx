@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
@@ -309,6 +309,9 @@ describe('ReleaseOverview', () => {
     )
 
     expect(screen.getByText('13s ago')).toBeVisible()
+    await act(async () => {
+      await Promise.resolve()
+    })
     await vi.advanceTimersByTimeAsync(2_000)
     expect(screen.getByText('15s ago')).toBeVisible()
   })
@@ -1620,5 +1623,203 @@ describe('ReleaseOverview', () => {
     )
     expect(screen.getAllByText('Ready').length).toBeGreaterThan(0)
     expect(screen.getByRole('button', { name: /^Blocked 0$/ })).toBeVisible()
+  })
+
+  it('shows a local release progress bar and persists it after tag data loads', async () => {
+    vi.mocked(api.listStagingTags).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tags: ['v-qa-26.0716.1'],
+        checkFailed: false,
+      },
+    ])
+    vi.mocked(api.deploymentFreshness).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        latestBuiltQaTag: 'v-qa-26.0716.1',
+        liveQaTags: ['v-qa-26.0716.1'],
+        jenkinsServices: ['service-api'],
+        outdated: false,
+        checkFailed: false,
+      },
+    ])
+
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={dashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    const progress = await screen.findByRole('list', {
+      name: 'Release progress',
+    })
+    expect(progress).toHaveTextContent('Tickets finalised')
+    expect(progress).toHaveTextContent("PR's merged")
+    expect(progress).toHaveTextContent('Tags created')
+    expect(progress).toHaveTextContent('Deployed on QA')
+    expect(progress).toHaveTextContent('1 of 2')
+    expect(progress).toHaveTextContent('0 of 2')
+    expect(
+      screen.getByRole('listitem', {
+        name: /PR's merged.*Yet to merge: service-api/i,
+      }),
+    ).toBeVisible()
+
+    await waitFor(() => expect(progress).toHaveTextContent('1 of 1'))
+    await waitFor(() => {
+      const stored = window.localStorage.getItem('release-desk-progress:10351')
+      expect(stored).toBeTruthy()
+      expect(JSON.parse(stored!)).toMatchObject({
+        versionId: '10351',
+        ticketsFinalised: { current: 1, total: 2 },
+        prsMerged: { current: 0, total: 2 },
+        tagsCreated: { current: 1, total: 1 },
+        deployedOnQa: { current: 1, total: 1 },
+      })
+    })
+  })
+
+  it('lists remaining repositories on incomplete merge, tag, and deploy steps', async () => {
+    vi.mocked(api.listStagingTags).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tags: ['v-qa-26.0716.1'],
+        checkFailed: false,
+      },
+      { repository: 'orange/bifrost', tags: [], checkFailed: false },
+    ])
+    vi.mocked(api.deploymentFreshness).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        latestBuiltQaTag: 'v-qa-26.0716.1',
+        liveQaTags: [],
+        jenkinsServices: ['service-api'],
+        outdated: true,
+        checkFailed: false,
+      },
+      {
+        repository: 'orange/bifrost',
+        liveQaTags: [],
+        jenkinsServices: ['bifrost'],
+        outdated: false,
+        checkFailed: false,
+      },
+    ])
+    const twoServiceDashboard: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [],
+      version: { ...dashboard.version, issueCount: 2 },
+      services: [
+        dashboard.services[0],
+        {
+          ...dashboard.services[0],
+          repository: 'orange/bifrost',
+          items: [
+            {
+              ...dashboard.services[0].items[0],
+              issue: {
+                ...dashboard.services[0].items[0].issue,
+                key: 'OH-200',
+                summary: 'Bifrost upgrade',
+                url: 'https://jira.test/OH-200',
+              },
+              pullRequest: {
+                ...dashboard.services[0].items[0].pullRequest!,
+                id: 2,
+                number: 9,
+                repository: 'orange/bifrost',
+                title: 'OH-200 Bifrost upgrade',
+                merged: true,
+                state: 'closed',
+                baseBranch: 'dev',
+              },
+              eligible: false,
+              blockingReasons: ['ALREADY_MERGED'],
+              warningReasons: [],
+            },
+          ],
+        },
+      ],
+    }
+
+    render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[twoServiceDashboard.version]}
+        selectedVersionId="10351"
+        dashboard={twoServiceDashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('listitem', {
+          name: /Tags created.*Yet to tag: bifrost/i,
+        }),
+      ).toBeVisible(),
+    )
+    expect(
+      screen.getByRole('listitem', {
+        name: /PR's merged.*Yet to merge: service-api/i,
+      }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('listitem', {
+        name: /Deployed on QA.*Yet to deploy: service-api/i,
+      }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('listitem', { name: /Yet to merge: bifrost/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('refetches staging tags when the dashboard refresh timestamp changes', async () => {
+    const view = render(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={dashboard}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+    await waitFor(() => expect(api.listStagingTags).toHaveBeenCalledTimes(1))
+
+    view.rerender(
+      <ReleaseOverview
+        connection={{ connected: true, githubOrg: 'orange', projectKey: 'OH' }}
+        releases={[dashboard.version]}
+        selectedVersionId="10351"
+        dashboard={{
+          ...dashboard,
+          fetchedAt: '2026-07-15T10:00:00Z',
+        }}
+        loading={false}
+        onSelectVersion={vi.fn()}
+        onRefresh={vi.fn()}
+        onDisconnect={vi.fn()}
+      />,
+    )
+
+    await waitFor(() => expect(api.listStagingTags).toHaveBeenCalledTimes(2))
+    expect(api.listStagingTags).toHaveBeenLastCalledWith({
+      repositories: ['orange/service-api'],
+      environment: 'qa',
+      date: '2026-07-16',
+    })
   })
 })
