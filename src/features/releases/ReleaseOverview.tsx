@@ -262,8 +262,8 @@ function ReleasePicker({
         <svg
           className={`release-picker-chevron${open ? " open" : ""}`}
           viewBox="0 0 16 16"
-          width="18"
-          height="18"
+          width="14"
+          height="14"
           aria-hidden="true"
           fill="none"
         >
