@@ -3940,6 +3940,25 @@ label {
   margin-bottom: 10px;
 }
 
+.release-day-progress {
+  --progress: #34d399;
+  --progress-ink: #06281c;
+  --progress-faint: #14392c;
+  --progress-track: #3d5474;
+  background: var(--surface-strong);
+  border-radius: 12px;
+  color: var(--on-strong);
+  margin: 0 0 10px;
+  overflow: visible;
+  position: relative;
+  z-index: 3;
+}
+
+.release-day-progress .release-progress {
+  border-bottom: none;
+  padding: 12px 16px 10px;
+}
+
 .release-day-header h2 {
   font-family: var(--display);
   font-size: 22px;

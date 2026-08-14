@@ -56,4 +56,27 @@ describe('ReleaseProgressBar celebration', () => {
     })
     expect(screen.queryByText('You are the best RM')).not.toBeInTheDocument()
   })
+
+  it('does not celebrate steps that complete while the bar is still priming', () => {
+    const view = render(
+      <ReleaseProgressBar progress={snapshot()} ready={false} />,
+    )
+    view.rerender(
+      <ReleaseProgressBar
+        progress={snapshot({
+          ticketsFinalised: { current: 2, total: 2 },
+        })}
+        ready={false}
+      />,
+    )
+    view.rerender(
+      <ReleaseProgressBar
+        progress={snapshot({
+          ticketsFinalised: { current: 2, total: 2 },
+        })}
+        ready
+      />,
+    )
+    expect(screen.queryByText('You are the best RM')).not.toBeInTheDocument()
+  })
 })

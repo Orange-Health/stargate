@@ -13,6 +13,7 @@ import {
 
 type Props = {
   progress: ReleaseProgressSnapshot
+  ready?: boolean
 }
 
 const PENDING_STEP_HINT: Partial<Record<ReleaseProgressStep['id'], string>> = {
@@ -93,7 +94,7 @@ function StepCelebration() {
   )
 }
 
-export function ReleaseProgressBar({ progress }: Props) {
+export function ReleaseProgressBar({ progress, ready = true }: Props) {
   const steps = releaseProgressSteps(progress)
   const firstIncomplete = steps.findIndex((step) => !isStepComplete(step))
   const completeIds = completedProgressStepIds(progress)
@@ -108,6 +109,10 @@ export function ReleaseProgressBar({ progress }: Props) {
     const ids = completeKey
       ? (completeKey.split('|') as typeof completeIds)
       : []
+    if (!ready) {
+      previousComplete.current = null
+      return
+    }
     if (
       previousComplete.current === null ||
       previousVersionId.current !== progress.versionId
@@ -120,7 +125,7 @@ export function ReleaseProgressBar({ progress }: Props) {
     previousComplete.current = new Set(ids)
     if (newly.length === 0) return
     setCelebrationId((current) => current + 1)
-  }, [completeKey, progress.versionId])
+  }, [completeKey, progress.versionId, ready])
 
   useEffect(() => {
     if (celebrationId === 0) return

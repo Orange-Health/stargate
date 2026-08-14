@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import type { DeploymentFreshness, ServiceRelease } from '../../shared/types'
+import type {
+  DeploymentFreshness,
+  ReleaseControlRoomState,
+  ServiceRelease,
+} from '../../shared/types'
 import type { ReleaseTicket } from './releaseTickets'
 import {
+  computeControlRoomProgress,
   computeReleaseProgress,
   completedProgressStepIds,
   isStepComplete,
@@ -231,3 +236,170 @@ describe('releaseProgress', () => {
     ).toEqual(['prs-merged'])
   })
 })
+
+function controlRoomState(
+  repository: string,
+  lastHopState: 'up_to_date' | 'needs_pr' | 'pr_open',
+  extras: Partial<ReleaseControlRoomState> = {},
+): ReleaseControlRoomState {
+  return {
+    repository,
+    defaultBranch: 'main',
+    productionReleases: [],
+    deployedTags: [],
+    deploymentLookupFailed: false,
+    productionReady: lastHopState === 'up_to_date',
+    promotionSteps: [
+      {
+        route: 'dev-to-release',
+        fromBranch: 'dev',
+        toBranch: 'release',
+        commitsAhead: 0,
+        commitsBehind: 0,
+        state: 'up_to_date',
+      },
+      {
+        route: 'release-to-default',
+        fromBranch: 'release',
+        toBranch: 'main',
+        commitsAhead: lastHopState === 'up_to_date' ? 0 : 1,
+        commitsBehind: 0,
+        state: lastHopState,
+      },
+    ],
+    jenkinsServices: [repository.split('/').at(-1) ?? repository],
+    fetchedAt: '2026-08-14T10:00:00Z',
+    ...extras,
+  }
+}
+
+describe('computeControlRoomProgress', () => {
+  const apiRepo = 'Orange-Health/service-api'
+  const webRepo = 'Orange-Health/service-web'
+
+  it('counts last-hop merges, production tags, and prod deploys for selected repos', () => {
+    const snapshot = computeControlRoomProgress({
+      versionId: 'release-1:control-room',
+      tickets: [ticket('OH-1', 'merged'), ticket('OH-2', 'unmatched')],
+      selectedRepositories: [apiRepo, webRepo],
+      lastHop: 'release-to-default',
+      states: {
+        [apiRepo]: controlRoomState(apiRepo, 'up_to_date', {
+          productionReleases: [
+            {
+              id: 1,
+              tag: 'v-26.0716.1',
+              url: 'https://github.test/releases/v-26.0716.1',
+              createdAt: '2026-07-16T09:00:00Z',
+              buildStatus: 'succeeded',
+              runs: [],
+            },
+          ],
+          deployedTags: [
+            {
+              service: 'service-api',
+              tag: 'v-26.0716.1',
+              environment: 'production',
+              status: 'succeeded',
+              buildNumber: 9,
+              buildUrl: 'https://jenkins.test/9',
+              deployedAt: '2026-07-16T10:00:00Z',
+            },
+          ],
+        }),
+        [webRepo]: controlRoomState(webRepo, 'needs_pr'),
+      },
+      productionReleases: {
+        [apiRepo]: {
+          tag: 'v-26.0716.1',
+          createdAt: '2026-07-16T09:00:00Z',
+        },
+      },
+      releaseDate: '2026-07-16',
+      now: '2026-07-16T12:00:00Z',
+    })
+
+    expect(snapshot.ticketsFinalised).toEqual({ current: 1, total: 2 })
+    expect(snapshot.prsMerged).toEqual({ current: 1, total: 2 })
+    expect(snapshot.tagsCreated).toEqual({ current: 1, total: 2 })
+    expect(snapshot.deployedOnQa).toEqual({ current: 1, total: 1 })
+    expect(snapshot.pendingRepositories).toEqual({
+      prsMerged: [webRepo],
+      tagsCreated: [webRepo],
+      deployedOnQa: [],
+    })
+    expect(snapshot.deployedLabel).toBe('Deployed to prod')
+    expect(releaseProgressSteps(snapshot).at(-1)?.label).toBe(
+      'Deployed to prod',
+    )
+  })
+
+  it('lists tagged repos that are not live on production as remaining deploys', () => {
+    const snapshot = computeControlRoomProgress({
+      versionId: 'release-1:control-room',
+      tickets: [ticket('OH-1', 'merged')],
+      selectedRepositories: [apiRepo],
+      lastHop: 'release-to-default',
+      states: {
+        [apiRepo]: controlRoomState(apiRepo, 'up_to_date', {
+          productionReleases: [
+            {
+              id: 1,
+              tag: 'v-26.0716.1',
+              url: 'https://github.test/releases/v-26.0716.1',
+              createdAt: '2026-07-16T09:00:00Z',
+              buildStatus: 'succeeded',
+              runs: [],
+            },
+          ],
+          deployedTags: [],
+        }),
+      },
+      productionReleases: {
+        [apiRepo]: {
+          tag: 'v-26.0716.1',
+          createdAt: '2026-07-16T09:00:00Z',
+        },
+      },
+      releaseDate: '2026-07-16',
+    })
+
+    expect(snapshot.tagsCreated).toEqual({ current: 1, total: 1 })
+    expect(snapshot.deployedOnQa).toEqual({ current: 0, total: 1 })
+    expect(snapshot.pendingRepositories.deployedOnQa).toEqual([apiRepo])
+  })
+
+  it('ignores canceled production tags', () => {
+    const snapshot = computeControlRoomProgress({
+      versionId: 'release-1:control-room',
+      tickets: [],
+      selectedRepositories: [apiRepo],
+      lastHop: 'release-to-default',
+      states: {
+        [apiRepo]: controlRoomState(apiRepo, 'up_to_date', {
+          productionReleases: [
+            {
+              id: 1,
+              tag: 'v-26.0716.1',
+              url: 'https://github.test/releases/v-26.0716.1',
+              createdAt: '2026-07-16T09:00:00Z',
+              buildStatus: 'canceled',
+              runs: [],
+            },
+          ],
+        }),
+      },
+      productionReleases: {
+        [apiRepo]: {
+          tag: 'v-26.0716.1',
+          createdAt: '2026-07-16T09:00:00Z',
+        },
+      },
+      releaseDate: '2026-07-16',
+    })
+
+    expect(snapshot.tagsCreated).toEqual({ current: 0, total: 1 })
+    expect(snapshot.pendingRepositories.tagsCreated).toEqual([apiRepo])
+  })
+})
+

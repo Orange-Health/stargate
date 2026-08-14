@@ -1,4 +1,11 @@
-import type { DeploymentFreshness, ServiceRelease } from '../../shared/types'
+import type {
+  CreatedProductionRelease,
+  DeploymentFreshness,
+  PromotionRoute,
+  ReleaseControlRoomState,
+  ServiceRelease,
+} from '../../shared/types'
+import { releaseCreatedOnDate } from './releaseNotes'
 import type { ReleaseTicket } from './releaseTickets'
 
 export const RELEASE_PROGRESS_STORAGE_PREFIX = 'release-desk-progress:'
@@ -22,6 +29,7 @@ export type ReleaseProgressSnapshot = {
   deployedOnQa: ProgressCount
   pendingRepositories: PendingProgressRepositories
   updatedAt: string
+  deployedLabel?: string
 }
 
 export type ReleaseProgressStepId =
@@ -161,6 +169,120 @@ export function computeReleaseProgress(input: {
   }
 }
 
+export function lastHopPromotionMerged(
+  state: ReleaseControlRoomState | undefined,
+  lastHop: PromotionRoute,
+) {
+  return (
+    state?.promotionSteps.find((step) => step.route === lastHop)?.state ===
+    'up_to_date'
+  )
+}
+
+export function productionTagCreatedForDate(
+  productionRelease: Pick<CreatedProductionRelease, 'tag' | 'createdAt'> | undefined,
+  state: ReleaseControlRoomState | undefined,
+  releaseDate: string,
+) {
+  if (
+    !productionRelease ||
+    !releaseCreatedOnDate(productionRelease.createdAt, releaseDate)
+  ) {
+    return false
+  }
+  return (
+    state?.productionReleases.find((item) => item.tag === productionRelease.tag)
+      ?.buildStatus !== 'canceled'
+  )
+}
+
+export function productionTagDeployedToProd(
+  tag: string | undefined,
+  state: ReleaseControlRoomState | undefined,
+) {
+  if (!tag || !state?.jenkinsServices.length) return false
+  const productionDeployments = state.deployedTags.filter(
+    (deployment) => deployment.environment === 'production',
+  )
+  return state.jenkinsServices.every((jenkinsService) =>
+    productionDeployments.some(
+      (deployment) =>
+        deployment.service === jenkinsService &&
+        deployment.tag === tag &&
+        (deployment.status === undefined || deployment.status === 'succeeded'),
+    ),
+  )
+}
+
+export function computeControlRoomProgress(input: {
+  versionId: string
+  tickets: ReleaseTicket[]
+  selectedRepositories: string[]
+  lastHop: PromotionRoute
+  states: Record<string, ReleaseControlRoomState | undefined>
+  productionReleases: Record<
+    string,
+    Pick<CreatedProductionRelease, 'tag' | 'createdAt'> | undefined
+  >
+  releaseDate: string
+  now?: string
+}): ReleaseProgressSnapshot {
+  const repositories = input.selectedRepositories
+  const mergedRepositories = repositories.filter((repository) =>
+    lastHopPromotionMerged(input.states[repository], input.lastHop),
+  )
+  const taggedRepositories = repositories.filter((repository) =>
+    productionTagCreatedForDate(
+      input.productionReleases[repository],
+      input.states[repository],
+      input.releaseDate,
+    ),
+  )
+  const undeployedRepositories = taggedRepositories.filter(
+    (repository) =>
+      !productionTagDeployedToProd(
+        input.productionReleases[repository]?.tag,
+        input.states[repository],
+      ),
+  )
+  return {
+    versionId: input.versionId,
+    ticketsFinalised: {
+      current: input.tickets.filter(isCompatibleTicket).length,
+      total: input.tickets.length,
+    },
+    prsMerged: {
+      current: mergedRepositories.length,
+      total: repositories.length,
+    },
+    tagsCreated: {
+      current: taggedRepositories.length,
+      total: repositories.length,
+    },
+    deployedOnQa: {
+      current: taggedRepositories.length - undeployedRepositories.length,
+      total: taggedRepositories.length,
+    },
+    pendingRepositories: {
+      prsMerged: repositories.filter(
+        (repository) =>
+          !lastHopPromotionMerged(input.states[repository], input.lastHop),
+      ),
+      tagsCreated: repositories.filter(
+        (repository) =>
+          !productionTagCreatedForDate(
+            input.productionReleases[repository],
+            input.states[repository],
+            input.releaseDate,
+          ),
+      ),
+      deployedOnQa: undeployedRepositories,
+    },
+    updatedAt: input.now ?? new Date().toISOString(),
+    deployedLabel: 'Deployed to prod',
+  }
+}
+
 export function emptyPendingRepositories(): PendingProgressRepositories {
   return {
     prsMerged: [],
@@ -194,7 +316,7 @@ export function releaseProgressSteps(
     },
     {
       id: 'deployed-qa',
-      label: 'Deployed on QA',
+      label: snapshot.deployedLabel ?? 'Deployed on QA',
       pendingRepositories: pending.deployedOnQa,
       ...snapshot.deployedOnQa,
     },
