@@ -10,9 +10,11 @@ import type {
 import { DialogBackdrop } from './DialogBackdrop'
 import {
   deployableQaTargets,
+  effectiveLatestQaTag,
   isMergedToDev,
   latestQaTagAlreadyDeployed,
   latestQaTagDeployInProgress,
+  liveQaIsAtLeast,
   pendingQaDeployTargets,
   qaDeployments,
   runningQaDeployments,
@@ -164,13 +166,34 @@ export function BulkQaDeployDialog({
   const latestTagsRef = useRef(latestTags)
   latestTagsRef.current = latestTags
 
-  const pendingTargets = useMemo(
-    () =>
-      pendingQaDeployTargets(targets, freshness, deploymentsByRepository).filter(
-        (target) => !qaBuildFailed(buildStatuses[target.repository]?.status),
-      ),
-    [buildStatuses, deploymentsByRepository, freshness, targets],
-  )
+  const pendingTargets = useMemo(() => {
+    const resolved = targets.map((target) => {
+      const deployedTags = deploymentsByRepository[target.repository]
+      const liveTags = deployedTags
+        ? liveQaTags(deployedTags)
+        : (freshness[target.repository]?.liveQaTags ?? [])
+      const tag =
+        effectiveLatestQaTag(
+          target.tag,
+          latestTags[target.repository],
+          liveTags,
+        ) ?? target.tag
+      return { ...target, tag }
+    })
+    return pendingQaDeployTargets(
+      resolved,
+      freshness,
+      deploymentsByRepository,
+    ).filter(
+      (target) => !qaBuildFailed(buildStatuses[target.repository]?.status),
+    )
+  }, [
+    buildStatuses,
+    deploymentsByRepository,
+    freshness,
+    latestTags,
+    targets,
+  ])
 
   useEffect(() => {
     if (repositories.length === 0) return
@@ -441,8 +464,7 @@ export function BulkQaDeployDialog({
       latestTag &&
       info &&
       !info.checkFailed &&
-      !info.outdated &&
-      info.liveQaTags.includes(latestTag)
+      liveQaIsAtLeast(latestTag, info.liveQaTags)
     ) {
       return { text: 'Live', kind: 'deployed' as const }
     }
@@ -475,10 +497,16 @@ export function BulkQaDeployDialog({
   const rows: ServiceRow[] = withBuilds.map((service) => {
     const repository = service.repository
     const info = freshness[repository]
-    const latestTag = info?.latestBuiltQaTag
     const jenkinsServices = info?.jenkinsServices ?? []
     const deployedTags = deploymentsByRepository[repository] ?? []
     const qa = qaDeployments(deployedTags)
+    const liveTags =
+      qa.length > 0 ? liveQaTags(deployedTags) : (info?.liveQaTags ?? [])
+    const latestTag = effectiveLatestQaTag(
+      info?.latestBuiltQaTag,
+      latestTags[repository],
+      liveTags,
+    )
     const build = buildStatuses[repository]
     return {
       repository,
@@ -486,8 +514,7 @@ export function BulkQaDeployDialog({
         qaBuildFailed(build?.status) && build?.tag
           ? build.tag
           : latestTag,
-      liveTags:
-        qa.length > 0 ? liveQaTags(deployedTags) : (info?.liveQaTags ?? []),
+      liveTags,
       running: runningQaDeployments(deployedTags),
       buildingTag:
         build &&

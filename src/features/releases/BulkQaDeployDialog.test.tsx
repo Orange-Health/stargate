@@ -7,6 +7,7 @@ import { BulkQaDeployDialog } from './BulkQaDeployDialog'
 import {
   deployableQaTargets,
   latestQaTagAlreadyDeployed,
+  liveQaIsAtLeast,
   pendingQaDeployTargets,
   servicesWithoutQaBuilds,
 } from './deployableQaTargets'
@@ -229,6 +230,48 @@ describe('deployableQaTargets', () => {
       ]),
     ).toBe(true)
   })
+
+  it('does not treat an older QA tag as pending when a newer tag is already live', () => {
+    const targets = deployableQaTargets([mergedService], freshness)
+    expect(
+      latestQaTagAlreadyDeployed('v-qa-26.0716.1', ['service-api'], [
+        {
+          service: 'service-api',
+          tag: 'v-qa-26.0716.2',
+          environment: 'qa',
+          status: 'succeeded',
+          buildNumber: 18,
+          buildUrl: 'https://jenkins.test/qa/18',
+          deployedAt: '2026-07-16T13:00:00Z',
+        },
+      ]),
+    ).toBe(true)
+    expect(liveQaIsAtLeast('v-qa-26.0716.1', ['v-qa-26.0716.2'])).toBe(true)
+    expect(
+      pendingQaDeployTargets(targets, freshness, {
+        'orange/service-api': [
+          {
+            service: 'service-api',
+            tag: 'v-qa-26.0716.2',
+            environment: 'qa',
+            status: 'succeeded',
+            buildNumber: 18,
+            buildUrl: 'https://jenkins.test/qa/18',
+            deployedAt: '2026-07-16T13:00:00Z',
+          },
+        ],
+      }),
+    ).toEqual([])
+    expect(
+      pendingQaDeployTargets(targets, {
+        'orange/service-api': {
+          ...freshness['orange/service-api'],
+          liveQaTags: ['v-qa-26.0716.2'],
+          outdated: true,
+        },
+      }, {}),
+    ).toEqual([])
+  })
 })
 
 describe('BulkQaDeployDialog', () => {
@@ -330,6 +373,75 @@ describe('BulkQaDeployDialog', () => {
 
     expect(await screen.findByText('Live', { exact: true })).toBeVisible()
     expect(screen.getByText('Already live (1)')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'All services already live' }),
+    ).toBeDisabled()
+  })
+
+  it('does not mark an older QA tag as ready when a newer tag is already live', async () => {
+    mockStatusApis()
+    vi.mocked(api.listStagingTags).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tags: ['v-qa-26.0716.1', 'v-qa-26.0716.2'],
+        checkFailed: false,
+      },
+    ])
+    vi.mocked(api.repositoryDeploymentStatuses).mockResolvedValue({
+      results: [
+        {
+          repository: 'orange/service-api',
+          deployedTags: [
+            {
+              service: 'service-api',
+              tag: 'v-qa-26.0716.2',
+              environment: 'qa',
+              status: 'succeeded',
+              buildNumber: 48,
+              buildUrl: 'https://jenkins.test/qa/48',
+              deployedAt: '2026-07-16T13:00:00Z',
+            },
+          ],
+          deploymentLookupFailed: false,
+        },
+      ],
+      fetchedAt: '2026-07-16T13:00:00Z',
+    })
+    vi.mocked(api.releaseBuildStatuses).mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tag: 'v-qa-26.0716.2',
+        createdAt: '2026-07-16T00:00:00Z',
+        buildStatus: 'succeeded',
+        runs: [],
+      },
+    ])
+
+    render(
+      <BulkQaDeployDialog
+        services={[mergedService]}
+        freshness={{
+          'orange/service-api': {
+            ...freshness['orange/service-api'],
+            latestBuiltQaTag: 'v-qa-26.0716.1',
+            liveQaTags: ['v-qa-26.0716.2'],
+            outdated: true,
+          },
+        }}
+        releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('Live', { exact: true })).toBeVisible()
+    expect(screen.getByText('Already live (1)')).toBeVisible()
+    expect(screen.getByRole('link', { name: 'v-qa-26.0716.2' })).toBeVisible()
+    expect(screen.queryByText('Ready', { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Ready to deploy/)).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('QA is on v-qa-26.0716.2'),
+    ).not.toBeInTheDocument()
     expect(
       screen.getByRole('button', { name: 'All services already live' }),
     ).toBeDisabled()
