@@ -35,6 +35,8 @@ import {
   releaseNotesForDashboard,
   type ReleaseNotesFormat,
 } from "./releaseNotes";
+import { computeControlRoomProgress } from "./releaseProgress";
+import { ReleaseProgressBar } from "./ReleaseProgressBar";
 import {
   displaySyncPercent,
   EXPECTED_SYNC_MS_PER_SERVICE,
@@ -428,6 +430,7 @@ export function ReleaseDayOperations({
       ]),
     ),
   );
+  const [deploymentsPrimed, setDeploymentsPrimed] = useState(false);
   const [deployTarget, setDeployTarget] = useState<DeployTarget>();
   const sessionRef = useRef(session);
   const statesRef = useRef(states);
@@ -712,7 +715,10 @@ export function ReleaseDayOperations({
       sequence: number,
       forceRefresh = true,
     ) => {
-      if (repositories.length === 0) return;
+      if (repositories.length === 0) {
+        if (sequence === loadSequence.current) setDeploymentsPrimed(true);
+        return;
+      }
       try {
         const response = await api.repositoryDeploymentStatuses(
           repositories,
@@ -734,6 +740,8 @@ export function ReleaseDayOperations({
         });
       } catch {
         // Stable polling loop will retry deployments.
+      } finally {
+        if (sequence === loadSequence.current) setDeploymentsPrimed(true);
       }
     },
     [],
@@ -976,6 +984,12 @@ export function ReleaseDayOperations({
     autoSyncStarted.current = true;
     void refreshStates(false);
   }, [refreshStates]);
+
+  useEffect(() => {
+    if (shouldAutoSync.current) return;
+    const repositories = sessionRef.current.selectedRepositories;
+    void kickDeploymentStatuses(repositories, loadSequence.current, false);
+  }, [kickDeploymentStatuses]);
 
   const refreshOneRepository = useCallback(
     async (repository: string) => {
@@ -1363,6 +1377,40 @@ export function ReleaseDayOperations({
   const hasSavedProgress =
     session.logs.length > 0 ||
     Object.values(session.repositories).some((item) => item.productionRelease);
+  const controlRoomProgress = useMemo(
+    () =>
+      computeControlRoomProgress({
+        versionId: `${dashboard.version.id}:control-room`,
+        selectedRepositories: selected,
+        firstHop,
+        lastHop,
+        states,
+        productionReleases: Object.fromEntries(
+          selected.map((repository) => [
+            repository,
+            session.repositories[repository]?.productionRelease,
+          ]),
+        ),
+        releaseDate: session.releaseDate,
+      }),
+    [
+      dashboard.version.id,
+      firstHop,
+      lastHop,
+      selected,
+      session.releaseDate,
+      session.repositories,
+      states,
+    ],
+  );
+  const controlRoomProgressReady =
+    selected.length === 0 ||
+    (deploymentsPrimed &&
+      selected.every(
+        (repository) =>
+          Boolean(states[repository]) ||
+          repositorySync[repository] === "failed",
+      ));
 
   async function runAction(
     action: string,
@@ -2086,6 +2134,7 @@ export function ReleaseDayOperations({
     repositoryCacheTimestamp.current = 0;
     setStates({});
     setRepositorySync({});
+    setDeploymentsPrimed(false);
     window.localStorage.removeItem(
       repositoryStateCacheKey(dashboard.version.id),
     );
@@ -2252,6 +2301,13 @@ export function ReleaseDayOperations({
             are available, but deploy buttons will remain disabled.
           </div>
         )}
+
+        <div className="release-day-progress">
+          <ReleaseProgressBar
+            progress={controlRoomProgress}
+            ready={controlRoomProgressReady}
+          />
+        </div>
 
         <div className="release-day-steps">
           <article className="release-day-step">

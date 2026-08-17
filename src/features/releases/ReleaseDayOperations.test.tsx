@@ -1534,4 +1534,78 @@ describe('ReleaseDayOperations', () => {
     expect(screen.queryByText('Release → Default')).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: 'Dev → Default' })).toBeVisible()
   })
+
+  it('shows a production progress bar for the selected services', async () => {
+    const secondRepository = 'Orange-Health/service-web'
+    const twoServiceDashboard: ReleaseDashboard = {
+      ...dashboard,
+      services: [
+        dashboard.services[0],
+        { ...dashboard.services[0], repository: secondRepository },
+      ],
+    }
+    vi.spyOn(api, 'repositoryState').mockImplementation(async (repositoryName) =>
+      repositoryState(
+        repositoryName === repository ? 'up_to_date' : 'needs_pr',
+        repositoryName === repository ? 'up_to_date' : 'needs_pr',
+        repositoryName,
+      ),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={twoServiceDashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const progress = await screen.findByRole('list', { name: 'Release progress' })
+    expect(progress).toHaveTextContent("PR's created")
+    expect(progress).toHaveTextContent("PR's merged")
+    expect(progress).toHaveTextContent('Tags created')
+    expect(progress).toHaveTextContent('Deployed to prod')
+    expect(progress).not.toHaveTextContent('Tickets finalised')
+    expect(progress).not.toHaveTextContent('Deployed on QA')
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('listitem', {
+          name: /PR's created.*Yet to create: service-web/i,
+        }),
+      ).toBeVisible(),
+    )
+    expect(
+      screen.getByRole('listitem', {
+        name: /PR's merged.*Yet to merge: service-web/i,
+      }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('listitem', {
+        name: /Tags created.*Yet to tag: service-api, service-web/i,
+      }),
+    ).toBeVisible()
+    expect(screen.queryByText('You are the best RM')).not.toBeInTheDocument()
+  })
+
+  it('does not celebrate already merged promotion hops after the first sync', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('up_to_date', 'up_to_date'),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('listitem', { name: /PR's merged, 1 of 1/i }),
+      ).toBeVisible(),
+    )
+    expect(screen.queryByText('You are the best RM')).not.toBeInTheDocument()
+  })
 })

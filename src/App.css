@@ -527,7 +527,11 @@ button:disabled {
 
 .release-toolbar {
   justify-content: space-between;
-  margin-bottom: 30px;
+  margin-bottom: 18px;
+}
+
+.release-toolbar .eyebrow {
+  margin: 0 0 4px;
 }
 
 .release-picker {
@@ -542,12 +546,12 @@ button:disabled {
   cursor: pointer;
   display: flex;
   font-family: var(--display);
-  font-size: clamp(28px, 3vw, 42px);
+  font-size: clamp(17px, 1.8vw, 25px);
   font-weight: 500;
-  gap: 12px;
+  gap: 8px;
   justify-content: space-between;
   letter-spacing: -0.04em;
-  max-width: 620px;
+  max-width: 420px;
   padding: 0;
   text-align: left;
 }
@@ -628,7 +632,7 @@ button:disabled {
 }
 
 .release-meta {
-  gap: 28px;
+  gap: 16px;
 }
 
 .release-meta .merge-feature-button {
@@ -654,6 +658,12 @@ button:disabled {
   text-transform: none;
 }
 
+.release-toolbar .secondary-button {
+  font-size: 11px;
+  min-height: 28px;
+  padding: 0 10px;
+}
+
 .secondary-button {
   background: var(--paper);
   border: 1px solid var(--line-strong);
@@ -667,31 +677,266 @@ button:disabled {
 }
 
 .overview-strip {
-  align-items: stretch;
+  --progress: #34d399;
+  --progress-ink: #06281c;
+  --progress-faint: #14392c;
+  --progress-track: #3d5474;
   background: var(--surface-strong);
-  border-radius: 14px;
+  border-radius: 12px;
   color: var(--on-strong);
   display: flex;
-  margin-bottom: 26px;
-  min-height: 104px;
-  overflow: hidden;
+  flex-direction: column;
+  margin-bottom: 16px;
+  min-height: 0;
+  overflow: visible;
   position: relative;
 }
 
-.readiness-score {
+.overview-strip-body {
+  align-items: stretch;
+  display: flex;
+  min-height: 0;
+  position: relative;
+}
+
+.release-progress {
+  border-bottom: 1px solid var(--line-strong);
+  display: flex;
+  gap: 0;
+  padding: 16px 22px 14px;
+}
+
+.release-progress-step {
+  align-items: center;
   display: flex;
   flex: 1;
-  gap: 20px;
-  padding: 20px 24px;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+}
+
+.release-progress-node {
   align-items: center;
+  background: var(--paper-warm);
+  border: 2px solid var(--progress-track);
+  border-radius: 50%;
+  color: var(--on-strong-muted);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  height: 25px;
+  justify-content: center;
+  position: relative;
+  width: 25px;
+  z-index: 1;
+}
+
+.release-progress-node svg {
+  height: 13px;
+  width: 13px;
+}
+
+.release-progress-step.complete .release-progress-node {
+  background: var(--progress);
+  border-color: var(--progress);
+  color: var(--progress-ink);
+}
+
+.release-progress-step.current .release-progress-node {
+  background: var(--progress-faint);
+  border-color: var(--progress);
+  color: var(--progress);
+}
+
+.release-progress-track {
+  background: var(--progress-track);
+  border-radius: 999px;
+  height: 3px;
+  left: calc(50% + 16px);
+  position: absolute;
+  right: calc(-50% + 16px);
+  top: 11px;
+}
+
+.release-progress-track span {
+  background: var(--progress);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  max-width: 100%;
+}
+
+.release-progress-copy {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 7px;
+  min-width: 0;
+  padding: 0 6px;
+  text-align: center;
+}
+
+.release-progress-copy strong {
+  color: var(--on-strong);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.release-progress-copy small {
+  color: var(--on-strong-muted);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.release-progress-step.complete .release-progress-copy strong,
+.release-progress-step.current .release-progress-copy strong {
+  color: var(--progress);
+}
+
+.release-progress-step.has-pending {
+  cursor: help;
+  z-index: 2;
+}
+
+.release-progress-step.has-pending:hover,
+.release-progress-step.has-pending:focus-within {
+  z-index: 4;
+}
+
+.release-progress-step.has-pending::after {
+  background: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  color: var(--paper);
+  content: attr(data-tooltip);
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 500;
+  left: 50%;
+  line-height: 1.45;
+  max-width: 240px;
+  opacity: 0;
+  padding: 8px 10px;
+  pointer-events: none;
+  position: absolute;
+  text-align: left;
+  top: calc(100% + 8px);
+  transform: translate(-50%, -4px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  visibility: hidden;
+  white-space: normal;
+  width: max-content;
+  z-index: 6;
+}
+
+.release-progress-step.has-pending.tooltip-end::after {
+  left: auto;
+  right: 0;
+  transform: translate(0, -4px);
+}
+
+.release-progress-step.has-pending:hover::after,
+.release-progress-step.has-pending:focus-within::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  visibility: visible;
+}
+
+.release-progress-step.has-pending.tooltip-end:hover::after,
+.release-progress-step.has-pending.tooltip-end:focus-within::after {
+  transform: translate(0, 0);
+}
+
+.rm-celebration {
+  height: 100vh;
+  height: 100dvh;
+  inset: 0;
+  left: 0;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  width: 100vw;
+  z-index: 9999;
+}
+
+.rm-celebration-confetti {
+  height: 100%;
+  inset: 0;
+  position: absolute;
+  width: 100%;
+}
+
+.rm-confetti-piece {
+  animation-fill-mode: forwards;
+  animation-name: rm-confetti-fall;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+  border-radius: 1px;
+  position: absolute;
+}
+
+.rm-celebration-banner {
+  background: #06281c;
+  border: 1px solid #34d399;
+  border-radius: 999px;
+  box-shadow: 0 12px 40px rgb(6 40 28 / 45%);
+  color: #34d399;
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  left: 50%;
+  letter-spacing: -0.03em;
+  margin: 0;
+  padding: 14px 28px;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+
+@keyframes rm-confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  100% {
+    opacity: 0.15;
+    transform: translate3d(var(--rm-drift, 24px), 120vh, 0)
+      rotate(var(--rm-spin, 720deg));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-confetti-piece {
+    animation: none;
+    opacity: 0;
+  }
+}
+
+.readiness-score {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 14px;
 
   > div > p {
-    margin-top: 0;
+    margin: 0;
   }
 }
 
 .overview-bulk-merge {
-  margin-top: 10px;
+  margin-top: 0;
 }
 
 .overview-bulk-merge-actions,
@@ -699,7 +944,7 @@ button:disabled {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
 }
 
 .overview-bulk-merge-actions .overview-bulk-merge {
@@ -707,26 +952,33 @@ button:disabled {
 }
 
 .overview-bulk-merge-actions {
-  margin-top: 10px;
+  margin-top: 6px;
+}
+
+.overview-strip .merge-feature-button,
+.overview-strip .secondary-button {
+  font-size: 10px;
+  min-height: 26px;
+  padding: 0 9px;
 }
 
 .readiness-percent {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   justify-content: center;
 }
 
 .readiness-percent > span {
   font-family: var(--display);
-  font-size: 47px;
+  font-size: 28px;
   letter-spacing: -0.05em;
   line-height: 1;
 }
 
 .readiness-score small {
   color: var(--green-pale);
-  font-size: 21px;
+  font-size: 13px;
 }
 
 .readiness-percent strong {
@@ -746,22 +998,22 @@ button:disabled {
 .stat {
   border-left: 1px solid var(--line-strong);
   display: flex;
-  flex: 0 0 150px;
+  flex: 0 0 90px;
   flex-direction: column;
   justify-content: center;
-  padding: 16px 20px;
+  padding: 8px 12px;
 }
 
 .stat strong {
   font-family: var(--display);
-  font-size: 26px;
+  font-size: 16px;
   font-weight: 500;
 }
 
 .stat span {
   color: var(--on-strong-muted);
   font-size: 10px;
-  margin-top: 3px;
+  margin-top: 2px;
   text-transform: uppercase;
 }
 
@@ -3716,6 +3968,25 @@ label {
   margin-bottom: 10px;
 }
 
+.release-day-progress {
+  --progress: #34d399;
+  --progress-ink: #06281c;
+  --progress-faint: #14392c;
+  --progress-track: #3d5474;
+  background: var(--surface-strong);
+  border-radius: 12px;
+  color: var(--on-strong);
+  margin: 0 0 10px;
+  overflow: visible;
+  position: relative;
+  z-index: 3;
+}
+
+.release-day-progress .release-progress {
+  border-bottom: none;
+  padding: 11px 14px 9px;
+}
+
 .release-day-header h2 {
   font-family: var(--display);
   font-size: 22px;
@@ -4581,7 +4852,7 @@ label {
     display: none;
   }
 
-  .overview-strip {
+  .overview-strip-body {
     flex-wrap: wrap;
   }
 

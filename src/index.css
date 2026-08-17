@@ -27,6 +27,10 @@
   --amber-line: #8a6827;
   --purple: #d3c2ff;
   --purple-faint: #362950;
+  --progress: #34d399;
+  --progress-ink: #06281c;
+  --progress-faint: #14392c;
+  --progress-track: #3d5474;
   color-scheme: dark;
   color: var(--ink);
   background: var(--paper);
@@ -60,6 +64,10 @@
   --amber-line: #e9cf91;
   --purple: #6842b8;
   --purple-faint: #eee8fb;
+  --progress: #059669;
+  --progress-ink: #ffffff;
+  --progress-faint: #d1fae5;
+  --progress-track: #9fb0c6;
   color-scheme: light;
 }
 
