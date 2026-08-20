@@ -258,14 +258,21 @@ export const api = {
   repositoryDeploymentStatuses: (
     repositories: string[],
     forceRefresh = false,
-  ) =>
-    request<RepositoryDeploymentStatusResponse>(
+  ) => {
+    if (repositories.length === 0) {
+      return Promise.resolve({
+        results: [],
+        fetchedAt: new Date().toISOString(),
+      })
+    }
+    return request<RepositoryDeploymentStatusResponse>(
       '/api/jenkins/deployment-statuses',
       {
         method: 'POST',
         body: JSON.stringify({ repositories, forceRefresh }),
       },
-    ),
+    )
+  },
   repositoryRisks: (repositories: string[]) =>
     request<RepositoryRisk[]>('/api/github/repository-risks', {
       method: 'POST',

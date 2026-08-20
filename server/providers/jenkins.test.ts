@@ -94,6 +94,32 @@ describe('Jenkins service mapping', () => {
     expect(servicesForRepository('Orange-Health/scheduler-api')).toEqual([
       'scheduler',
     ])
+    expect(
+      deploymentSpec({
+        repository: 'Orange-Health/scheduler-api',
+        service: 'scheduler',
+        tag: 'v-qa-26.0820.1',
+        environment: 'qa',
+      }).parameters,
+    ).toMatchObject({ SERVICE: 'scheduler' })
+    expect(
+      deploymentSpec({
+        repository: 'Orange-Health/scheduler-api',
+        service: 'scheduler',
+        tag: 'v-s3-26.0820.1',
+        environment: 's3',
+      }).parameters,
+    ).toMatchObject({ SERVICE_NAME: 'scheduler' })
+    expect(
+      productionDeploymentSpec({
+        repository: 'Orange-Health/scheduler-api',
+        service: 'scheduler',
+        imageTag: 'v26.0820.1',
+        qaApprovalRequired: false,
+        skipProdMigration: false,
+        prodMigrationJob: 'Prod-new-cluster-migration',
+      }).parameters,
+    ).toMatchObject({ SERVICE: 'scheduler' })
     expect(servicesForRepository('Orange-Health/citrus')).toEqual(['citrus'])
     expect(servicesForRepository('Orange-Health/unknown')).toEqual([])
   })

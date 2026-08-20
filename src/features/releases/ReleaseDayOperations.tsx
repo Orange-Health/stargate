@@ -104,6 +104,8 @@ const REPOSITORY_SYNC_CONCURRENCY = 2;
 const REPOSITORY_STATE_CACHE_MS = 60_000;
 const SYNC_PROGRESS_POLL_MS = 2_000;
 const SYNC_TIMEOUT_MS = 90_000;
+const LEGACY_SYNC_TIMEOUT_MS = 20_000;
+const JIRA_RELEASE_TIMEOUT_MS = 60_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -416,6 +418,10 @@ export function ReleaseDayOperations({
   const [selectedJiraIssueKeys, setSelectedJiraIssueKeys] = useState<string[]>(
     [],
   );
+  const [releasedJiraIssueKeys, setReleasedJiraIssueKeys] = useState<
+    Set<string>
+  >(() => new Set());
+  const jiraReleaseRequestId = useRef(0);
   const [copyNotesMenuOpen, setCopyNotesMenuOpen] = useState(false);
   const [operationLogExpanded, setOperationLogExpanded] = useState(true);
   const copyNotesMenuRef = useRef<HTMLDivElement>(null);
@@ -749,7 +755,12 @@ export function ReleaseDayOperations({
 
   const monitorSyncProgress = useCallback(
     async (progressId: string, sequence: number, isActive: () => boolean) => {
-      while (isActive() && sequence === loadSequence.current) {
+      const deadline = Date.now() + SYNC_TIMEOUT_MS;
+      while (
+        isActive() &&
+        sequence === loadSequence.current &&
+        Date.now() < deadline
+      ) {
         try {
           const progress = await api.releaseControlSyncProgress(progressId);
           if (!isActive() || sequence !== loadSequence.current) return;
@@ -794,7 +805,7 @@ export function ReleaseDayOperations({
       let progressActive = true;
       setBatchSyncProgress(undefined);
       const syncStartedAt = Date.now();
-      const monitorPromise = monitorSyncProgress(
+      void monitorSyncProgress(
         progressId,
         sequence,
         () => progressActive,
@@ -818,7 +829,10 @@ export function ReleaseDayOperations({
             "Batch sync transport failed; using legacy repository sync.",
             repository,
           );
-          repositoryState = await loadLegacyRepositoryState(repository, force);
+          repositoryState = await withTimeout(
+            loadLegacyRepositoryState(repository, force),
+            LEGACY_SYNC_TIMEOUT_MS,
+          );
         }
         if (batchResponse) {
           const result = batchResponse.results[0];
@@ -832,8 +846,8 @@ export function ReleaseDayOperations({
         if (!repositoryState)
           throw new Error("Repository sync returned no state.");
         applyRepositoryState(repository, repositoryState, sequence);
+        progressActive = false;
         void kickDeploymentStatuses([repository], sequence);
-        await monitorPromise;
         updateSyncMsPerServicePrior(Date.now() - syncStartedAt);
       } catch (reason) {
         progressActive = false;
@@ -884,7 +898,7 @@ export function ReleaseDayOperations({
       let progressActive = true;
       setBatchSyncProgress(undefined);
       const syncStartedAt = Date.now();
-      const monitorPromise = monitorSyncProgress(
+      void monitorSyncProgress(
         progressId,
         sequence,
         () => progressActive,
@@ -907,9 +921,9 @@ export function ReleaseDayOperations({
             );
           }
         }
+        progressActive = false;
         if (!silent) setRefreshing(false);
         void kickDeploymentStatuses(repositories, sequence);
-        await monitorPromise;
         if (repositories.length > 0) {
           updateSyncMsPerServicePrior(
             (Date.now() - syncStartedAt) / repositories.length,
@@ -941,9 +955,9 @@ export function ReleaseDayOperations({
                 [repository]: "syncing",
               }));
               try {
-                const state = await loadLegacyRepositoryState(
-                  repository,
-                  force,
+                const state = await withTimeout(
+                  loadLegacyRepositoryState(repository, force),
+                  LEGACY_SYNC_TIMEOUT_MS,
                 );
                 applyRepositoryState(repository, state, sequence);
               } catch (reason) {
@@ -1129,6 +1143,7 @@ export function ReleaseDayOperations({
     const poll = async () => {
       if (!active || inFlight || document.hidden) return;
       const currentSession = sessionRef.current;
+      if (currentSession.selectedRepositories.length === 0) return;
       let activeReleases: {
         repository: string;
         tag: string;
@@ -1192,36 +1207,38 @@ export function ReleaseDayOperations({
             activeReleases.length
               ? api.releaseBuildStatuses(activeReleases, true)
               : Promise.resolve([]),
-            api
-              .repositoryDeploymentStatuses(
-                currentSession.selectedRepositories,
-                forceDeploymentRefresh,
-              )
-              .then((response) =>
-                response.results.map((result) => ({
-                  repository: result.repository,
-                  result,
-                })),
-              )
-              .catch(() =>
-                Promise.all(
-                  currentSession.selectedRepositories.map(
-                    async (repository) => {
-                      try {
-                        return {
-                          repository,
-                          result: await api.repositoryDeploymentStatus(
-                            repository,
-                            forceDeploymentRefresh,
-                          ),
-                        };
-                      } catch {
-                        return undefined;
-                      }
-                    },
-                  ),
-                ),
-              ),
+            currentSession.selectedRepositories.length
+              ? api
+                  .repositoryDeploymentStatuses(
+                    currentSession.selectedRepositories,
+                    forceDeploymentRefresh,
+                  )
+                  .then((response) =>
+                    response.results.map((result) => ({
+                      repository: result.repository,
+                      result,
+                    })),
+                  )
+                  .catch(() =>
+                    Promise.all(
+                      currentSession.selectedRepositories.map(
+                        async (repository) => {
+                          try {
+                            return {
+                              repository,
+                              result: await api.repositoryDeploymentStatus(
+                                repository,
+                                forceDeploymentRefresh,
+                              ),
+                            };
+                          } catch {
+                            return undefined;
+                          }
+                        },
+                      ),
+                    ),
+                  )
+              : Promise.resolve([]),
           ]),
           BUILD_POLL_TIMEOUT_MS,
         );
@@ -1421,7 +1438,7 @@ export function ReleaseDayOperations({
       attemptLabel?: string;
     } = {},
   ) {
-    if (busyAction || refreshing || selected.length === 0) return;
+    if (busyAction || selected.length === 0) return;
     const repositories = dashboard.services
       .map((service) => service.repository)
       .filter((repository) => selectedSet.has(repository));
@@ -2080,29 +2097,56 @@ export function ReleaseDayOperations({
     }
   }
 
+  const remainingJiraIssues = releaseIssues.filter(
+    (issue) => !releasedJiraIssueKeys.has(issue.key),
+  );
+
   function openJiraReleaseDialog() {
-    setSelectedJiraIssueKeys(releaseIssues.map((issue) => issue.key));
+    if (jiraReleaseStatus === "running") return;
+    setSelectedJiraIssueKeys(remainingJiraIssues.map((issue) => issue.key));
     setJiraReleaseDialogOpen(true);
   }
 
+  function closeJiraReleaseDialog() {
+    jiraReleaseRequestId.current += 1;
+    setJiraReleaseDialogOpen(false);
+    if (jiraReleaseStatus === "running") {
+      setJiraReleaseStatus("idle");
+    }
+  }
+
   async function markJiraTicketsReleased() {
-    if (jiraReleaseStatus === "running" || jiraReleaseStatus === "success")
-      return;
+    if (jiraReleaseStatus === "running") return;
     if (selectedJiraIssueKeys.length === 0) return;
+    const requestId = ++jiraReleaseRequestId.current;
     setJiraReleaseStatus("running");
     setJiraReleaseMessage("");
     log("info", "Marking release tickets as Released in Jira.");
     try {
-      const result = await api.markReleaseIssuesReleased(
-        dashboard.version.id,
-        selectedJiraIssueKeys,
+      const result = await withTimeout(
+        api.markReleaseIssuesReleased(
+          dashboard.version.id,
+          selectedJiraIssueKeys,
+        ),
+        JIRA_RELEASE_TIMEOUT_MS,
       );
+      if (requestId !== jiraReleaseRequestId.current) return;
+      const marked = new Set(releasedJiraIssueKeys);
+      for (const key of result.transitioned) marked.add(key);
+      for (const key of result.alreadyReleased) marked.add(key);
+      setReleasedJiraIssueKeys(marked);
+      const remaining = releaseIssues.filter((issue) => !marked.has(issue.key));
       setJiraReleaseDialogOpen(false);
       if (result.failed.length > 0) {
         const message = `${result.transitioned.length} transitioned, ${result.alreadyReleased.length} already released, ${result.failed.length} failed.`;
         setJiraReleaseStatus("partial");
         setJiraReleaseMessage(message);
         log("warning", message);
+      } else if (remaining.length > 0) {
+        const message = `${result.transitioned.length} marked as released. ${remaining.length} ticket${remaining.length === 1 ? "" : "s"} remaining.`;
+        setJiraReleaseStatus("idle");
+        setJiraReleaseMessage(message);
+        log("success", `Jira release statuses updated. ${message}`);
       } else {
         const message = `${result.transitioned.length} transitioned; ${result.alreadyReleased.length} were already released.`;
         setJiraReleaseStatus("success");
@@ -2110,10 +2154,13 @@ export function ReleaseDayOperations({
         log("success", `Jira release statuses updated. ${message}`);
       }
     } catch (reason) {
+      if (requestId !== jiraReleaseRequestId.current) return;
       const message =
-        reason instanceof Error
-          ? reason.message
-          : "Could not update Jira ticket statuses.";
+        reason instanceof Error && reason.message === "Timed out"
+          ? "Jira update timed out. You can select remaining tickets and try again."
+          : reason instanceof Error
+            ? reason.message
+            : "Could not update Jira ticket statuses.";
       setJiraReleaseStatus("error");
       setJiraReleaseMessage(message);
       log("error", message);
@@ -2256,19 +2303,21 @@ export function ReleaseDayOperations({
               className="secondary-button"
               type="button"
               disabled={
-                releaseIssues.length === 0 ||
-                jiraReleaseStatus === "running" ||
-                jiraReleaseStatus === "success"
+                remainingJiraIssues.length === 0 ||
+                jiraReleaseStatus === "running"
               }
               onClick={openJiraReleaseDialog}
             >
               {jiraReleaseStatus === "running"
                 ? "Updating Jira…"
-                : jiraReleaseStatus === "success"
+                : remainingJiraIssues.length === 0 &&
+                    releasedJiraIssueKeys.size > 0
                   ? "✓ Jira tickets released"
                   : jiraReleaseStatus === "partial"
                     ? "Retry Jira release"
-                    : "Mark tickets as released"}
+                    : releasedJiraIssueKeys.size > 0
+                      ? "Mark remaining as released"
+                      : "Mark tickets as released"}
             </button>
             <button
               className="secondary-button"
@@ -2283,11 +2332,11 @@ export function ReleaseDayOperations({
         {jiraReleaseMessage && (
           <div
             className={`alert ${
-              jiraReleaseStatus === "success"
-                ? "success"
+              jiraReleaseStatus === "error"
+                ? "error"
                 : jiraReleaseStatus === "partial"
                   ? "warning"
-                  : "error"
+                  : "success"
             }`}
             role="status"
           >
@@ -2318,9 +2367,7 @@ export function ReleaseDayOperations({
             <button
               className="primary-button"
               type="button"
-              disabled={
-                refreshing || Boolean(busyAction) || selected.length === 0
-              }
+              disabled={Boolean(busyAction) || selected.length === 0}
               onClick={() => void createPullRequests(firstHop)}
             >
               {busyAction === `Create ${promotionRouteLabel(firstHop)} PRs`
@@ -2340,7 +2387,7 @@ export function ReleaseDayOperations({
             <button
               className="primary-button"
               type="button"
-              disabled={!firstPrsReady || refreshing || Boolean(busyAction)}
+              disabled={!firstPrsReady || Boolean(busyAction)}
               onClick={() => void mergePullRequests(firstHop)}
             >
               {busyAction === `Merge ${promotionRouteLabel(firstHop)} PRs`
@@ -2362,7 +2409,7 @@ export function ReleaseDayOperations({
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={!firstMerged || refreshing || Boolean(busyAction)}
+                  disabled={!firstMerged || Boolean(busyAction)}
                   onClick={() => void createPullRequests(lastHop)}
                 >
                   {busyAction === `Create ${promotionRouteLabel(lastHop)} PRs`
@@ -2383,7 +2430,7 @@ export function ReleaseDayOperations({
                   className="primary-button"
                   type="button"
                   disabled={
-                    !lastPrsReady || refreshing || Boolean(busyAction)
+                    !lastPrsReady || Boolean(busyAction)
                   }
                   onClick={() => void mergePullRequests(lastHop)}
                 >
@@ -3002,8 +3049,7 @@ export function ReleaseDayOperations({
       {jiraReleaseDialogOpen && (
         <DialogBackdrop
           onMouseDown={() => {
-            if (jiraReleaseStatus !== "running")
-              setJiraReleaseDialogOpen(false);
+            closeJiraReleaseDialog();
           }}
         >
           <section
@@ -3016,8 +3062,7 @@ export function ReleaseDayOperations({
             <button
               className="dialog-close"
               type="button"
-              disabled={jiraReleaseStatus === "running"}
-              onClick={() => setJiraReleaseDialogOpen(false)}
+              onClick={closeJiraReleaseDialog}
               aria-label="Close"
             >
               ×
@@ -3031,26 +3076,28 @@ export function ReleaseDayOperations({
               <input
                 type="checkbox"
                 checked={
-                  releaseIssues.length > 0 &&
-                  selectedJiraIssueKeys.length === releaseIssues.length
+                  remainingJiraIssues.length > 0 &&
+                  selectedJiraIssueKeys.length === remainingJiraIssues.length
                 }
+                disabled={jiraReleaseStatus === "running"}
                 onChange={(event) =>
                   setSelectedJiraIssueKeys(
                     event.target.checked
-                      ? releaseIssues.map((issue) => issue.key)
+                      ? remainingJiraIssues.map((issue) => issue.key)
                       : [],
                   )
                 }
               />
-              Select all {releaseIssues.length} tickets
+              Select all {remainingJiraIssues.length} remaining tickets
             </label>
             <div className="jira-release-ticket-list">
-              {releaseIssues.map((issue) => (
+              {remainingJiraIssues.map((issue) => (
                 <label key={issue.key}>
                   <input
                     type="checkbox"
                     aria-label={`${issue.key} ${issue.summary}`}
                     checked={selectedJiraIssueKeys.includes(issue.key)}
+                    disabled={jiraReleaseStatus === "running"}
                     onChange={(event) =>
                       setSelectedJiraIssueKeys((current) =>
                         event.target.checked
@@ -3071,10 +3118,9 @@ export function ReleaseDayOperations({
               <button
                 className="secondary-button"
                 type="button"
-                disabled={jiraReleaseStatus === "running"}
-                onClick={() => setJiraReleaseDialogOpen(false)}
+                onClick={closeJiraReleaseDialog}
               >
-                Cancel
+                {jiraReleaseStatus === "running" ? "Stop waiting" : "Cancel"}
               </button>
               <button
                 className="primary-button"

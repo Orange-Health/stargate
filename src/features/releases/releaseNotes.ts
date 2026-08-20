@@ -221,6 +221,11 @@ function formatSlackAuthor(author: string | undefined) {
   return ` by <${githubProfileUrl(login)}|@${login}>`
 }
 
+function slackPrLabel(change: ReleaseNoteChange) {
+  if (change.url) return ` in <${change.url}|PR>`
+  return ''
+}
+
 function formatPlainAuthor(author: string | undefined) {
   if (!author) return ''
   const login = author.replace(/^@/, '')
@@ -234,17 +239,28 @@ function formatHtmlAuthor(author: string | undefined) {
 }
 
 function formatSlackChange(change: ReleaseNoteChange) {
-  const label =
-    change.issueKey && change.issueUrl
-      ? `<${change.issueUrl}|${change.issueKey}>: ${change.title}`
-      : change.issueKey
-        ? `${change.issueKey}: ${change.title}`
-        : change.title
-  const author = formatSlackAuthor(change.author)
+  // Keep GitHub author/PR/release links; omit Jira URLs so Slack does not
+  // unfurl every ticket and hit "Only the first 5 link previews are shown".
+  const label = change.issueKey
+    ? `${change.issueKey}: ${change.title}`
+    : change.title
+  return `- ${label}${formatSlackAuthor(change.author)}${slackPrLabel(change)}`
+}
+
+function formatHtmlChange(
+  change: ReleaseNoteChange,
+  options: { linkJira: boolean },
+) {
+  const label = change.issueKey
+    ? options.linkJira && change.issueUrl
+      ? `<a href="${escapeHtml(change.issueUrl)}">${escapeHtml(change.issueKey)}</a>: ${escapeHtml(change.title)}`
+      : `${escapeHtml(change.issueKey)}: ${escapeHtml(change.title)}`
+    : escapeHtml(change.title)
+  const author = formatHtmlAuthor(change.author)
   if (change.url) {
-    return `- ${label}${author} in <${change.url}|PR>`
+    return `<li>${label}${author} in <a href="${escapeHtml(change.url)}">PR</a></li>`
   }
-  return `- ${label}${author}`
+  return `<li>${label}${author}</li>`
 }
 
 function formatPlainChange(change: ReleaseNoteChange) {
@@ -298,6 +314,7 @@ export function releaseNotesForDashboard(
   const plainSections: string[] = []
   const slackSections: string[] = []
   const htmlSections: string[] = []
+  const slackHtmlSections: string[] = []
 
   for (const service of dashboard.services) {
     const release = latestProductionReleaseOnDate(
@@ -309,32 +326,30 @@ export function releaseNotesForDashboard(
     const changes = serviceChangeItems(service)
     const plainChanges = changes.map(formatPlainChange).join('\n')
     const slackChanges = changes.map(formatSlackChange).join('\n')
+    const slackHtmlChanges =
+      changes.length > 0
+        ? `<ul>${changes.map((change) => formatHtmlChange(change, { linkJira: false })).join('')}</ul>`
+        : ''
     const htmlChanges =
       changes.length > 0
-        ? `<ul>${changes
-            .map((change) => {
-              const label = change.issueKey
-                ? change.issueUrl
-                  ? `<a href="${escapeHtml(change.issueUrl)}">${escapeHtml(change.issueKey)}</a>: ${escapeHtml(change.title)}`
-                  : `${escapeHtml(change.issueKey)}: ${escapeHtml(change.title)}`
-                : escapeHtml(change.title)
-              const author = formatHtmlAuthor(change.author)
-              if (change.url) {
-                return `<li>${label}${author} in <a href="${escapeHtml(change.url)}">PR</a></li>`
-              }
-              return `<li>${label}${author}</li>`
-            })
-            .join('')}</ul>`
+        ? `<ul>${changes.map((change) => formatHtmlChange(change, { linkJira: true })).join('')}</ul>`
         : ''
 
     if (!release) {
       const emptyPlain = plainChanges || 'No tickets linked to this service.'
       const emptySlack = slackChanges || '_No tickets linked to this service._'
+      const emptyHtml =
+        htmlChanges || '<p><i>No tickets linked to this service.</i></p>'
+      const emptySlackHtml =
+        slackHtmlChanges || '<p><i>No tickets linked to this service.</i></p>'
       plainSections.push(`${serviceName}\nTag: Not created\n${emptyPlain}`)
       // Space after * so Slack mrkdwn bold is not broken by the following colon.
       slackSections.push(`*${serviceName}* : _Not created_\n${emptySlack}`)
       htmlSections.push(
-        `<p><b>${escapeHtml(serviceName)}</b>: <i>Not created</i></p>${htmlChanges || '<p><i>No tickets linked to this service.</i></p>'}`,
+        `<p><b>${escapeHtml(serviceName)}</b>: <i>Not created</i></p>${emptyHtml}`,
+      )
+      slackHtmlSections.push(
+        `<p><b>${escapeHtml(serviceName)}</b>: <i>Not created</i></p>${emptySlackHtml}`,
       )
       continue
     }
@@ -345,6 +360,8 @@ export function releaseNotesForDashboard(
       slackChanges || '_No tickets linked to this service._'
     const descriptionHtml =
       htmlChanges || '<p><i>No tickets linked to this service.</i></p>'
+    const descriptionSlackHtml =
+      slackHtmlChanges || '<p><i>No tickets linked to this service.</i></p>'
 
     plainSections.push(
       `${serviceName}\nTag: ${release.tag}\n${release.url}\n${descriptionPlain}`,
@@ -355,34 +372,46 @@ export function releaseNotesForDashboard(
     htmlSections.push(
       `<p><b>${escapeHtml(serviceName)}</b>: <a href="${escapeHtml(release.url)}">${escapeHtml(release.tag)}</a></p>${descriptionHtml}`,
     )
+    slackHtmlSections.push(
+      `<p><b>${escapeHtml(serviceName)}</b>: <a href="${escapeHtml(release.url)}">${escapeHtml(release.tag)}</a></p>${descriptionSlackHtml}`,
+    )
   }
 
   return {
     plain: `Release Notes\nRelease date: ${releaseDate}\n\n${plainSections.join('\n\n')}`,
     slack: `*Release Notes*\nRelease date: ${releaseDate}\n\n${slackSections.join('\n\n')}`,
-    // One blank line between services on Slack HTML paste.
     html: `<p><b>Release Notes</b><br>Release date: ${escapeHtml(releaseDate)}</p>${htmlSections.join('<br>')}`,
+    slackHtml: `<p><b>Release Notes</b><br>Release date: ${escapeHtml(releaseDate)}</p>${slackHtmlSections.join('<br>')}`,
   }
 }
 
+type ReleaseNotesClipboard = {
+  plain: string
+  slack: string
+  html: string
+  slackHtml: string
+}
+
 export function releaseNotesTextForFormat(
-  notes: { plain: string; slack: string; html: string },
+  notes: ReleaseNotesClipboard,
   format: ReleaseNotesFormat,
 ) {
   return format === 'slack' ? notes.slack : notes.plain
 }
 
 export async function copyReleaseNotesContent(
-  notes: { plain: string; slack: string; html: string },
+  notes: ReleaseNotesClipboard,
   format: ReleaseNotesFormat,
 ) {
   const text = releaseNotesTextForFormat(notes, format)
+  const html = format === 'slack' ? notes.slackHtml : notes.html
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-    // text/html gives Slack real bold + hyperlinked tags on paste.
+    // Slack paste prefers text/html. Slack notes omit Jira hrefs so ticket
+    // unfurls do not hit "Only the first 5 link previews are shown".
     await navigator.clipboard.write([
       new ClipboardItem({
         'text/plain': new Blob([text], { type: 'text/plain' }),
-        'text/html': new Blob([notes.html], { type: 'text/html' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
       }),
     ])
     return

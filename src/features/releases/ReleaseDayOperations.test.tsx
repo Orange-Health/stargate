@@ -167,6 +167,37 @@ describe('ReleaseDayOperations', () => {
     expect(serviceCheckbox).toBeChecked()
   })
 
+  it('does not request Jenkins deployments when no services are selected', async () => {
+    window.localStorage.setItem(
+      'release-day-operations:release-1',
+      JSON.stringify({
+        versionId: 'release-1',
+        operationId: 'operation-1',
+        releaseDate: '2026-07-16',
+        startedAt: '2026-07-16T08:00:00Z',
+        selectedRepositories: [],
+        repositories: { [repository]: {} },
+        logs: [],
+      }),
+    )
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('needs_pr', 'needs_pr'),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByRole('checkbox', { name: `Include ${repository}` }),
+    ).not.toBeChecked()
+    expect(api.repositoryDeploymentStatuses).not.toHaveBeenCalled()
+  })
+
   it('collapses and expands the operation log', async () => {
     const user = userEvent.setup()
     render(
@@ -254,8 +285,120 @@ describe('ReleaseDayOperations', () => {
 
     expect(markReleased).toHaveBeenCalledWith('release-1', ['OH-101'])
     expect(
+      await screen.findByRole('button', {
+        name: 'Mark remaining as released',
+      }),
+    ).toBeEnabled()
+    expect(
+      screen.getByText('1 marked as released. 1 ticket remaining.'),
+    ).toBeVisible()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Mark remaining as released' }),
+    )
+    expect(
+      screen.getByRole('checkbox', { name: /OH-102 Release ticket 102/ }),
+    ).toBeChecked()
+    expect(
+      screen.queryByRole('checkbox', { name: /OH-101 Release ticket 101/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('locks the Jira button only after every ticket is marked released', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('up_to_date', 'up_to_date'),
+    )
+    vi.spyOn(api, 'markReleaseIssuesReleased').mockResolvedValue({
+      versionId: 'release-1',
+      total: 2,
+      transitioned: ['OH-101', 'OH-102'],
+      alreadyReleased: [],
+      failed: [],
+    })
+    const dashboardWithTicket: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [101, 102].map((number) => ({
+        issue: {
+          key: `OH-${number}`,
+          summary: `Release ticket ${number}`,
+          status: 'Ready for Release',
+          url: `https://jira.test/browse/OH-${number}`,
+        },
+        eligible: false,
+        blockingReasons: [],
+        warningReasons: [],
+      })),
+    }
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboardWithTicket}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Mark tickets as released' }),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Mark 2 selected as released' }),
+    )
+
+    expect(
       await screen.findByRole('button', { name: '✓ Jira tickets released' }),
     ).toBeDisabled()
+  })
+
+  it('lets the RM stop waiting if marking Jira tickets hangs', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('up_to_date', 'up_to_date'),
+    )
+    vi.spyOn(api, 'markReleaseIssuesReleased').mockReturnValue(
+      new Promise(() => {}),
+    )
+    const dashboardWithTicket: ReleaseDashboard = {
+      ...dashboard,
+      unmatched: [
+        {
+          issue: {
+            key: 'OH-101',
+            summary: 'Release ticket 101',
+            status: 'Ready for Release',
+            url: 'https://jira.test/browse/OH-101',
+          },
+          eligible: false,
+          blockingReasons: [],
+          warningReasons: [],
+        },
+      ],
+    }
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboardWithTicket}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await user.click(
+      screen.getByRole('button', { name: 'Mark tickets as released' }),
+    )
+    await user.click(
+      screen.getByRole('button', { name: 'Mark 1 selected as released' }),
+    )
+    expect(
+      await screen.findByRole('button', { name: 'Marking released…' }),
+    ).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: 'Stop waiting' }))
+
+    expect(
+      screen.getByRole('button', { name: 'Mark tickets as released' }),
+    ).toBeEnabled()
   })
 
   it('shows included avatars immediately and caches the detailed modal', async () => {
@@ -802,8 +945,12 @@ describe('ReleaseDayOperations', () => {
       '<b>service-api</b>: <a href="https://github.test/releases/96">v-26.0716.1</a>',
     )
     expect(notes.slack).toContain(
-      '- <https://jira.test/OH-101|OH-101>: Improve checkout by <https://github.com/alice|@alice> in <https://github.test/pull/101|PR>',
+      '- OH-101: Improve checkout by <https://github.com/alice|@alice> in <https://github.test/pull/101|PR>',
     )
+    expect(notes.slack).not.toContain('jira.test')
+    expect(notes.slackHtml).toContain('href="https://github.test/releases/96"')
+    expect(notes.slackHtml).toContain('href="https://github.com/alice"')
+    expect(notes.slackHtml).not.toContain('jira.test')
     expect(notes.slack).not.toContain('Real feature by @alice')
     expect(notes.slack).not.toContain('devopsautomation-oh')
     expect(notes.plain).toContain(
@@ -829,6 +976,13 @@ describe('ReleaseDayOperations', () => {
     expect(item.types).toEqual(
       expect.arrayContaining(['text/plain', 'text/html']),
     )
+    const html = await (await item.getType('text/html')).text()
+    const plain = await (await item.getType('text/plain')).text()
+    expect(html).toContain('href="https://github.test/releases/96"')
+    expect(html).toContain('href="https://github.com/alice"')
+    expect(html).not.toContain('jira.test')
+    expect(plain).toContain('https://github.test/releases/96')
+    expect(plain).not.toContain('jira.test')
     expect(
       screen.getByRole('button', { name: /Copied!/i }),
     ).toBeVisible()
@@ -1533,6 +1687,83 @@ describe('ReleaseDayOperations', () => {
     expect(screen.queryByText('Create Dev → Release PRs')).not.toBeInTheDocument()
     expect(screen.queryByText('Release → Default')).not.toBeInTheDocument()
     expect(screen.getByRole('columnheader', { name: 'Dev → Default' })).toBeVisible()
+  })
+
+  it('keeps Create Dev → Default PRs clickable while status sync is in flight', async () => {
+    const user = userEvent.setup()
+    window.localStorage.setItem(USE_RELEASE_BRANCH_STORAGE_KEY, 'false')
+    vi.spyOn(api, 'releaseControlStates').mockReturnValue(new Promise(() => {}))
+    vi.spyOn(api, 'releaseControlSyncProgress').mockReturnValue(
+      new Promise(() => {}),
+    )
+    const create = vi
+      .spyOn(api, 'createPromotionPullRequest')
+      .mockResolvedValue({
+        number: 21,
+        title: 'Promote dev to main',
+        url: 'https://github.test/pull/21',
+        baseBranch: 'main',
+        headBranch: 'dev',
+        draft: false,
+        mergeable: true,
+        mergeableState: 'clean',
+        reviewDecision: 'approved',
+        checks: 'success',
+        resolution: 'created',
+      })
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Syncing 0/1' }),
+    ).toBeDisabled()
+    const createStep = screen
+      .getByText('Create Dev → Default PRs')
+      .closest('article')
+    expect(createStep).not.toBeNull()
+    const createButton = within(createStep as HTMLElement).getByRole(
+      'button',
+      { name: 'Create PRs' },
+    )
+    expect(createButton).toBeEnabled()
+    await user.click(createButton)
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        repository,
+        route: 'dev-to-default',
+      }),
+    )
+  })
+
+  it('re-enables Refresh status after batch sync even if progress polling hangs', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('needs_pr', 'needs_pr'),
+    )
+    vi.spyOn(api, 'releaseControlSyncProgress').mockReturnValue(
+      new Promise(() => {}),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '↻ Refresh status' }),
+      ).toBeEnabled(),
+    )
+    expect(screen.getAllByText('PR needed').length).toBeGreaterThan(0)
   })
 
   it('shows a production progress bar for the selected services', async () => {

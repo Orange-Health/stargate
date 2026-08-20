@@ -32,7 +32,7 @@ describe('release notes formatting', () => {
     expect(isInternalReleaseNoteTitle('OH-4509 Group funnel')).toBe(false)
   })
 
-  it('builds slack and plain notes from jira tickets, using github only for tag links', () => {
+  it('keeps GitHub author and release links in Slack notes, but not Jira ticket URLs', () => {
     const repository = 'Orange-Health/accounts'
     const productionRelease: TrackedProductionRelease = {
       id: 1,
@@ -141,8 +141,17 @@ describe('release notes formatting', () => {
       '<b>accounts</b>: <a href="https://github.com/Orange-Health/accounts/releases/tag/v26.0723.2">v26.0723.2</a>',
     )
     expect(notes.slack).toContain(
-      '- <https://jira.test/browse/OH-4509|OH-4509>: Group funnel slot pricing by <https://github.com/Ankita297|@Ankita297> in <https://github.com/Orange-Health/accounts/pull/1653|PR>',
+      '- OH-4509: Group funnel slot pricing by <https://github.com/Ankita297|@Ankita297> in <https://github.com/Orange-Health/accounts/pull/1653|PR>',
     )
+    expect(notes.slack).not.toContain('jira.test')
+    expect(notes.slackHtml).toContain(
+      '<b>accounts</b>: <a href="https://github.com/Orange-Health/accounts/releases/tag/v26.0723.2">v26.0723.2</a>',
+    )
+    expect(notes.slackHtml).toContain(
+      '<li>OH-4509: Group funnel slot pricing by <a href="https://github.com/Ankita297">@Ankita297</a> in <a href="https://github.com/Orange-Health/accounts/pull/1653">PR</a></li>',
+    )
+    expect(notes.slackHtml).not.toContain('jira.test')
+    expect(notes.html).toContain('https://jira.test/browse/OH-4509')
     expect(notes.slack).not.toContain('Remove default group_id')
     expect(notes.slack).not.toContain('Full Changelog')
     expect(notes.slack).not.toContain('devopsautomation-oh')
