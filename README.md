@@ -1,32 +1,46 @@
-# React + TypeScript + Vite
+# lease-again
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Orange Health release dashboard (UI brand: RD). Connects Jira versions, GitHub PRs/tags, and Jenkins deploys.
 
-Currently, two official plugins are available:
-
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Skip the Git `release` branch
+
+By default the dashboard uses **Dev → Release → Default**. There is no UI toggle. Set this in the browser console on the dashboard origin, then reload:
+
+```js
+localStorage.setItem('release-desk-use-release-branch', 'false')
+```
+
+That switches promotions and back-merges to **Dev → Default** (and **Default → Dev**). Control room, service operations, and PR branch chips follow the same flag.
+
+| Value | Mode |
+| --- | --- |
+| missing or `'true'` | Dev → Release → Default (default) |
+| `'false'` | Dev → Default |
+
+Restore the release-branch flow:
+
+```js
+localStorage.setItem('release-desk-use-release-branch', 'true')
+```
+
+or:
+
+```js
+localStorage.removeItem('release-desk-use-release-branch')
+```
+
+Reload after any change. The preference is per browser profile, not per repository.
+
+## Other localStorage settings
+
+| Key | Set by | Notes |
+| --- | --- | --- |
+| `release-desk-use-release-branch` | DevTools console (above) | `'true'` / `'false'` |
+| `release-desk-theme` | header theme button | `'dark'` (default) or `'light'` |
+| `release-desk-pinned-repositories` | pin control on the overview | JSON array of `owner/repo` strings |
+| `release-desk-progress:<versionId>` | release progress bar | JSON snapshot; safe to delete |
