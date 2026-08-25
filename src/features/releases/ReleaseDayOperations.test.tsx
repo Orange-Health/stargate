@@ -1816,27 +1816,5 @@ describe('ReleaseDayOperations', () => {
         name: /Tags created.*Yet to tag: service-api, service-web/i,
       }),
     ).toBeVisible()
-    expect(screen.queryByText('You are the best RM')).not.toBeInTheDocument()
-  })
-
-  it('does not celebrate already merged promotion hops after the first sync', async () => {
-    vi.spyOn(api, 'repositoryState').mockResolvedValue(
-      repositoryState('up_to_date', 'up_to_date'),
-    )
-
-    render(
-      <ReleaseDayOperations
-        dashboard={dashboard}
-        productionEnabled={true}
-        onClose={vi.fn()}
-      />,
-    )
-
-    await waitFor(() =>
-      expect(
-        screen.getByRole('listitem', { name: /PR's merged, 1 of 1/i }),
-      ).toBeVisible(),
-    )
-    expect(screen.queryByText('You are the best RM')).not.toBeInTheDocument()
   })
 })

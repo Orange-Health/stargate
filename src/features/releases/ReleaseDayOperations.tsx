@@ -436,7 +436,6 @@ export function ReleaseDayOperations({
       ]),
     ),
   );
-  const [deploymentsPrimed, setDeploymentsPrimed] = useState(false);
   const [deployTarget, setDeployTarget] = useState<DeployTarget>();
   const sessionRef = useRef(session);
   const statesRef = useRef(states);
@@ -722,7 +721,6 @@ export function ReleaseDayOperations({
       forceRefresh = true,
     ) => {
       if (repositories.length === 0) {
-        if (sequence === loadSequence.current) setDeploymentsPrimed(true);
         return;
       }
       try {
@@ -746,8 +744,6 @@ export function ReleaseDayOperations({
         });
       } catch {
         // Stable polling loop will retry deployments.
-      } finally {
-        if (sequence === loadSequence.current) setDeploymentsPrimed(true);
       }
     },
     [],
@@ -1420,15 +1416,6 @@ export function ReleaseDayOperations({
       states,
     ],
   );
-  const controlRoomProgressReady =
-    selected.length === 0 ||
-    (deploymentsPrimed &&
-      selected.every(
-        (repository) =>
-          Boolean(states[repository]) ||
-          repositorySync[repository] === "failed",
-      ));
-
   async function runAction(
     action: string,
     task: (repository: string) => Promise<void>,
@@ -2181,7 +2168,6 @@ export function ReleaseDayOperations({
     repositoryCacheTimestamp.current = 0;
     setStates({});
     setRepositorySync({});
-    setDeploymentsPrimed(false);
     window.localStorage.removeItem(
       repositoryStateCacheKey(dashboard.version.id),
     );
@@ -2352,10 +2338,7 @@ export function ReleaseDayOperations({
         )}
 
         <div className="release-day-progress">
-          <ReleaseProgressBar
-            progress={controlRoomProgress}
-            ready={controlRoomProgressReady}
-          />
+          <ReleaseProgressBar progress={controlRoomProgress} />
         </div>
 
         <div className="release-day-steps">

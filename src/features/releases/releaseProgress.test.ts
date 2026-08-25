@@ -8,9 +8,7 @@ import type { ReleaseTicket } from './releaseTickets'
 import {
   computeControlRoomProgress,
   computeReleaseProgress,
-  completedProgressStepIds,
   isStepComplete,
-  newlyCompletedProgressStepIds,
   progressRatio,
   readStoredReleaseProgress,
   releaseProgressDate,
@@ -205,37 +203,6 @@ describe('releaseProgress', () => {
     ).toBeUndefined()
   })
 
-  it('detects newly completed steps after the first snapshot', () => {
-    const pending = computeReleaseProgress({
-      versionId: '10351',
-      tickets: [ticket('OH-1', 'blocked')],
-      mergedIssueCount: 0,
-      issueCount: 1,
-      services: [service('orange/service-api', false)],
-      stagingTags: {},
-      freshness: {},
-      now: '2026-08-14T10:00:00Z',
-    })
-    const merged = computeReleaseProgress({
-      versionId: '10351',
-      tickets: [ticket('OH-1', 'merged')],
-      mergedIssueCount: 1,
-      issueCount: 1,
-      services: [service('orange/service-api', true)],
-      stagingTags: {},
-      freshness: {},
-      now: '2026-08-14T10:00:01Z',
-    })
-    expect(
-      newlyCompletedProgressStepIds(null, completedProgressStepIds(pending)),
-    ).toEqual([])
-    expect(
-      newlyCompletedProgressStepIds(
-        completedProgressStepIds(pending),
-        completedProgressStepIds(merged),
-      ),
-    ).toEqual(['prs-merged'])
-  })
 })
 
 function controlRoomState(

@@ -65,6 +65,40 @@ describe('ProductionReleaseDialog', () => {
     )
   })
 
+  it('can patch without waiting for the production list tag', async () => {
+    const user = userEvent.setup()
+    const create = vi.spyOn(api, 'createProductionRelease').mockResolvedValue({
+      id: 4,
+      repository: 'Orange-Health/accounts',
+      tag: 'v26.0714.4',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/4',
+      createdAt: '2026-08-12T12:00:00Z',
+    })
+
+    render(
+      <ProductionReleaseDialog
+        repository="Orange-Health/accounts"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByRole('button', { name: 'Create production release' }),
+    ).toBeEnabled()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Create production release' }),
+    )
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        repository: 'Orange-Health/accounts',
+        mode: 'patch',
+      }),
+    )
+  })
+
   it('creates a date-based tag when release day is selected', async () => {
     const user = userEvent.setup()
     const create = vi.spyOn(api, 'createProductionRelease').mockResolvedValue({

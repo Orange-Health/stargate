@@ -23,7 +23,7 @@ function localDate() {
 
 function patchStatusCopy(latestTag: string | undefined) {
   if (latestTag) return `Patches the latest production tag (${latestTag}).`
-  return 'No production tag found yet. Use Release day to create the first tag.'
+  return 'Patches the latest production tag. Use Release day if this repository has no production tag yet.'
 }
 
 export function ProductionReleaseDialog({
@@ -68,8 +68,6 @@ export function ProductionReleaseDialog({
     mode === 'release-day'
       ? releaseDayProductionTagPreview(repository, date)
       : nextPatchProductionTagPreview(repository, latestProductionTag)
-  const submitDisabled =
-    creating || (mode === 'patch' && !latestProductionTag)
 
   return (
     <DialogBackdrop onMouseDown={onClose}>
@@ -179,7 +177,7 @@ export function ProductionReleaseDialog({
                 <button
                   className="primary-button"
                   type="submit"
-                  disabled={submitDisabled}
+                  disabled={creating}
                 >
                   {creating ? 'Creating release…' : 'Create production release'}
                 </button>

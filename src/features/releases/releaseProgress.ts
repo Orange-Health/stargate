@@ -71,23 +71,6 @@ export function isStepComplete(count: ProgressCount) {
   return count.total > 0 && count.current >= count.total
 }
 
-export function completedProgressStepIds(
-  snapshot: ReleaseProgressSnapshot,
-): ReleaseProgressStepId[] {
-  return releaseProgressSteps(snapshot)
-    .filter((step) => isStepComplete(step))
-    .map((step) => step.id)
-}
-
-export function newlyCompletedProgressStepIds(
-  previous: Iterable<ReleaseProgressStepId> | null,
-  next: Iterable<ReleaseProgressStepId>,
-): ReleaseProgressStepId[] {
-  if (previous == null) return []
-  const seen = new Set(previous)
-  return [...next].filter((id) => !seen.has(id))
-}
-
 export function repositoryShortName(repository: string) {
   return repository.split('/').at(-1) ?? repository
 }
