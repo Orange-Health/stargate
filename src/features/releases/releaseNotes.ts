@@ -12,7 +12,7 @@ export type ReleaseNoteChange = {
   issueKey?: string
   issueUrl?: string
   title: string
-  author?: string
+  authors?: string[]
   url?: string
 }
 
@@ -193,7 +193,7 @@ export function parseReleaseNoteChangeLine(
     const author = withAuthorAndUrl[2]
     const url = parseMarkdownLink(withAuthorAndUrl[3])
     if (!title || isReleaseNotesBotAuthor(author)) return null
-    return { title, author, url }
+    return { title, authors: [author], url }
   }
 
   return { title: body }
@@ -215,36 +215,33 @@ function githubProfileUrl(login: string) {
   return `https://github.com/${login.replace(/^@/, '')}`
 }
 
-function formatSlackAuthor(author: string | undefined) {
-  if (!author) return ''
-  const login = author.replace(/^@/, '')
-  return ` by <${githubProfileUrl(login)}|@${login}>`
+function normalizedAuthorLogin(author: string) {
+  return author.replace(/^@/, '')
 }
 
-function slackPrLabel(change: ReleaseNoteChange) {
-  if (change.url) return ` in <${change.url}|PR>`
-  return ''
+function joinAuthorNames(names: string[]) {
+  if (names.length <= 2) return names.join(' and ')
+  return `${names.slice(0, -1).join(', ')}, and ${names.at(-1)}`
 }
 
-function formatPlainAuthor(author: string | undefined) {
-  if (!author) return ''
-  const login = author.replace(/^@/, '')
-  return ` by @${login} (${githubProfileUrl(login)})`
-}
-
-function formatHtmlAuthor(author: string | undefined) {
-  if (!author) return ''
-  const login = author.replace(/^@/, '')
-  return ` by <a href="${escapeHtml(githubProfileUrl(login))}">@${escapeHtml(login)}</a>`
+function formatAuthorCredits(
+  authors: string[] | undefined,
+  formatOne: (login: string) => string,
+) {
+  if (!authors || authors.length === 0) return ''
+  return ` by ${joinAuthorNames(authors.map((author) => formatOne(normalizedAuthorLogin(author))))}`
 }
 
 function formatSlackChange(change: ReleaseNoteChange) {
-  // Keep GitHub author/PR/release links; omit Jira URLs so Slack does not
-  // unfurl every ticket and hit "Only the first 5 link previews are shown".
+  // Keep GitHub author and release links; omit Jira and PR URLs so Slack
+  // does not unfurl every ticket and hit "Only the first 5 link previews are shown".
   const label = change.issueKey
     ? `${change.issueKey}: ${change.title}`
     : change.title
-  return `- ${label}${formatSlackAuthor(change.author)}${slackPrLabel(change)}`
+  return `- ${label}${formatAuthorCredits(
+    change.authors,
+    (login) => `<${githubProfileUrl(login)}|@${login}>`,
+  )}`
 }
 
 function formatHtmlChange(
@@ -256,25 +253,22 @@ function formatHtmlChange(
       ? `<a href="${escapeHtml(change.issueUrl)}">${escapeHtml(change.issueKey)}</a>: ${escapeHtml(change.title)}`
       : `${escapeHtml(change.issueKey)}: ${escapeHtml(change.title)}`
     : escapeHtml(change.title)
-  const author = formatHtmlAuthor(change.author)
-  if (change.url) {
-    return `<li>${label}${author} in <a href="${escapeHtml(change.url)}">PR</a></li>`
-  }
-  return `<li>${label}${author}</li>`
+  const authors = formatAuthorCredits(
+    change.authors,
+    (login) =>
+      `<a href="${escapeHtml(githubProfileUrl(login))}">@${escapeHtml(login)}</a>`,
+  )
+  return `<li>${label}${authors}</li>`
 }
 
 function formatPlainChange(change: ReleaseNoteChange) {
   const label = change.issueKey
     ? `${change.issueKey}: ${change.title}`
     : change.title
-  const author = formatPlainAuthor(change.author)
-  if (change.url) {
-    return `• ${label}${author} in ${change.url}`
-  }
-  if (change.issueUrl) {
-    return `• ${label}${author}\n  ${change.issueUrl}`
-  }
-  return `• ${label}${author}`
+  return `• ${label}${formatAuthorCredits(
+    change.authors,
+    (login) => `@${login} (${githubProfileUrl(login)})`,
+  )}`
 }
 
 export function shouldIncludeReleaseItem(item: ReleaseItem) {
@@ -290,24 +284,39 @@ export function shouldIncludeReleaseItem(item: ReleaseItem) {
   return true
 }
 
+function appendUniqueAuthor(authors: string[], author: string | undefined) {
+  if (!author) return
+  const login = normalizedAuthorLogin(author)
+  if (
+    authors.some((existing) => existing.toLowerCase() === login.toLowerCase())
+  ) {
+    return
+  }
+  authors.push(login)
+}
+
 export function serviceChangeItems(
   service: ReleaseDashboard['services'][number],
 ): ReleaseNoteChange[] {
-  const changes: ReleaseNoteChange[] = []
-  const seenIssueKeys = new Set<string>()
+  const changesByIssueKey = new Map<string, ReleaseNoteChange>()
   for (const item of service.items) {
     if (!shouldIncludeReleaseItem(item)) continue
-    if (seenIssueKeys.has(item.issue.key)) continue
-    seenIssueKeys.add(item.issue.key)
-    changes.push({
-      issueKey: item.issue.key,
-      issueUrl: item.issue.url,
-      title: item.issue.summary,
-      author: item.pullRequest?.author,
-      url: item.pullRequest?.url,
-    })
+    const existing = changesByIssueKey.get(item.issue.key)
+    if (!existing) {
+      const authors: string[] = []
+      appendUniqueAuthor(authors, item.pullRequest?.author)
+      changesByIssueKey.set(item.issue.key, {
+        issueKey: item.issue.key,
+        issueUrl: item.issue.url,
+        title: item.issue.summary,
+        authors,
+      })
+      continue
+    }
+    existing.authors ??= []
+    appendUniqueAuthor(existing.authors, item.pullRequest?.author)
   }
-  return changes
+  return [...changesByIssueKey.values()]
 }
 
 function serviceNameFromRepository(repository: string) {

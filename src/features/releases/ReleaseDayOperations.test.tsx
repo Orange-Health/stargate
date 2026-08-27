@@ -945,7 +945,7 @@ describe('ReleaseDayOperations', () => {
       '<b>service-api</b>: <a href="https://github.test/releases/96">v-26.0716.1</a>',
     )
     expect(notes.slack).toContain(
-      '- OH-101: Improve checkout by <https://github.com/alice|@alice> in <https://github.test/pull/101|PR>',
+      '- OH-101: Improve checkout by <https://github.com/alice|@alice>',
     )
     expect(notes.slack).not.toContain('jira.test')
     expect(notes.slackHtml).toContain('href="https://github.test/releases/96"')

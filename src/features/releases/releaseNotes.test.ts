@@ -146,14 +146,15 @@ describe('release notes formatting', () => {
       '<b>accounts</b>: <a href="https://github.com/Orange-Health/accounts/releases/tag/v26.0723.2">v26.0723.2</a>',
     )
     expect(notes.slack).toContain(
-      '- OH-4509: Group funnel slot pricing by <https://github.com/Ankita297|@Ankita297> in <https://github.com/Orange-Health/accounts/pull/1653|PR>',
+      '- OH-4509: Group funnel slot pricing by <https://github.com/Ankita297|@Ankita297>',
     )
     expect(notes.slack).not.toContain('jira.test')
+    expect(notes.slack).not.toContain('|PR>')
     expect(notes.slackHtml).toContain(
       '<b>accounts</b>: <a href="https://github.com/Orange-Health/accounts/releases/tag/v26.0723.2">v26.0723.2</a>',
     )
     expect(notes.slackHtml).toContain(
-      '<li>OH-4509: Group funnel slot pricing by <a href="https://github.com/Ankita297">@Ankita297</a> in <a href="https://github.com/Orange-Health/accounts/pull/1653">PR</a></li>',
+      '<li>OH-4509: Group funnel slot pricing by <a href="https://github.com/Ankita297">@Ankita297</a></li>',
     )
     expect(notes.slackHtml).not.toContain('jira.test')
     expect(notes.html).toContain('https://jira.test/browse/OH-4509')
@@ -161,9 +162,10 @@ describe('release notes formatting', () => {
     expect(notes.slack).not.toContain('Full Changelog')
     expect(notes.slack).not.toContain('devopsautomation-oh')
     expect(notes.plain).toContain(
-      '• OH-4509: Group funnel slot pricing by @Ankita297 (https://github.com/Ankita297) in https://github.com/Orange-Health/accounts/pull/1653',
+      '• OH-4509: Group funnel slot pricing by @Ankita297 (https://github.com/Ankita297)',
     )
     expect(notes.plain).not.toContain('Remove default group_id')
+    expect(notes.plain).not.toContain('/pull/1653')
   })
 
   it('lists each ticket once per service even when several PRs match it', () => {
@@ -276,9 +278,16 @@ describe('release notes formatting', () => {
       cached: false,
     }
 
-    expect(serviceChangeItems(dashboard.services[0]).map((change) => change.issueKey)).toEqual(
-      ['OH-1007', 'OH-5054'],
-    )
+    expect(serviceChangeItems(dashboard.services[0]).map((change) => ({
+      key: change.issueKey,
+      authors: change.authors,
+    }))).toEqual([
+      {
+        key: 'OH-1007',
+        authors: ['iambhushan6', 'ak78158', 'shrish789'],
+      },
+      { key: 'OH-5054', authors: ['ak78158'] },
+    ])
 
     const notes = releaseNotesForDashboard(
       dashboard,
@@ -297,11 +306,10 @@ describe('release notes formatting', () => {
     expect(notes.slack.match(/OH-1007:/g)).toHaveLength(2)
     expect(notes.slack.match(/OH-5054:/g)).toHaveLength(1)
     expect(notes.slack).toContain(
-      '- OH-1007: Calculations on CP - V3 by <https://github.com/iambhushan6|@iambhushan6> in <https://github.com/Orange-Health/amethyst/pull/1|PR>',
+      '- OH-1007: Calculations on CP - V3 by <https://github.com/iambhushan6|@iambhushan6>, <https://github.com/ak78158|@ak78158>, and <https://github.com/shrish789|@shrish789>',
     )
-    expect(notes.slack).not.toContain(
-      'https://github.com/Orange-Health/amethyst/pull/2',
-    )
+    expect(notes.slack).not.toContain('|PR>')
+    expect(notes.slack).not.toContain('/pull/')
     expect(notes.slack).toContain('*cds*')
   })
 })
