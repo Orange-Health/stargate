@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import type { ReleaseDashboard, TrackedProductionRelease } from '../../shared/types'
+import type {
+  ReleaseDashboard,
+  ReleaseItem,
+  TrackedProductionRelease,
+} from '../../shared/types'
 import {
   cleanGitHubReleaseDescription,
   isInternalReleaseNoteTitle,
   releaseNotesForDashboard,
+  serviceChangeItems,
 } from './releaseNotes'
 
 const sampleDescription = `## What's Changed
@@ -159,5 +164,144 @@ describe('release notes formatting', () => {
       '• OH-4509: Group funnel slot pricing by @Ankita297 (https://github.com/Ankita297) in https://github.com/Orange-Health/accounts/pull/1653',
     )
     expect(notes.plain).not.toContain('Remove default group_id')
+  })
+
+  it('lists each ticket once per service even when several PRs match it', () => {
+    const repository = 'Orange-Health/amethyst'
+    const otherRepository = 'Orange-Health/cds'
+    const productionRelease: TrackedProductionRelease = {
+      id: 1,
+      tag: 'v26.0827.1',
+      url: 'https://github.com/Orange-Health/amethyst/releases/tag/v26.0827.1',
+      createdAt: '2026-08-27T10:00:00Z',
+      description: '',
+      buildStatus: 'succeeded',
+      runs: [],
+    }
+
+    function changeItem(
+      key: string,
+      summary: string,
+      repositoryName: string,
+      author: string,
+      number: number,
+    ): ReleaseItem {
+      return {
+        issue: {
+          key,
+          summary,
+          status: 'Done',
+          url: `https://jira.test/browse/${key}`,
+        },
+        pullRequest: {
+          id: number,
+          repository: repositoryName,
+          number,
+          title: `${key} ${summary}`,
+          url: `https://github.com/${repositoryName}/pull/${number}`,
+          state: 'closed',
+          draft: false,
+          merged: true,
+          baseBranch: 'dev',
+          headBranch: 'feature',
+          author,
+          assignees: [],
+          reviewDecision: 'approved',
+          mergeable: true,
+          mergeableState: 'clean',
+          checks: 'success',
+          updatedAt: '2026-08-27T08:00:00Z',
+        },
+        eligible: false,
+        blockingReasons: [],
+        warningReasons: [],
+      }
+    }
+
+    const dashboard: ReleaseDashboard = {
+      version: {
+        id: 'release-1',
+        name: '27/08/2026',
+        releaseDate: '2026-08-27',
+        overdue: false,
+        issueCount: 2,
+      },
+      services: [
+        {
+          repository,
+          eligibleCount: 0,
+          blockedCount: 0,
+          mergedCount: 4,
+          backMergePending: false,
+          items: [
+            changeItem('OH-1007', 'Calculations on CP - V3', repository, 'iambhushan6', 1),
+            changeItem('OH-1007', 'Calculations on CP - V3', repository, 'ak78158', 2),
+            changeItem('OH-1007', 'Calculations on CP - V3', repository, 'shrish789', 3),
+            changeItem(
+              'OH-5054',
+              'Approve button not enabling',
+              repository,
+              'ak78158',
+              4,
+            ),
+            changeItem(
+              'OH-5054',
+              'Approve button not enabling',
+              repository,
+              'ak78158',
+              5,
+            ),
+          ],
+        },
+        {
+          repository: otherRepository,
+          eligibleCount: 0,
+          blockedCount: 0,
+          mergedCount: 1,
+          backMergePending: false,
+          items: [
+            changeItem(
+              'OH-1007',
+              'Calculations on CP - V3',
+              otherRepository,
+              'shrish789',
+              9,
+            ),
+          ],
+        },
+      ],
+      unmatched: [],
+      warnings: [],
+      fetchedAt: '2026-08-27T10:00:00Z',
+      cached: false,
+    }
+
+    expect(serviceChangeItems(dashboard.services[0]).map((change) => change.issueKey)).toEqual(
+      ['OH-1007', 'OH-5054'],
+    )
+
+    const notes = releaseNotesForDashboard(
+      dashboard,
+      {
+        [repository]: [productionRelease],
+        [otherRepository]: [
+          {
+            ...productionRelease,
+            url: 'https://github.com/Orange-Health/cds/releases/tag/v26.0827.1',
+          },
+        ],
+      },
+      '2026-08-27',
+    )
+
+    expect(notes.slack.match(/OH-1007:/g)).toHaveLength(2)
+    expect(notes.slack.match(/OH-5054:/g)).toHaveLength(1)
+    expect(notes.slack).toContain(
+      '- OH-1007: Calculations on CP - V3 by <https://github.com/iambhushan6|@iambhushan6> in <https://github.com/Orange-Health/amethyst/pull/1|PR>',
+    )
+    expect(notes.slack).not.toContain(
+      'https://github.com/Orange-Health/amethyst/pull/2',
+    )
+    expect(notes.slack).toContain('*cds*')
   })
 })

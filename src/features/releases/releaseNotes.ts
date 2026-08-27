@@ -293,13 +293,21 @@ export function shouldIncludeReleaseItem(item: ReleaseItem) {
 export function serviceChangeItems(
   service: ReleaseDashboard['services'][number],
 ): ReleaseNoteChange[] {
-  return service.items.filter(shouldIncludeReleaseItem).map((item) => ({
-    issueKey: item.issue.key,
-    issueUrl: item.issue.url,
-    title: item.issue.summary,
-    author: item.pullRequest?.author,
-    url: item.pullRequest?.url,
-  }))
+  const changes: ReleaseNoteChange[] = []
+  const seenIssueKeys = new Set<string>()
+  for (const item of service.items) {
+    if (!shouldIncludeReleaseItem(item)) continue
+    if (seenIssueKeys.has(item.issue.key)) continue
+    seenIssueKeys.add(item.issue.key)
+    changes.push({
+      issueKey: item.issue.key,
+      issueUrl: item.issue.url,
+      title: item.issue.summary,
+      author: item.pullRequest?.author,
+      url: item.pullRequest?.url,
+    })
+  }
+  return changes
 }
 
 function serviceNameFromRepository(repository: string) {
