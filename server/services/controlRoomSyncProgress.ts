@@ -5,11 +5,16 @@ import type {
   ReleaseControlSyncProgress,
   ReleaseControlSyncStep,
 } from '../../src/shared/types.js'
+import { progressScopeKey } from '../auth/context.js'
 
 const PROGRESS_TTL_MS = 5 * 60_000
 const progress = new Map<string, ReleaseControlSyncProgress>()
 const expiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const enrichmentWaiters = new Map<string, Promise<void>>()
+
+function scoped(progressId: string) {
+  return progressScopeKey(progressId)
+}
 
 /** GitHub work is ~70% of a service; Jenkins is the remaining ~30%. */
 const GITHUB_WEIGHT: Partial<Record<ReleaseControlSyncStep, number>> = {
@@ -31,15 +36,16 @@ const JENKINS_WEIGHT: Partial<Record<ReleaseControlSyncStep, number>> = {
 }
 
 function scheduleExpiry(progressId: string) {
-  const currentTimer = expiryTimers.get(progressId)
+  const key = scoped(progressId)
+  const currentTimer = expiryTimers.get(key)
   if (currentTimer) clearTimeout(currentTimer)
   const timer = setTimeout(() => {
-    progress.delete(progressId)
-    expiryTimers.delete(progressId)
-    enrichmentWaiters.delete(progressId)
+    progress.delete(key)
+    expiryTimers.delete(key)
+    enrichmentWaiters.delete(key)
   }, PROGRESS_TTL_MS)
   timer.unref()
-  expiryTimers.set(progressId, timer)
+  expiryTimers.set(key, timer)
 }
 
 function providerTerminal(status: ReleaseControlProviderSyncStatus) {
@@ -176,7 +182,7 @@ export function createControlRoomSyncProgress(
   repositories: string[],
 ) {
   const updatedAt = new Date().toISOString()
-  progress.set(progressId, {
+  progress.set(scoped(progressId), {
     progressId,
     status: 'running',
     total: repositories.length,
@@ -209,7 +215,7 @@ export function updateControlRoomProviderProgress(
   step?: ReleaseControlSyncStep,
   state?: ReleaseControlRoomState,
 ) {
-  const current = progress.get(progressId)
+  const current = progress.get(scoped(progressId))
   if (!current) return
   const services = current.services.map((service) => {
     if (service.repository !== repository) return service
@@ -224,8 +230,8 @@ export function updateControlRoomProviderProgress(
   })
   const summary = summarize(services)
   // Keep overall status running while enrichment may still be in flight.
-  const enrichmentPending = enrichmentWaiters.has(progressId)
-  progress.set(progressId, {
+  const enrichmentPending = enrichmentWaiters.has(scoped(progressId))
+  progress.set(scoped(progressId), {
     ...current,
     ...summary,
     status: enrichmentPending ? 'running' : summary.status,
@@ -242,7 +248,7 @@ export function publishControlRoomServiceState(
   state: ReleaseControlRoomState,
   message?: string,
 ) {
-  const current = progress.get(progressId)
+  const current = progress.get(scoped(progressId))
   if (!current) return
   const services = current.services.map((service) => {
     if (service.repository !== repository) return service
@@ -253,7 +259,7 @@ export function publishControlRoomServiceState(
       updatedAt: new Date().toISOString(),
     }
   })
-  progress.set(progressId, {
+  progress.set(scoped(progressId), {
     ...current,
     services,
     updatedAt: new Date().toISOString(),
@@ -269,15 +275,15 @@ export function trackControlRoomEnrichment(
   const tracked = enrichment
     .catch(() => undefined)
     .finally(() => {
-      if (enrichmentWaiters.get(progressId) === tracked) {
-        enrichmentWaiters.delete(progressId)
+      if (enrichmentWaiters.get(scoped(progressId)) === tracked) {
+        enrichmentWaiters.delete(scoped(progressId))
       }
       completeControlRoomSyncProgress(progressId)
     })
-  enrichmentWaiters.set(progressId, tracked)
-  const current = progress.get(progressId)
+  enrichmentWaiters.set(scoped(progressId), tracked)
+  const current = progress.get(scoped(progressId))
   if (current) {
-    progress.set(progressId, {
+    progress.set(scoped(progressId), {
       ...current,
       status: 'running',
       updatedAt: new Date().toISOString(),
@@ -287,14 +293,14 @@ export function trackControlRoomEnrichment(
 }
 
 export function getControlRoomSyncProgress(progressId: string) {
-  return progress.get(progressId)
+  return progress.get(scoped(progressId))
 }
 
 export function completeControlRoomSyncProgress(progressId: string) {
-  const current = progress.get(progressId)
+  const current = progress.get(scoped(progressId))
   if (!current) return
-  if (enrichmentWaiters.has(progressId)) {
-    progress.set(progressId, {
+  if (enrichmentWaiters.has(scoped(progressId))) {
+    progress.set(scoped(progressId), {
       ...current,
       status: 'running',
       updatedAt: new Date().toISOString(),
@@ -342,7 +348,7 @@ export function completeControlRoomSyncProgress(progressId: string) {
       github === 'failed' ? 'github-failed' : 'github-ready',
     )
   })
-  progress.set(progressId, {
+  progress.set(scoped(progressId), {
     ...current,
     status: 'completed',
     completed: services.length,

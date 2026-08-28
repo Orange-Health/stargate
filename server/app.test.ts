@@ -13,6 +13,13 @@ describe('local API', () => {
     expect(response.headers['x-powered-by']).toBeUndefined()
   })
 
+  it('returns a local session when AUTH_DISABLED is set', async () => {
+    const response = await request(createApp()).get('/api/auth/me')
+    expect(response.status).toBe(200)
+    expect(response.body.authenticated).toBe(true)
+    expect(response.body.authDisabled).toBe(true)
+  })
+
   it('rejects malformed connection details before provider calls', async () => {
     const response = await request(createApp()).post('/api/connection').send({
       jiraSite: 'http://insecure.example.com',

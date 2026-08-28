@@ -6,18 +6,28 @@ import { z } from 'zod'
 import type {
   ApiErrorBody,
   ConnectionConfig,
-  ConnectionStatus,
   ReleaseControlSyncResponse,
   RepositoryDeploymentStatusResponse,
 } from '../src/shared/types.js'
 import { parseUseReleaseBranch } from '../src/shared/branchModel.js'
 import {
   clearConnection,
+  connectionStatus,
   getConnection,
+  mergeConnectionUpdate,
   requireConnection,
   setConnection,
 } from './connectionStore.js'
 import { ProviderError } from './errors.js'
+import { authMiddleware } from './auth/middleware.js'
+import {
+  handleAuthCallback,
+  handleAuthLogin,
+  handleAuthLogout,
+  handleAuthMe,
+} from './auth/routes.js'
+import { snapshotStaleMs } from './constants.js'
+import { recordAudit } from './services/audit.js'
 import {
   clearGitHubProviderCache,
   createProductionRelease,
@@ -70,6 +80,13 @@ import {
   refreshServiceRelease,
   refreshTicketRelease,
 } from './services/releaseAggregator.js'
+import {
+  beginSnapshotRefresh,
+  endSnapshotRefresh,
+  getReleaseSnapshot,
+  upsertReleaseSnapshot,
+  upsertRepositoryState,
+} from './services/releaseSnapshots.js'
 import { getDeploymentFreshness } from './services/deploymentFreshness.js'
 import {
   getDashboardProgress,
@@ -91,15 +108,15 @@ const connectionSchema = z.object({
       message: 'Jira URL must use HTTPS.',
     }),
   jiraEmail: z.email(),
-  jiraToken: z.string().trim().min(1),
-  githubToken: z.string().trim().min(1),
+  jiraToken: z.string().trim().optional().default(''),
+  githubToken: z.string().trim().optional().default(''),
   jenkinsUrl: z
     .url()
     .refine((value) => new URL(value).protocol === 'https:', {
       message: 'Jenkins URL must use HTTPS.',
     }),
   jenkinsUsername: z.string().trim().min(1),
-  jenkinsToken: z.string().trim().min(1),
+  jenkinsToken: z.string().trim().optional().default(''),
   productionJenkins: z
     .object({
       jenkinsUrl: z
@@ -107,8 +124,8 @@ const connectionSchema = z.object({
         .refine((value) => new URL(value).protocol === 'https:', {
           message: 'Production Jenkins URL must use HTTPS.',
         }),
-      jenkinsUsername: z.string().trim().min(1),
-      jenkinsToken: z.string().trim().min(1),
+      jenkinsUsername: z.string().trim().optional().default(''),
+      jenkinsToken: z.string().trim().optional().default(''),
     })
     .optional(),
   jiraProject: z.string().regex(/^[A-Z][A-Z0-9_]+$/).default('OH'),
@@ -253,6 +270,7 @@ const repositoryBatchSchema = z.object({
   repositories: z.array(repositorySchema).min(1).max(100),
   forceRefresh: z.boolean().optional().default(false),
   useReleaseBranch: z.boolean().optional().default(true),
+  versionId: z.string().regex(/^\d+$/).optional(),
   progressId: z
     .string()
     .regex(/^[A-Za-z0-9_-]{8,80}$/)
@@ -348,18 +366,22 @@ export function createApp() {
   app.get('/api/health', (_request, response) => {
     response.json({ ok: true })
   })
+  app.get('/api/auth/me', (request, response, next) => {
+    void handleAuthMe(request, response).catch(next)
+  })
+  app.get('/api/auth/login', (request, response, next) => {
+    void handleAuthLogin(request, response).catch(next)
+  })
+  app.get('/api/auth/callback', (request, response, next) => {
+    void handleAuthCallback(request, response).catch(next)
+  })
+  app.post('/api/auth/logout', (request, response, next) => {
+    void handleAuthLogout(request, response).catch(next)
+  })
+  app.use(authMiddleware)
 
   app.get('/api/connection', (_request, response) => {
-    const connection = getConnection()
-    const status: ConnectionStatus = connection
-      ? {
-          connected: true,
-          githubOrg: connection.githubOrg,
-          projectKey: connection.jiraProject ?? 'OH',
-          productionEnabled: Boolean(connection.productionJenkins),
-        }
-      : { connected: false }
-    response.json(status)
+    response.json(connectionStatus())
   })
 
   app.post('/api/connection', async (request, response) => {
@@ -374,19 +396,29 @@ export function createApp() {
       return
     }
 
-    const config: ConnectionConfig = {
-      ...parsed.data,
-      jiraSite: parsed.data.jiraSite.replace(/\/+$/, ''),
-      githubOrg: 'Orange-Health',
-      productionJenkins: parsed.data.productionJenkins
-        ? {
-            ...parsed.data.productionJenkins,
-            jenkinsUrl: parsed.data.productionJenkins.jenkinsUrl.replace(
-              /\/+$/,
-              '',
-            ),
-          }
-        : undefined,
+    let config: ConnectionConfig
+    try {
+      config = mergeConnectionUpdate(getConnection(), {
+        ...parsed.data,
+        productionJenkins: parsed.data.productionJenkins
+          ? {
+              jenkinsUrl: parsed.data.productionJenkins.jenkinsUrl,
+              jenkinsUsername: parsed.data.productionJenkins.jenkinsUsername,
+              jenkinsToken: parsed.data.productionJenkins.jenkinsToken,
+            }
+          : undefined,
+      })
+    } catch (error) {
+      response.status(400).json({
+        error: {
+          code: 'INVALID_CONNECTION',
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Invalid connection details.',
+        },
+      } satisfies ApiErrorBody)
+      return
     }
     const [jira, github, jenkins] = await Promise.all([
       testJiraConnection(config),
@@ -408,16 +440,14 @@ export function createApp() {
     ])
     clearGitHubProviderCache()
     clearReleaseCache()
-    setConnection(config)
-    response.json({
-      connected: true,
-      jiraUser: jira.displayName,
-      githubUser: github.user,
-      jenkinsUser: jenkins.name,
-      githubOrg: github.org,
-      projectKey: config.jiraProject,
-      productionEnabled: Boolean(config.productionJenkins),
-    } satisfies ConnectionStatus)
+    await setConnection(config)
+    response.json(
+      connectionStatus({
+        jiraUser: jira.displayName,
+        githubUser: github.user,
+        jenkinsUser: jenkins.name,
+      }),
+    )
   })
 
   app.delete('/api/connection', (_request, response) => {
@@ -447,13 +477,18 @@ export function createApp() {
         } satisfies ApiErrorBody)
         return
       }
-      response.json(
-        await markVersionIssuesReleased(
-          requireConnection(),
-          versionId,
-          parsed.data.issueKeys,
-        ),
-      )
+    response.json(
+      await markVersionIssuesReleased(
+        requireConnection(),
+        versionId,
+        parsed.data.issueKeys,
+      ),
+    )
+    void recordAudit({
+      action: 'mark_released',
+      versionId,
+      details: { issueKeys: parsed.data.issueKeys },
+    })
     },
   )
 
@@ -480,6 +515,12 @@ export function createApp() {
         parsed.data.targetVersionId,
       )
       clearReleaseCache()
+      void recordAudit({
+        action: 'remove_issue',
+        versionId,
+        issueKey: parsed.data.issueKey,
+        details: { targetVersionId: parsed.data.targetVersionId },
+      })
       response.json(result)
     },
   )
@@ -530,16 +571,35 @@ export function createApp() {
         total: 1,
       })
     }
-    response.json(
-      await aggregateRelease(
-        requireConnection(),
-        versionId,
-        request.query.refresh === 'true',
-        progressId
-          ? (progress) => setDashboardProgress(progressId, progress)
-          : undefined,
-      ),
+    const forceRefresh = request.query.refresh === 'true'
+    const config = requireConnection()
+    if (!forceRefresh) {
+      const snapshot = await getReleaseSnapshot(versionId)
+      if (snapshot) {
+        const age =
+          Date.now() - new Date(snapshot.fetchedAt).getTime()
+        if (age > snapshotStaleMs() && beginSnapshotRefresh(versionId)) {
+          void aggregateRelease(config, versionId, true)
+            .then((dashboard) => upsertReleaseSnapshot(dashboard))
+            .catch((error) => {
+              console.error('Background snapshot refresh failed', error)
+            })
+            .finally(() => endSnapshotRefresh(versionId))
+        }
+        response.json(snapshot.dashboard)
+        return
+      }
+    }
+    const dashboard = await aggregateRelease(
+      config,
+      versionId,
+      forceRefresh,
+      progressId
+        ? (progress) => setDashboardProgress(progressId, progress)
+        : undefined,
     )
+    void upsertReleaseSnapshot(dashboard)
+    response.json(dashboard)
   })
 
   app.post(
@@ -647,6 +707,11 @@ export function createApp() {
       parsed.data.sourceBranch,
     )
     clearRepositoryCaches(config, parsed.data.repository)
+    void recordAudit({
+      action: 'create_staging_tag',
+      repository: parsed.data.repository,
+      details: { environment: parsed.data.environment, tag: release.tag },
+    })
     response.status(201).json(release)
   })
 
@@ -697,10 +762,12 @@ export function createApp() {
       mode,
     )
     clearRepositoryCaches(config, parsed.data.repository)
+    void recordAudit({
+      action: 'create_prod_tag',
+      repository: parsed.data.repository,
+      details: { tag: release.tag, mode },
+    })
     response.status(201).json(release)
-  })
-
-  app.get('/api/github/repositories', async (_request, response) => {
     response.json(await listOrganizationRepositories(requireConnection()))
   })
 
@@ -918,6 +985,14 @@ export function createApp() {
     )
     if (progressId) completeControlRoomSyncProgress(progressId)
     const durationMs = Math.round(performance.now() - startedAt)
+    const versionId = parsed.data.versionId
+    if (versionId) {
+      for (const result of github.results) {
+        if (result.state) {
+          void upsertRepositoryState(versionId, result.state)
+        }
+      }
+    }
     response.setHeader('Server-Timing', `release-control-sync;dur=${durationMs}`)
     response.json({
       results: github.results.map((result) => {
@@ -1112,6 +1187,11 @@ export function createApp() {
         parsed.data.route,
       ),
     )
+    void recordAudit({
+      action: 'create_promotion_pr',
+      repository: parsed.data.repository,
+      details: { route: parsed.data.route },
+    })
   })
 
   app.post('/api/github/back-merge-pull-requests', async (request, response) => {
@@ -1132,6 +1212,11 @@ export function createApp() {
         parsed.data.route,
       ),
     )
+    void recordAudit({
+      action: 'create_back_merge_pr',
+      repository: parsed.data.repository,
+      details: { route: parsed.data.route },
+    })
   })
 
   app.post(
@@ -1155,6 +1240,14 @@ export function createApp() {
           parsed.data.bypassBranchProtection,
         ),
       )
+      void recordAudit({
+        action: 'merge_pr',
+        repository: parsed.data.repository,
+        details: {
+          pullNumber: parsed.data.pullNumber,
+          kind: 'promotion',
+        },
+      })
     },
   )
 
@@ -1179,6 +1272,11 @@ export function createApp() {
           parsed.data.bypassBranchProtection,
         ),
       )
+      void recordAudit({
+        action: 'merge_pr',
+        repository: parsed.data.repository,
+        details: { pullNumber: parsed.data.pullNumber, kind: 'back_merge' },
+      })
     },
   )
 
@@ -1204,6 +1302,14 @@ export function createApp() {
           parsed.data.bypassBranchProtection,
         ),
       )
+      void recordAudit({
+        action: 'merge_pr',
+        repository: parsed.data.repository,
+        details: {
+          pullNumber: parsed.data.pullNumber,
+          kind: 'feature',
+        },
+      })
     },
   )
 
@@ -1227,6 +1333,11 @@ export function createApp() {
           parsed.data.pullNumber,
         ),
       )
+      void recordAudit({
+        action: 'merge_pr',
+        repository: parsed.data.repository,
+        details: { pullNumber: parsed.data.pullNumber, kind: 'repository' },
+      })
     },
   )
 
@@ -1245,6 +1356,11 @@ export function createApp() {
     response.status(201).json(
       await triggerDeployment(requireConnection(), parsed.data),
     )
+    void recordAudit({
+      action: 'trigger_qa_deploy',
+      repository: parsed.data.repository,
+      details: { service: parsed.data.service, tag: parsed.data.tag },
+    })
   })
 
   app.get('/api/jenkins/eitri-builds', async (request, response) => {
@@ -1287,6 +1403,11 @@ export function createApp() {
         ...(stagingEnvUpdateJob ? { stagingEnvUpdateJob } : {}),
       }),
     )
+    void recordAudit({
+      action: 'trigger_eitri_deploy',
+      repository: rest.repository,
+      details: { namespace: rest.namespace, service: rest.service },
+    })
   })
 
   app.post(
@@ -1314,6 +1435,11 @@ export function createApp() {
       response.status(202).json(
         await triggerProductionDeployment(config, parsed.data),
       )
+      void recordAudit({
+        action: 'trigger_prod_deploy',
+        repository: parsed.data.repository,
+        details: { tag: parsed.data.imageTag },
+      })
     },
   )
 
@@ -1397,12 +1523,13 @@ export function createApp() {
       _next: express.NextFunction,
     ) => {
       if (error instanceof ProviderError) {
-        response.status(error.status).json({
+        const tokenInvalid = error.status === 401 || error.status === 403
+        response.status(tokenInvalid ? 401 : error.status).json({
           error: {
-            code: error.code,
+            code: tokenInvalid ? 'TOKEN_INVALID' : error.code,
             message: error.message,
             provider: error.provider,
-            retryable: error.retryable,
+            retryable: tokenInvalid ? false : error.retryable,
           },
         })
         return

@@ -7,6 +7,9 @@ import { ThemeToggle } from '../theme/ThemeToggle'
 
 type Props = {
   onConnect: (config: ConnectionConfig) => Promise<ConnectionStatus>
+  defaults?: Partial<ConnectionConfig>
+  updating?: boolean
+  onCancel?: () => void
 }
 
 const initialConfig: ConnectionConfig = {
@@ -26,8 +29,31 @@ const initialConfig: ConnectionConfig = {
   jiraProject: 'OH',
 }
 
-export function ConnectionScreen({ onConnect }: Props) {
-  const [config, setConfig] = useState(initialConfig)
+function configFromDefaults(defaults?: Partial<ConnectionConfig>): ConnectionConfig {
+  return {
+    ...initialConfig,
+    ...defaults,
+    jiraToken: '',
+    githubToken: '',
+    jenkinsToken: '',
+    productionJenkins: {
+      jenkinsUrl:
+        defaults?.productionJenkins?.jenkinsUrl ??
+        initialConfig.productionJenkins?.jenkinsUrl ??
+        'https://pitstop.orangehealth.dev',
+      jenkinsUsername: defaults?.productionJenkins?.jenkinsUsername ?? '',
+      jenkinsToken: '',
+    },
+  }
+}
+
+export function ConnectionScreen({
+  onConnect,
+  defaults,
+  updating = false,
+  onCancel,
+}: Props) {
+  const [config, setConfig] = useState(() => configFromDefaults(defaults))
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [bulkPasteMessage, setBulkPasteMessage] = useState('')
@@ -128,17 +154,20 @@ export function ConnectionScreen({ onConnect }: Props) {
           <span className="trust-icon" aria-hidden="true">
             ◈
           </span>
-          Credentials live only in the local process and are cleared when it
-          stops.
+          Credentials are encrypted per user and can be replaced at any time.
         </div>
       </section>
 
       <section className="connection-panel" aria-labelledby="connect-heading">
         <div>
           <p className="step-label">SETUP · 01</p>
-          <h2 id="connect-heading">Connect your workspace</h2>
+          <h2 id="connect-heading">
+            {updating ? 'Update tokens' : 'Connect your workspace'}
+          </h2>
           <p className="muted">
-            We’ll verify each configured service before loading release data.
+            {updating
+              ? 'Leave a token blank to keep the stored value. We verify each service before saving.'
+              : 'We’ll verify each configured service before loading release data.'}
           </p>
         </div>
 
@@ -182,7 +211,7 @@ export function ConnectionScreen({ onConnect }: Props) {
                   onChange={(event) => update('jiraToken', event.target.value)}
                   placeholder="••••••••••••"
                   autoComplete="off"
-                  required
+                  required={!updating}
                 />
               </label>
             </div>
@@ -201,7 +230,7 @@ export function ConnectionScreen({ onConnect }: Props) {
                 onChange={(event) => update('githubToken', event.target.value)}
                 placeholder="github_pat_••••••"
                 autoComplete="off"
-                required
+                required={!updating}
               />
             </label>
           </fieldset>
@@ -243,7 +272,7 @@ export function ConnectionScreen({ onConnect }: Props) {
                   }
                   placeholder="••••••••••••"
                   autoComplete="off"
-                  required
+                  required={!updating}
                 />
               </label>
             </div>
@@ -291,7 +320,10 @@ export function ConnectionScreen({ onConnect }: Props) {
                   }
                   placeholder="••••••••••••"
                   autoComplete="off"
-                  required={Boolean(config.productionJenkins?.jenkinsUsername)}
+                  required={
+                    !updating &&
+                    Boolean(config.productionJenkins?.jenkinsUsername)
+                  }
                 />
               </label>
             </div>
@@ -312,10 +344,25 @@ export function ConnectionScreen({ onConnect }: Props) {
               {error}
             </div>
           )}
-          <button className="primary-button" type="submit" disabled={submitting}>
-            {submitting ? 'Verifying connections…' : 'Connect and continue'}
-            {!submitting && <span aria-hidden="true">→</span>}
-          </button>
+          <div className="field-row">
+            {updating && onCancel && (
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+            )}
+            <button className="primary-button" type="submit" disabled={submitting}>
+              {submitting
+                ? 'Verifying connections…'
+                : updating
+                  ? 'Save tokens'
+                  : 'Connect and continue'}
+              {!submitting && <span aria-hidden="true">→</span>}
+            </button>
+          </div>
         </form>
       </section>
     </main>

@@ -7,6 +7,9 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    env: {
+      AUTH_DISABLED: 'true',
+    },
     coverage: {
       include: ['src/**/*.{ts,tsx}', 'server/**/*.ts'],
     },

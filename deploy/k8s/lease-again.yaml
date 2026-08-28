@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lease-again
+  labels:
+    app: lease-again
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lease-again
+  template:
+    metadata:
+      labels:
+        app: lease-again
+    spec:
+      containers:
+        - name: lease-again
+          image: lease-again:latest
+          ports:
+            - containerPort: 8787
+          envFrom:
+            - configMapRef:
+                name: lease-again
+            - secretRef:
+                name: lease-again
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8787
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8787
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lease-again
+spec:
+  selector:
+    app: lease-again
+  ports:
+    - port: 80
+      targetPort: 8787
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lease-again
+data:
+  NODE_ENV: production
+  PORT: "8787"
+  AUTH_DISABLED: "false"
+  RELEASE_SNAPSHOT_TTL_DAYS: "28"
+  RELEASE_SNAPSHOT_STALE_MS: "300000"
+  KEYCLOAK_ISSUER: "https://keycloak.example/realms/orangehealth"
+  KEYCLOAK_CLIENT_ID: "lease-again"
+  KEYCLOAK_REDIRECT_URI: "https://rd.internal.example/api/auth/callback"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: lease-again
+type: Opaque
+stringData:
+  DATABASE_URL: postgres://rd:change-me@postgres:5432/lease_again
+  CONNECTION_ENCRYPTION_KEY: change-me
+  SESSION_SECRET: change-me
+  KEYCLOAK_CLIENT_SECRET: change-me
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: lease-again
+  annotations:
+    kubernetes.io/ingress.class: internal
+spec:
+  rules:
+    - host: rd.internal.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: lease-again
+                port:
+                  number: 80

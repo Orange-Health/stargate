@@ -1,6 +1,7 @@
 import { readUseReleaseBranch } from './branchModel.js'
 import type {
   ApiErrorBody,
+  AuthSession,
   ConnectionConfig,
   ConnectionStatus,
   CreateBackMergePullRequestInput,
@@ -69,6 +70,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
@@ -78,9 +80,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = (await response.json().catch(() => undefined)) as
       | ApiErrorBody
       | undefined
+    const code = body?.error.code ?? 'REQUEST_FAILED'
+    const browser = globalThis as typeof globalThis & {
+      dispatchEvent?: (event: Event) => boolean
+      location?: { assign: (url: string) => void }
+    }
+    if (code === 'TOKEN_INVALID') {
+      browser.dispatchEvent?.(new Event('rd:token-invalid'))
+    }
+    if (code === 'AUTH_REQUIRED' && !path.startsWith('/api/auth/')) {
+      browser.location?.assign('/api/auth/login')
+    }
     throw new ApiError(
       body?.error.message ?? `Request failed with status ${response.status}.`,
-      body?.error.code ?? 'REQUEST_FAILED',
+      code,
       body?.error.provider,
       body?.error.retryable,
     )
@@ -90,6 +103,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  me: () => request<AuthSession>('/api/auth/me'),
+  logout: () =>
+    request<void>('/api/auth/logout', {
+      method: 'POST',
+    }),
   connection: () => request<ConnectionStatus>('/api/connection'),
   connect: (config: ConnectionConfig) =>
     request<ConnectionStatus>('/api/connection', {
@@ -206,6 +224,7 @@ export const api = {
     forceRefresh = false,
     progressId?: string,
     signal?: AbortSignal,
+    versionId?: string,
   ) =>
     request<ReleaseControlSyncResponse>(
       '/api/github/release-control-states',
@@ -216,6 +235,7 @@ export const api = {
           forceRefresh,
           progressId,
           useReleaseBranch: readUseReleaseBranch(),
+          versionId,
         }),
         signal,
       },

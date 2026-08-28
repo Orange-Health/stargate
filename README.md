@@ -4,8 +4,14 @@ Orange Health release dashboard (UI brand: RD). Connects Jira versions, GitHub P
 
 ```bash
 npm install
+cp .env.example .env
+docker compose up -d postgres
 npm run dev
 ```
+
+`AUTH_DISABLED=true` skips Keycloak and uses a local mock user. Paste Jira/GitHub/Jenkins tokens on the connection screen as before; they are encrypted in Postgres.
+
+To exercise real SSO, set `AUTH_DISABLED=false` and fill the Keycloak variables in `.env`. Add `http://127.0.0.1:8787/api/auth/callback` as a redirect URI on the Keycloak client.
 
 ## Skip the Git `release` branch
 

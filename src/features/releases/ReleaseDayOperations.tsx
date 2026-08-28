@@ -815,6 +815,7 @@ export function ReleaseDayOperations({
             force,
             progressId,
             controller.signal,
+            dashboard.version.id,
           );
         } catch {
           if (controller.signal.aborted) {
@@ -905,6 +906,7 @@ export function ReleaseDayOperations({
           force,
           progressId,
           controller.signal,
+          dashboard.version.id,
         );
         for (const result of response.results) {
           if (result.state) {
@@ -1854,7 +1856,13 @@ export function ReleaseDayOperations({
       let repositoryState: ReleaseControlRoomState | undefined;
       let batchResponse;
       try {
-        batchResponse = await api.releaseControlStates([repository], true);
+        batchResponse = await api.releaseControlStates(
+          [repository],
+          true,
+          undefined,
+          undefined,
+          dashboard.version.id,
+        );
       } catch {
         await api.refreshRepository(repository);
         repositoryState = await api.releaseControlState(repository);

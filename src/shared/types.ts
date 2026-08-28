@@ -23,6 +23,19 @@ export type ConnectionStatus = {
   githubOrg?: string
   projectKey?: string
   productionEnabled?: boolean
+  jiraSite?: string
+  jiraEmail?: string
+  jenkinsUrl?: string
+  jenkinsUsername?: string
+  productionJenkinsUrl?: string
+  productionJenkinsUsername?: string
+}
+
+export type AuthSession = {
+  authenticated: boolean
+  email: string
+  displayName?: string
+  authDisabled: boolean
 }
 
 export type JiraVersion = {

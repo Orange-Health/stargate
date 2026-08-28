@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import './App.css'
 import { ConnectionScreen } from './features/connections/ConnectionScreen'
 import { ReleaseOverview } from './features/releases/ReleaseOverview'
-import { api } from './shared/api'
+import { api, ApiError } from './shared/api'
 import { ALL_SERVICES_ID } from './shared/types'
 import type {
   ConnectionConfig,
@@ -16,9 +16,29 @@ import type {
 import { removeIssueFromDashboard } from './features/releases/releaseTickets'
 import { replaceIssueItemsInDashboard } from './shared/releaseDashboard'
 
+function connectionDefaults(status: ConnectionStatus): Partial<ConnectionConfig> {
+  return {
+    jiraSite: status.jiraSite,
+    jiraEmail: status.jiraEmail,
+    githubOrg: status.githubOrg,
+    jenkinsUrl: status.jenkinsUrl,
+    jenkinsUsername: status.jenkinsUsername,
+    jiraProject: status.projectKey,
+    productionJenkins: status.productionJenkinsUrl
+      ? {
+          jenkinsUrl: status.productionJenkinsUrl,
+          jenkinsUsername: status.productionJenkinsUsername ?? '',
+          jenkinsToken: '',
+        }
+      : undefined,
+  }
+}
+
 function App() {
   const initialSelection = new URLSearchParams(window.location.search)
+  const [sessionReady, setSessionReady] = useState(false)
   const [connection, setConnection] = useState<ConnectionStatus>()
+  const [updatingTokens, setUpdatingTokens] = useState(false)
   const [checkingConnection, setCheckingConnection] = useState(true)
   const [releases, setReleases] = useState<JiraVersion[]>([])
   const [selectedVersionId, setSelectedVersionId] = useState(
@@ -38,10 +58,32 @@ function App() {
 
   useEffect(() => {
     api
+      .me()
+      .then(() => setSessionReady(true))
+      .catch((reason) => {
+        if (reason instanceof ApiError && reason.code === 'AUTH_REQUIRED') {
+          window.location.assign('/api/auth/login')
+          return
+        }
+        setSessionReady(true)
+      })
+  }, [])
+
+  useEffect(() => {
+    if (!sessionReady) return
+    api
       .connection()
       .then((status) => setConnection(status.connected ? status : undefined))
       .catch(() => setConnection(undefined))
       .finally(() => setCheckingConnection(false))
+  }, [sessionReady])
+
+  useEffect(() => {
+    function onTokenInvalid() {
+      setUpdatingTokens(true)
+    }
+    window.addEventListener('rd:token-invalid', onTokenInvalid)
+    return () => window.removeEventListener('rd:token-invalid', onTokenInvalid)
   }, [])
 
   useEffect(() => {
@@ -94,18 +136,19 @@ function App() {
   }, [selectedRepository, selectedVersionId])
 
   useEffect(() => {
-    if (!selectedVersionId || !connection?.connected) return
+    if (!selectedVersionId || !connection?.connected || updatingTokens) return
     if (selectedVersionId === ALL_SERVICES_ID) {
       setDashboard(undefined)
       setDashboardLoading(false)
       return
     }
     void loadDashboard(selectedVersionId)
-  }, [selectedVersionId, connection])
+  }, [selectedVersionId, connection, updatingTokens])
 
   async function connect(config: ConnectionConfig) {
     const status = await api.connect(config)
     setConnection(status)
+    setUpdatingTokens(false)
     return status
   }
 
@@ -177,6 +220,7 @@ function App() {
     setReleasesLoading(false)
     setDashboardLoading(false)
     setConnection(undefined)
+    setUpdatingTokens(false)
     setReleases([])
     setSelectedVersionId('')
     setSelectedRepository('')
@@ -212,7 +256,7 @@ function App() {
     )
   }
 
-  if (checkingConnection) {
+  if (!sessionReady || checkingConnection) {
     return (
       <main className="boot-state">
         <span className="brand-mark">RD</span>
@@ -221,8 +265,17 @@ function App() {
     )
   }
 
-  if (!connection?.connected) {
-    return <ConnectionScreen onConnect={connect} />
+  if (!connection?.connected || updatingTokens) {
+    return (
+      <ConnectionScreen
+        onConnect={connect}
+        updating={Boolean(connection?.connected && updatingTokens)}
+        defaults={connection ? connectionDefaults(connection) : undefined}
+        onCancel={
+          connection?.connected ? () => setUpdatingTokens(false) : undefined
+        }
+      />
+    )
   }
 
   return (
@@ -246,6 +299,7 @@ function App() {
       onIssueRemoved={removeIssue}
       onTicketRefreshed={updateTicket}
       onDisconnect={() => void disconnect()}
+      onUpdateTokens={() => setUpdatingTokens(true)}
     />
   )
 }

@@ -133,6 +133,7 @@ type Props = {
   onIssueRemoved?: (issueKey: string) => void;
   onTicketRefreshed?: (issueKey: string, items: ReleaseItem[]) => void;
   onDisconnect: () => void;
+  onUpdateTokens?: () => void;
 };
 
 const reasonLabels: Record<EligibilityReason, string> = {
@@ -876,6 +877,7 @@ export function ReleaseOverview({
   onIssueRemoved,
   onTicketRefreshed,
   onDisconnect,
+  onUpdateTokens,
 }: Props) {
   const [releaseRepository, setReleaseRepository] = useState("");
   const [productionReleaseTarget, setProductionReleaseTarget] = useState<{
@@ -1513,6 +1515,15 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
           </button>
           <ThemeToggle />
           <span className="connection-dot" />
+          {onUpdateTokens && (
+            <button
+              className="text-button"
+              type="button"
+              onClick={onUpdateTokens}
+            >
+              Update tokens
+            </button>
+          )}
           <button className="text-button" type="button" onClick={onDisconnect}>
             Disconnect
           </button>

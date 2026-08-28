@@ -1071,6 +1071,7 @@ describe('ReleaseDayOperations', () => {
       true,
       expect.any(String),
       expect.any(AbortSignal),
+      dashboard.version.id,
     )
     expect(refreshRepository).not.toHaveBeenCalled()
   })
@@ -1170,6 +1171,7 @@ describe('ReleaseDayOperations', () => {
       false,
       expect.any(String),
       expect.any(AbortSignal),
+      dashboard.version.id,
     )
     expect(api.releaseControlStates).toHaveBeenCalledTimes(1)
   })
