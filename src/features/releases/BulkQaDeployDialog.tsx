@@ -152,6 +152,7 @@ export function BulkQaDeployDialog({
   )
   const [deploying, setDeploying] = useState(false)
   const [started, setStarted] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [results, setResults] = useState<TargetResult[]>([])
   const [deploymentsByRepository, setDeploymentsByRepository] = useState<
     Record<string, JenkinsDeployedTag[]>
@@ -165,6 +166,7 @@ export function BulkQaDeployDialog({
   const [refreshing, setRefreshing] = useState(false)
   const latestTagsRef = useRef(latestTags)
   latestTagsRef.current = latestTags
+  const knownReadyRef = useRef<Set<string>>(new Set())
 
   const pendingTargets = useMemo(() => {
     const resolved = targets.map((target) => {
@@ -194,6 +196,56 @@ export function BulkQaDeployDialog({
     latestTags,
     targets,
   ])
+
+  const pendingRepositories = useMemo(
+    () => pendingTargets.map((target) => target.repository),
+    [pendingTargets],
+  )
+
+  useEffect(() => {
+    if (started) return
+    const pending = new Set(pendingRepositories)
+    setSelected((current) => {
+      const next = new Set<string>()
+      for (const repository of pending) {
+        // Auto-select newly ready services; keep the user's prior choice.
+        if (
+          current.has(repository) ||
+          !knownReadyRef.current.has(repository)
+        ) {
+          next.add(repository)
+        }
+      }
+      knownReadyRef.current = pending
+      return next
+    })
+  }, [pendingRepositories, started])
+
+  const selectedPendingTargets = useMemo(
+    () =>
+      pendingTargets.filter((target) => selected.has(target.repository)),
+    [pendingTargets, selected],
+  )
+  const allReadySelected =
+    pendingRepositories.length > 0 &&
+    pendingRepositories.every((repository) => selected.has(repository))
+  const someReadySelected =
+    selectedPendingTargets.length > 0 && !allReadySelected
+
+  function toggleRepository(repository: string) {
+    if (deploying || started) return
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(repository)) next.delete(repository)
+      else next.add(repository)
+      return next
+    })
+  }
+
+  function toggleAllReady(checked: boolean) {
+    if (deploying || started) return
+    setSelected(checked ? new Set(pendingRepositories) : new Set())
+  }
 
   useEffect(() => {
     if (repositories.length === 0) return
@@ -344,17 +396,17 @@ export function BulkQaDeployDialog({
   }
 
   async function deployAll() {
-    if (deploying || pendingTargets.length === 0) return
+    if (deploying || selectedPendingTargets.length === 0) return
     setDeploying(true)
     setStarted(true)
     setResults(
-      pendingTargets.map((target) => ({
+      selectedPendingTargets.map((target) => ({
         repository: target.repository,
         status: 'pending',
       })),
     )
 
-    await mapConcurrent(pendingTargets, async (target) => {
+    await mapConcurrent(selectedPendingTargets, async (target) => {
       try {
         const deployments: TriggeredDeployment[] = []
         for (const jenkinsService of target.jenkinsServices) {
@@ -542,25 +594,62 @@ export function BulkQaDeployDialog({
   const failedRows = rows.filter((row) => row.status.kind === 'failed')
   const otherRows = rows.filter((row) => row.status.kind === 'muted')
 
-  function renderRows(items: ServiceRow[], label: string) {
+  function renderRows(
+    items: ServiceRow[],
+    label: string,
+    options?: { selectable?: boolean },
+  ) {
     if (items.length === 0) return null
+    const selectable = Boolean(options?.selectable) && !started
     return (
       <div className="bulk-qa-deploy-group">
         <p className="bulk-qa-section-label">
           {label} ({items.length})
         </p>
+        {selectable && (
+          <label className="bulk-qa-select-all">
+            <input
+              type="checkbox"
+              checked={allReadySelected}
+              aria-label="Select all ready services"
+              ref={(input) => {
+                if (input) input.indeterminate = someReadySelected
+              }}
+              onChange={(event) => toggleAllReady(event.target.checked)}
+              disabled={deploying}
+            />
+            {selectedPendingTargets.length} of {pendingRepositories.length}{' '}
+            selected
+          </label>
+        )}
         <ul className="bulk-qa-service-list" aria-label={label}>
           {items.map((row) => {
             const liveMismatch =
               row.latestTag &&
               row.liveTags.length > 0 &&
               !row.liveTags.includes(row.latestTag)
+            const checked = selected.has(row.repository)
             return (
               <li
                 key={row.repository}
-                className={`bulk-qa-${row.status.kind}`}
+                className={`bulk-qa-${row.status.kind}${
+                  selectable && !checked ? ' bulk-qa-unselected' : ''
+                }`}
               >
-                <strong>{serviceName(row.repository)}</strong>
+                {selectable ? (
+                  <label className="bulk-qa-service-select">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleRepository(row.repository)}
+                      disabled={deploying}
+                      aria-label={`Include ${serviceName(row.repository)}`}
+                    />
+                    <strong>{serviceName(row.repository)}</strong>
+                  </label>
+                ) : (
+                  <strong>{serviceName(row.repository)}</strong>
+                )}
                 {row.latestTag ? (
                   <a
                     href={githubTagUrl(row.repository, row.latestTag)}
@@ -645,7 +734,7 @@ export function BulkQaDeployDialog({
               ? `${errorCount} service(s) failed. Review the list below.`
               : 'Jenkins QA deployments were queued for every eligible service.'
             : pendingTargets.length > 0
-              ? `${pendingTargets.length} service${pendingTargets.length === 1 ? ' is' : 's are'} behind the latest QA tag.`
+              ? `${pendingTargets.length} service${pendingTargets.length === 1 ? ' is' : 's are'} behind the latest QA tag. Deselect any you want to skip.`
               : failedRows.length > 0
                 ? 'Failed QA builds cannot be deployed.'
                 : targets.length > 0
@@ -653,7 +742,7 @@ export function BulkQaDeployDialog({
                   : 'No merged services have a successful QA tag ready to deploy.'}
         </p>
 
-        {renderRows(readyRows, 'Ready to deploy')}
+        {renderRows(readyRows, 'Ready to deploy', { selectable: true })}
         {renderRows(checkingRows, 'Checking status')}
         {renderRows(activeRows, 'In progress')}
         {renderRows(failedRows, 'Build failed')}
@@ -731,17 +820,19 @@ export function BulkQaDeployDialog({
               className="primary-button"
               type="button"
               onClick={() => void deployAll()}
-              disabled={deploying || pendingTargets.length === 0}
+              disabled={deploying || selectedPendingTargets.length === 0}
             >
               {deploying
                 ? 'Queuing QA deploys…'
-                : pendingTargets.length > 0
-                  ? `Deploy to QA (${pendingTargets.length})`
-                  : failedRows.length > 0 || activeRows.length > 0
-                    ? 'No QA deploys ready'
-                    : targets.length > 0
-                      ? 'All services already live'
-                      : 'No QA deploys ready'}
+                : selectedPendingTargets.length > 0
+                  ? `Deploy to QA (${selectedPendingTargets.length})`
+                  : pendingTargets.length > 0
+                    ? 'Select services to deploy'
+                    : failedRows.length > 0 || activeRows.length > 0
+                      ? 'No QA deploys ready'
+                      : targets.length > 0
+                        ? 'All services already live'
+                        : 'No QA deploys ready'}
             </button>
           )}
         </div>

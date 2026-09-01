@@ -743,7 +743,13 @@ function ServiceDetail({
                       {[...item.blockingReasons, ...item.warningReasons].map(
                         (reason) => (
                           <span
-                            className={`reason ${item.warningReasons.includes(reason) ? "warning" : ""}`}
+                            className={`reason ${
+                              reason === "ALREADY_MERGED"
+                                ? "merged"
+                                : item.warningReasons.includes(reason)
+                                  ? "warning"
+                                  : ""
+                            }`}
                             key={reason}
                           >
                             {reasonLabel(reason, item, service.defaultBranch)}

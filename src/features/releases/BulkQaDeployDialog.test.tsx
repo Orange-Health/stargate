@@ -306,6 +306,10 @@ describe('BulkQaDeployDialog', () => {
 
     expect(screen.getByText('service-api')).toBeVisible()
     expect(await screen.findByText('Ready', { exact: true })).toBeVisible()
+    expect(screen.getByText('1 of 1 selected')).toBeVisible()
+    expect(
+      screen.getByRole('checkbox', { name: 'Include service-api' }),
+    ).toBeChecked()
 
     await user.click(
       screen.getByRole('button', { name: 'Deploy to QA (1)' }),
@@ -319,6 +323,121 @@ describe('BulkQaDeployDialog', () => {
         environment: 'qa',
       }),
     )
+    expect(
+      await screen.findByRole('heading', {
+        name: 'Queued 1/1 QA deploys',
+      }),
+    ).toBeVisible()
+  })
+
+  it('skips deselected ready services instead of deploying every pending target', async () => {
+    const user = userEvent.setup()
+    const secondMerged: ServiceRelease = {
+      ...mergedService,
+      repository: 'orange/service-billing',
+      items: [
+        {
+          ...mergedService.items[0],
+          pullRequest: {
+            ...mergedService.items[0].pullRequest!,
+            id: 3,
+            number: 10,
+            repository: 'orange/service-billing',
+          },
+        },
+      ],
+    }
+    vi.spyOn(api, 'listStagingTags').mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tags: ['v-qa-26.0716.1'],
+        checkFailed: false,
+      },
+      {
+        repository: 'orange/service-billing',
+        tags: ['v-qa-26.0716.2'],
+        checkFailed: false,
+      },
+    ])
+    vi.spyOn(api, 'repositoryDeploymentStatuses').mockResolvedValue({
+      results: [
+        {
+          repository: 'orange/service-api',
+          deployedTags: [],
+          deploymentLookupFailed: false,
+        },
+        {
+          repository: 'orange/service-billing',
+          deployedTags: [],
+          deploymentLookupFailed: false,
+        },
+      ],
+      fetchedAt: '2026-07-16T12:00:00Z',
+    })
+    vi.spyOn(api, 'releaseBuildStatuses').mockResolvedValue([
+      {
+        repository: 'orange/service-api',
+        tag: 'v-qa-26.0716.1',
+        createdAt: '2026-07-16T00:00:00Z',
+        buildStatus: 'succeeded',
+        runs: [],
+      },
+      {
+        repository: 'orange/service-billing',
+        tag: 'v-qa-26.0716.2',
+        createdAt: '2026-07-16T00:00:00Z',
+        buildStatus: 'succeeded',
+        runs: [],
+      },
+    ])
+    const triggerDeployment = vi
+      .spyOn(api, 'triggerDeployment')
+      .mockImplementation(async ({ service, tag }) => ({
+        queueId: 11,
+        queueUrl: 'https://jenkins.test/queue/11',
+        jobName: 'QA/QA-DEPLOYMENT',
+        service,
+        tag,
+        environment: 'qa' as const,
+      }))
+
+    render(
+      <BulkQaDeployDialog
+        services={[mergedService, secondMerged]}
+        freshness={{
+          ...freshness,
+          'orange/service-billing': {
+            repository: 'orange/service-billing',
+            latestBuiltQaTag: 'v-qa-26.0716.2',
+            liveQaTags: [],
+            jenkinsServices: ['service-billing'],
+            outdated: true,
+            checkFailed: false,
+          },
+        }}
+        releaseName="OH Release 26.0716"
+        releaseDate="2026-07-16"
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('2 of 2 selected')).toBeVisible()
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Include service-api' }),
+    )
+    expect(screen.getByText('1 of 2 selected')).toBeVisible()
+
+    await user.click(
+      screen.getByRole('button', { name: 'Deploy to QA (1)' }),
+    )
+
+    await waitFor(() => expect(triggerDeployment).toHaveBeenCalledTimes(1))
+    expect(triggerDeployment).toHaveBeenCalledWith({
+      repository: 'orange/service-billing',
+      service: 'service-billing',
+      tag: 'v-qa-26.0716.2',
+      environment: 'qa',
+    })
     expect(
       await screen.findByRole('heading', {
         name: 'Queued 1/1 QA deploys',

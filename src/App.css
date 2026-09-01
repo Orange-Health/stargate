@@ -1652,14 +1652,22 @@ body[data-modal-open] {
   max-height: min(32vh, 280px);
 }
 
+.bulk-qa-deploy-dialog .bulk-qa-select-all {
+  margin: 0 0 8px;
+}
+
 .bulk-qa-deploy-dialog .bulk-qa-service-list li {
   align-items: center;
   column-gap: 12px;
   display: grid;
-  grid-template-columns: minmax(96px, 1fr) minmax(128px, 1.2fr) auto;
+  grid-template-columns: minmax(120px, 1fr) minmax(128px, 1.2fr) auto;
   min-height: 42px;
   padding: 9px 12px;
   row-gap: 8px;
+}
+
+.bulk-qa-deploy-dialog .bulk-qa-service-list .bulk-qa-service-select {
+  min-width: 0;
 }
 
 .bulk-qa-deploy-dialog .bulk-qa-service-list li:has(.live-deployments) {
@@ -2138,7 +2146,8 @@ body[data-modal-open] {
   color: var(--red);
 }
 
-.status-pill.merged {
+.status-pill.merged,
+.reason.merged {
   background: var(--purple-faint);
   color: var(--purple);
 }
