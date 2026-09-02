@@ -4,6 +4,11 @@ import type { EitriBuild, EitriBuildsResult } from '../../shared/types'
 import { EitriDialog } from './EitriDialog'
 import { EitriReplayDialog } from './EitriReplayDialog'
 import {
+  eitriBuildsCacheKey,
+  readServiceViewCache,
+  writeServiceViewCache,
+} from './serviceViewCache'
+import {
   playNotificationSound,
   unlockNotificationSound,
 } from './notificationSound'
@@ -66,8 +71,12 @@ export function EitriOperations({
   onRefreshingChange,
   refreshToken = 0,
 }: Props) {
-  const [state, setState] = useState<EitriBuildsResult>()
-  const [loading, setLoading] = useState(true)
+  const [state, setState] = useState<EitriBuildsResult | undefined>(() =>
+    readServiceViewCache(eitriBuildsCacheKey(repository)),
+  )
+  const [loading, setLoading] = useState(
+    () => !readServiceViewCache(eitriBuildsCacheKey(repository)),
+  )
   const [error, setError] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [replayBuild, setReplayBuild] = useState<EitriBuild>()
@@ -149,6 +158,18 @@ export function EitriOperations({
 
   const load = useCallback(
     async (silent = false, forceRefresh = false) => {
+      const cacheKey = eitriBuildsCacheKey(repository)
+      if (!forceRefresh) {
+        const cached = readServiceViewCache<EitriBuildsResult>(cacheKey)
+        if (cached) {
+          loadSequence.current += 1
+          announceCompletedBuilds(cached)
+          setState(cached)
+          setLoading(false)
+          onRefreshingChange?.(false)
+          return
+        }
+      }
       const sequence = ++loadSequence.current
       if (!silent) {
         setLoading(true)
@@ -159,6 +180,7 @@ export function EitriOperations({
         const nextState = await api.eitriBuilds(repository, forceRefresh)
         if (sequence !== loadSequence.current) return
         announceCompletedBuilds(nextState)
+        writeServiceViewCache(cacheKey, nextState)
         setState(nextState)
       } catch (reason) {
         if (sequence !== loadSequence.current) return
@@ -191,12 +213,6 @@ export function EitriOperations({
   useEffect(() => {
     let active = true
     let inFlight = false
-    let timeout: number | undefined
-
-    const schedule = () => {
-      if (!active || document.hidden) return
-      timeout = window.setTimeout(() => void poll(), BUILD_POLL_INTERVAL_MS)
-    }
 
     const poll = async () => {
       if (!active || inFlight || document.hidden) return
@@ -208,26 +224,31 @@ export function EitriOperations({
         )
         if (!active) return
         announceCompletedBuilds(nextState)
+        writeServiceViewCache(eitriBuildsCacheKey(repository), nextState)
         setState(nextState)
         setError('')
       } catch {
         // Keep the last good snapshot; try again on the next tick.
       } finally {
         inFlight = false
-        schedule()
       }
     }
 
-    const onVisibility = () => {
+    const resume = () => {
       if (!document.hidden) void poll()
     }
 
     void poll()
-    document.addEventListener('visibilitychange', onVisibility)
+    const interval = window.setInterval(() => void poll(), BUILD_POLL_INTERVAL_MS)
+    document.addEventListener('visibilitychange', resume)
+    window.addEventListener('focus', resume)
+    window.addEventListener('pageshow', resume)
     return () => {
       active = false
-      if (timeout) window.clearTimeout(timeout)
-      document.removeEventListener('visibilitychange', onVisibility)
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', resume)
+      window.removeEventListener('focus', resume)
+      window.removeEventListener('pageshow', resume)
     }
   }, [announceCompletedBuilds, repository])
 

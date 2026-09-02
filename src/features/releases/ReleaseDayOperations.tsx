@@ -1288,16 +1288,20 @@ export function ReleaseDayOperations({
         inFlight = false;
       }
     };
-    const visibilityChanged = () => {
+    const resume = () => {
       if (!document.hidden) void poll();
     };
-    document.addEventListener("visibilitychange", visibilityChanged);
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("focus", resume);
+    window.addEventListener("pageshow", resume);
     void poll();
     const interval = window.setInterval(() => void poll(), POLL_INTERVAL);
     return () => {
       active = false;
       window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", visibilityChanged);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("focus", resume);
+      window.removeEventListener("pageshow", resume);
     };
   }, []);
 

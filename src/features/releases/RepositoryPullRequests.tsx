@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../../shared/api'
 import { Skeleton } from '../../shared/Skeleton'
 import type {
@@ -7,6 +7,12 @@ import type {
 } from '../../shared/types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { readUseReleaseBranch } from '../../shared/branchModel'
+import {
+  pullRequestAuthorsCacheKey,
+  pullRequestCacheKey,
+  readServiceViewCache,
+  writeServiceViewCache,
+} from './serviceViewCache'
 
 type Props = {
   repository: string
@@ -30,34 +36,70 @@ export function RepositoryPullRequests({ repository }: Props) {
   )
   const [baseFilter, setBaseFilter] = useState('')
   const [authorFilter, setAuthorFilter] = useState('')
-  const [authors, setAuthors] = useState<string[]>([])
-  const [authorsLoading, setAuthorsLoading] = useState(false)
+  const [authors, setAuthors] = useState<string[]>(
+    () => readServiceViewCache(pullRequestAuthorsCacheKey(repository)) ?? [],
+  )
+  const [authorsLoading, setAuthorsLoading] = useState(
+    () => !readServiceViewCache(pullRequestAuthorsCacheKey(repository)),
+  )
   const [page, setPage] = useState(1)
-  const [result, setResult] = useState<RepositoryPullRequestList>()
-  const [loading, setLoading] = useState(true)
+  const [result, setResult] = useState<RepositoryPullRequestList | undefined>(
+    () =>
+      readServiceViewCache(
+        pullRequestCacheKey(repository, 'open', '', '', 1),
+      ),
+  )
+  const [loading, setLoading] = useState(
+    () =>
+      !readServiceViewCache(
+        pullRequestCacheKey(repository, 'open', '', '', 1),
+      ),
+  )
   const [error, setError] = useState('')
   const [pendingMerge, setPendingMerge] = useState<RepositoryPullRequest>()
   const [merging, setMerging] = useState<number>()
   const [reload, setReload] = useState(0)
-
-  useEffect(() => {
-    setPage(1)
-    setBaseFilter('')
-    setAuthorFilter('')
-    setResult(undefined)
-  }, [repository])
+  const previousReload = useRef(reload)
+  const filtersRepository = useRef(repository)
+  if (filtersRepository.current !== repository) {
+    filtersRepository.current = repository
+    if (page !== 1) setPage(1)
+    if (baseFilter) setBaseFilter('')
+    if (authorFilter) setAuthorFilter('')
+    const cached = readServiceViewCache<RepositoryPullRequestList>(
+      pullRequestCacheKey(repository, stateFilter, '', '', 1),
+    )
+    setResult(cached)
+    setLoading(!cached)
+    setError('')
+    const cachedAuthors = readServiceViewCache<string[]>(
+      pullRequestAuthorsCacheKey(repository),
+    )
+    setAuthors(cachedAuthors ?? [])
+    setAuthorsLoading(!cachedAuthors)
+  }
 
   useEffect(() => {
     if (!useReleaseBranch && baseFilter === 'release') setBaseFilter('')
   }, [baseFilter, useReleaseBranch])
 
   useEffect(() => {
+    const cacheKey = pullRequestAuthorsCacheKey(repository)
+    const cached = readServiceViewCache<string[]>(cacheKey)
+    if (cached) {
+      setAuthors(cached)
+      setAuthorsLoading(false)
+      return
+    }
+
     let active = true
     setAuthorsLoading(true)
     api
       .repositoryPullRequestAuthors(repository)
       .then((next) => {
-        if (active) setAuthors(next)
+        if (!active) return
+        writeServiceViewCache(cacheKey, next)
+        setAuthors(next)
       })
       .catch(() => {
         if (active) setAuthors([])
@@ -71,7 +113,29 @@ export function RepositoryPullRequests({ repository }: Props) {
   }, [repository])
 
   useEffect(() => {
+    const force = reload !== previousReload.current
+    previousReload.current = reload
+    const cacheKey = pullRequestCacheKey(
+      repository,
+      stateFilter,
+      baseFilter,
+      authorFilter,
+      page,
+    )
+    if (!force) {
+      const cached = readServiceViewCache<RepositoryPullRequestList>(cacheKey)
+      if (cached) {
+        setResult(cached)
+        setLoading(false)
+        setError('')
+        return
+      }
+    }
+
     let active = true
+    setResult((current) =>
+      current?.repository === repository ? current : undefined,
+    )
     setLoading(true)
     setError('')
     api
@@ -82,7 +146,9 @@ export function RepositoryPullRequests({ repository }: Props) {
         page,
       })
       .then((next) => {
-        if (active) setResult(next)
+        if (!active) return
+        writeServiceViewCache(cacheKey, next)
+        setResult(next)
       })
       .catch((reason) => {
         if (!active) return

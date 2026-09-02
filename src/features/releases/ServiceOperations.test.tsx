@@ -1,9 +1,10 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { RepositoryReleaseState } from '../../shared/types'
 import { ServiceOperations } from './ServiceOperations'
+import { clearServiceViewCache } from './serviceViewCache'
 
 const repositoryState: RepositoryReleaseState = {
   repository: 'Orange-Health/service-api',
@@ -149,6 +150,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+  clearServiceViewCache()
 })
 
 describe('ServiceOperations', () => {
@@ -551,12 +553,141 @@ describe('ServiceOperations', () => {
     await act(async () => {})
     expect(buildStatusRequest).toHaveBeenCalledTimes(1)
 
-    // Hung request times out after 30s, then the next poll is scheduled 15s later.
+    // Hung request times out after 30s; the 15s interval then picks up again.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(45_000)
     })
-    expect(buildStatusRequest).toHaveBeenCalledTimes(2)
+    expect(buildStatusRequest.mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(screen.getAllByText('Succeeded').length).toBeGreaterThan(0)
+  })
+
+  it('polls the Releases tab every 15 seconds for a specific release', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const buildStatusRequest = vi
+      .spyOn(api, 'releaseBuildStatuses')
+      .mockResolvedValue([
+        {
+          repository: 'Orange-Health/service-api',
+          tag: 'v-qa-26.0713.2',
+          createdAt: '2026-07-13T12:00:00Z',
+          buildStatus: 'running',
+          runs: repositoryState.stagingReleases[0].runs,
+        },
+      ])
+    vi.spyOn(api, 'repositoryDeploymentStatus').mockResolvedValue({
+      deployedTags: repositoryState.deployedTags,
+      deploymentLookupFailed: false,
+    })
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        view="releases"
+      />,
+    )
+    await act(async () => {})
+    expect(buildStatusRequest).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    expect(buildStatusRequest).toHaveBeenCalledTimes(3)
+  })
+
+  it('polls All Services release builds and picks up a newly started workflow', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const runningWorkflow = {
+      id: 99,
+      tag: 'v-qa-26.0902.1',
+      environment: 'qa' as const,
+      url: 'https://github.test/release/99',
+      createdAt: '2026-09-02T10:00:00Z',
+      buildStatus: 'running' as const,
+      runs: [
+        {
+          id: 99,
+          name: 'Build service',
+          status: 'in_progress' as const,
+          url: 'https://github.test/run/99',
+          startedAt: '2026-09-02T10:00:10Z',
+          updatedAt: '2026-09-02T10:01:00Z',
+        },
+      ],
+    }
+    vi.mocked(api.repositoryReleaseData)
+      .mockResolvedValueOnce(releaseData(repositoryState))
+      .mockResolvedValue(
+        releaseData({
+          ...repositoryState,
+          stagingReleases: [runningWorkflow, ...repositoryState.stagingReleases],
+        }),
+      )
+    vi.spyOn(api, 'releaseBuildStatuses').mockResolvedValue([])
+    vi.spyOn(api, 'repositoryDeploymentStatus').mockResolvedValue({
+      deployedTags: repositoryState.deployedTags,
+      deploymentLookupFailed: false,
+    })
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        includeAllVReleases
+        view="releases"
+      />,
+    )
+    await act(async () => {})
+    expect(screen.getByText('v-qa-26.0713.2')).toBeInTheDocument()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+
+    expect(screen.getByText('v-qa-26.0902.1')).toBeVisible()
+    expect(api.repositoryReleaseData).toHaveBeenCalledWith(
+      'Orange-Health/service-api',
+      true,
+      5,
+    )
+  })
+
+  it('silently refreshes when the window gains focus', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(repositoryState)
+    const releaseRequest = vi.mocked(api.repositoryReleaseData)
+    const buildStatusRequest = vi
+      .spyOn(api, 'releaseBuildStatuses')
+      .mockResolvedValue([])
+    vi.spyOn(api, 'repositoryDeploymentStatus').mockResolvedValue({
+      deployedTags: repositoryState.deployedTags,
+      deploymentLookupFailed: false,
+    })
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        view="releases"
+      />,
+    )
+    await screen.findByText('v-qa-26.0713.2')
+    await waitFor(() => expect(buildStatusRequest).toHaveBeenCalled())
+    const callsBeforeFocus = releaseRequest.mock.calls.length
+    const statusBeforeFocus = buildStatusRequest.mock.calls.length
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+
+    expect(releaseRequest.mock.calls.length).toBeGreaterThan(callsBeforeFocus)
+    expect(buildStatusRequest.mock.calls.length).toBeGreaterThan(
+      statusBeforeFocus,
+    )
+    expect(screen.queryByText('Refreshing…')).not.toBeInTheDocument()
   })
   it('temporarily allows production deployment while branches differ', async () => {
     vi.spyOn(api, 'repositoryState').mockResolvedValue({
@@ -870,5 +1001,106 @@ describe('ServiceOperations', () => {
       }),
     ).toHaveAttribute('href', 'https://github.test/pull/44')
     expect(repositoryStateRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('reuses cached releases and branch ops when switching services within one minute', async () => {
+    const otherState = {
+      ...repositoryState,
+      repository: 'Orange-Health/service-web',
+      defaultBranch: 'main',
+    }
+    const otherReleases = releaseData(otherState)
+    const stateRequest = vi
+      .spyOn(api, 'repositoryState')
+      .mockImplementation(async (repository) =>
+        repository === otherState.repository ? otherState : repositoryState,
+      )
+    const releaseRequest = vi
+      .mocked(api.repositoryReleaseData)
+      .mockImplementation(async (repository) =>
+        repository === otherState.repository
+          ? otherReleases
+          : releaseData(repositoryState),
+      )
+
+    const view = render(
+      <ServiceOperations repository="Orange-Health/service-api" />,
+    )
+    expect(await screen.findByText('v-qa-26.0713.2')).toBeVisible()
+    const stateCalls = stateRequest.mock.calls.length
+    const releaseCalls = releaseRequest.mock.calls.length
+
+    await act(async () => {
+      view.rerender(
+        <ServiceOperations repository="Orange-Health/service-web" />,
+      )
+    })
+    expect(
+      await screen.findByRole('link', {
+        name: 'View diff ↗',
+      }),
+    ).toHaveAttribute(
+      'href',
+      'https://github.com/Orange-Health/service-web/compare/release...dev',
+    )
+    const stateCallsAfterWeb = stateRequest.mock.calls.length
+    const releaseCallsAfterWeb = releaseRequest.mock.calls.length
+    expect(stateCallsAfterWeb).toBeGreaterThan(stateCalls)
+    expect(releaseCallsAfterWeb).toBeGreaterThan(releaseCalls)
+
+    await act(async () => {
+      view.rerender(
+        <ServiceOperations repository="Orange-Health/service-api" />,
+      )
+    })
+    expect(
+      screen.getByRole('link', { name: 'View diff ↗' }),
+    ).toHaveAttribute(
+      'href',
+      'https://github.com/Orange-Health/service-api/compare/release...dev',
+    )
+    expect(
+      screen.queryByRole('status', { name: /loading/i }),
+    ).not.toBeInTheDocument()
+    expect(stateRequest).toHaveBeenCalledTimes(stateCallsAfterWeb)
+    expect(releaseRequest).toHaveBeenCalledTimes(releaseCallsAfterWeb)
+  })
+
+  it('reloads cached service data after one minute', async () => {
+    vi.useFakeTimers()
+    const stateRequest = vi
+      .spyOn(api, 'repositoryState')
+      .mockResolvedValue(repositoryState)
+
+    const view = render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        view="branches"
+      />,
+    )
+    await act(async () => {})
+    expect(stateRequest).toHaveBeenCalledTimes(1)
+
+    view.rerender(
+      <ServiceOperations
+        repository="Orange-Health/service-web"
+        view="branches"
+      />,
+    )
+    await act(async () => {})
+    expect(stateRequest).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+
+    view.rerender(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        view="branches"
+      />,
+    )
+    await act(async () => {})
+    expect(stateRequest).toHaveBeenCalledTimes(3)
   })
 })

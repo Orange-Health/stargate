@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { ReleaseDashboard, ReleaseItem } from '../../shared/types'
 import { ReleaseOverview } from './ReleaseOverview'
+import { clearServiceViewCache } from './serviceViewCache'
 import { removeIssueFromDashboard } from './releaseTickets'
 import { replaceIssueItemsInDashboard } from '../../shared/releaseDashboard'
 
@@ -114,6 +115,7 @@ describe('ReleaseOverview', () => {
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
+    clearServiceViewCache()
   })
 
   it('shows service skeletons while all services are loading', () => {

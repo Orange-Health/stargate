@@ -421,6 +421,17 @@ function ServiceDetail({
     setService(initialService);
   }, [initialService]);
 
+  useEffect(() => {
+    setMergeError("");
+    setPendingMerge(undefined);
+    setPendingBulkMerge(false);
+    setMerging(undefined);
+    setBulkMerging(false);
+    setRefreshing(false);
+    setOptimisticallyMerged(new Set());
+    setParticipantsModal(undefined);
+  }, [service.repository]);
+
   function requestMerge(
     pullNumber: number,
     options: { retargetToDev?: boolean; bypassBranchProtection?: boolean } = {},
@@ -845,7 +856,6 @@ function ServiceDetail({
           hidden={activeTab === "prs"}
         >
           <ServiceOperations
-            key={service.repository}
             repository={service.repository}
             productionEnabled={productionEnabled}
             onCreateStagingRelease={onCreateRelease}
@@ -1706,7 +1716,6 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             {selectedOrganizationRepository ? (
               <section
                 className="detail-panel all-service-detail"
-                key={selectedOrganizationRepository.repository}
               >
                 <div className="detail-heading">
                   <div>
@@ -2189,7 +2198,6 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
                 </section>
                 {selectedServiceWithRisk ? (
                   <ServiceDetail
-                    key={selectedServiceWithRisk.repository}
                     service={selectedServiceWithRisk}
                     selectedVersionId={selectedVersionId}
                     onCreateRelease={() =>

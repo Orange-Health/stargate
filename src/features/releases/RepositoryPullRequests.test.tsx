@@ -3,9 +3,13 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import { RepositoryPullRequests } from './RepositoryPullRequests'
+import { clearServiceViewCache } from './serviceViewCache'
 
 describe('RepositoryPullRequests', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearServiceViewCache()
+  })
 
   it('shows pull request skeletons during the initial load', () => {
     vi.spyOn(api, 'repositoryPullRequests').mockReturnValue(new Promise(() => {}))
@@ -94,5 +98,57 @@ describe('RepositoryPullRequests', () => {
         pullNumber: 42,
       }),
     )
+  })
+
+  it('reuses cached pull requests when switching services within one minute', async () => {
+    const listRequest = vi.spyOn(api, 'repositoryPullRequests')
+    listRequest.mockImplementation(async (repository) => ({
+      repository,
+      defaultBranch: 'main',
+      page: 1,
+      hasMore: false,
+      items: [
+        {
+          number: repository.endsWith('web') ? 7 : 42,
+          title: repository.endsWith('web') ? 'Web fix' : 'Improve release flow',
+          url: `https://github.test/pull/${repository.endsWith('web') ? 7 : 42}`,
+          state: 'open',
+          draft: false,
+          merged: false,
+          author: 'developer',
+          headBranch: 'feature/test',
+          baseBranch: 'dev',
+          updatedAt: '2026-07-27T10:00:00Z',
+        },
+      ],
+    }))
+    vi.spyOn(api, 'repositoryPullRequestAuthors').mockResolvedValue([
+      'developer',
+    ])
+
+    const view = render(
+      <RepositoryPullRequests repository="Orange-Health/service-api" />,
+    )
+    expect(
+      await screen.findByRole('link', { name: /Improve release flow/ }),
+    ).toBeVisible()
+    expect(listRequest).toHaveBeenCalledTimes(1)
+
+    view.rerender(
+      <RepositoryPullRequests repository="Orange-Health/service-web" />,
+    )
+    expect(await screen.findByRole('link', { name: /Web fix/ })).toBeVisible()
+    expect(listRequest).toHaveBeenCalledTimes(2)
+
+    view.rerender(
+      <RepositoryPullRequests repository="Orange-Health/service-api" />,
+    )
+    expect(
+      screen.getByRole('link', { name: /Improve release flow/ }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole('status', { name: 'Loading pull requests' }),
+    ).not.toBeInTheDocument()
+    expect(listRequest).toHaveBeenCalledTimes(2)
   })
 })
