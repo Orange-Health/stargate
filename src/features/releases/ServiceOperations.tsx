@@ -21,6 +21,7 @@ import { EitriOperations } from './EitriOperations'
 import { LiveDeploymentChips } from './LiveDeploymentChips'
 import {
   branchStateCacheKey,
+  peekServiceViewCache,
   readServiceViewCache,
   releaseDataCacheKey,
   writeServiceViewCache,
@@ -177,6 +178,15 @@ function backMergeBlockReason(step: BackMergeStep) {
   return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull)
 }
 
+function resolveCachedValue<T>(key: string): {
+  value: T | undefined
+  fresh: boolean
+} {
+  const fresh = readServiceViewCache<T>(key)
+  if (fresh) return { value: fresh, fresh: true }
+  return { value: peekServiceViewCache<T>(key), fresh: false }
+}
+
 function canForceMergeBackMerge(step: BackMergeStep): boolean {
   if (!step.pullRequest) return false
   const unresolvedComments =
@@ -199,34 +209,32 @@ export function ServiceOperations({
   const useReleaseBranch = readUseReleaseBranch()
   const [state, setState] = useState<RepositoryReleaseState | undefined>(() =>
     view === 'all' || view === 'branches'
-      ? readServiceViewCache(
+      ? resolveCachedValue<RepositoryReleaseState>(
           branchStateCacheKey(repository, readUseReleaseBranch()),
-        )
+        ).value
       : undefined,
   )
   const [releaseState, setReleaseState] = useState<
     RepositoryReleaseData | undefined
   >(() =>
     view === 'all' || view === 'releases'
-      ? readServiceViewCache(
+      ? resolveCachedValue<RepositoryReleaseData>(
           releaseDataCacheKey(repository, includeAllVReleases),
-        )
+        ).value
       : undefined,
   )
-  const [branchLoading, setBranchLoading] = useState(
-    () =>
-      (view === 'all' || view === 'branches') &&
-      !readServiceViewCache(
-        branchStateCacheKey(repository, readUseReleaseBranch()),
-      ),
-  )
-  const [releaseLoading, setReleaseLoading] = useState(
-    () =>
-      (view === 'all' || view === 'releases') &&
-      !readServiceViewCache(
-        releaseDataCacheKey(repository, includeAllVReleases),
-      ),
-  )
+  const [branchLoading, setBranchLoading] = useState(() => {
+    if (view !== 'all' && view !== 'branches') return false
+    return !resolveCachedValue(
+      branchStateCacheKey(repository, readUseReleaseBranch()),
+    ).fresh
+  })
+  const [releaseLoading, setReleaseLoading] = useState(() => {
+    if (view !== 'all' && view !== 'releases') return false
+    return !resolveCachedValue(
+      releaseDataCacheKey(repository, includeAllVReleases),
+    ).fresh
+  })
   const [error, setError] = useState('')
   const [busyRoute, setBusyRoute] = useState('')
   const [refreshing, setRefreshing] = useState(false)
@@ -263,33 +271,31 @@ export function ServiceOperations({
   const branchSnapshotKeyRef = useRef('')
   const viewRef = useRef(view)
   const releasePlatformRef = useRef(releasePlatform)
-  const syncedRepositoryRef = useRef(repository)
-  const syncedIncludeAllRef = useRef(includeAllVReleases)
-  if (
-    syncedRepositoryRef.current !== repository ||
-    syncedIncludeAllRef.current !== includeAllVReleases
-  ) {
-    syncedRepositoryRef.current = repository
-    syncedIncludeAllRef.current = includeAllVReleases
+  const [dataIdentity, setDataIdentity] = useState(
+    () => `${repository}\0${includeAllVReleases ? 'all' : 'staging'}`,
+  )
+  const nextDataIdentity = `${repository}\0${includeAllVReleases ? 'all' : 'staging'}`
+  if (dataIdentity !== nextDataIdentity) {
+    setDataIdentity(nextDataIdentity)
     const nextBranchKey = branchStateCacheKey(repository, useReleaseBranch)
     const nextReleaseKey = releaseDataCacheKey(repository, includeAllVReleases)
-    const cachedBranches =
-      readServiceViewCache<RepositoryReleaseState>(nextBranchKey)
-    const cachedReleases =
-      readServiceViewCache<RepositoryReleaseData>(nextReleaseKey)
-    branchStateRef.current = cachedBranches
-    releaseStateRef.current = cachedReleases
-    branchSnapshotKeyRef.current = cachedBranches ? nextBranchKey : ''
-    releaseSnapshotKeyRef.current = cachedReleases ? nextReleaseKey : ''
+    const cachedBranches = resolveCachedValue<RepositoryReleaseState>(nextBranchKey)
+    const cachedReleases = resolveCachedValue<RepositoryReleaseData>(nextReleaseKey)
+    branchLoadSequence.current += 1
+    releaseLoadSequence.current += 1
+    branchStateRef.current = cachedBranches.value
+    releaseStateRef.current = cachedReleases.value
+    branchSnapshotKeyRef.current = cachedBranches.value ? nextBranchKey : ''
+    releaseSnapshotKeyRef.current = cachedReleases.value ? nextReleaseKey : ''
     previousBuilds.current = new Map()
     buildsInitialized.current = false
-    setState(cachedBranches)
-    setReleaseState(cachedReleases)
+    setState(cachedBranches.value)
+    setReleaseState(cachedReleases.value)
     setBranchLoading(
-      (view === 'all' || view === 'branches') && !cachedBranches,
+      (view === 'all' || view === 'branches') && !cachedBranches.fresh,
     )
     setReleaseLoading(
-      (view === 'all' || view === 'releases') && !cachedReleases,
+      (view === 'all' || view === 'releases') && !cachedReleases.fresh,
     )
     setError('')
   }
@@ -391,14 +397,21 @@ export function ServiceOperations({
         if (cached) {
           branchLoadSequence.current += 1
           branchSnapshotKeyRef.current = cacheKey
+          branchStateRef.current = cached
           setState(cached)
           if (!silent) setBranchLoading(false)
           return
         }
       }
       const sequence = ++branchLoadSequence.current
+      const stale = peekServiceViewCache<RepositoryReleaseState>(cacheKey)
+      if (stale && branchSnapshotKeyRef.current !== cacheKey) {
+        branchSnapshotKeyRef.current = cacheKey
+        branchStateRef.current = stale
+        setState(stale)
+      }
       if (!silent) {
-        setBranchLoading(true)
+        setBranchLoading(!stale && !branchStateRef.current)
         setError('')
       }
       try {
@@ -406,6 +419,7 @@ export function ServiceOperations({
         if (sequence !== branchLoadSequence.current) return
         writeServiceViewCache(cacheKey, nextState)
         branchSnapshotKeyRef.current = cacheKey
+        branchStateRef.current = nextState
         setState(nextState)
       } catch (reason) {
         if (sequence !== branchLoadSequence.current) return
@@ -417,7 +431,7 @@ export function ServiceOperations({
           )
         }
       } finally {
-        if (!silent && sequence === branchLoadSequence.current) {
+        if (sequence === branchLoadSequence.current) {
           setBranchLoading(false)
         }
       }
@@ -442,8 +456,16 @@ export function ServiceOperations({
         }
       }
       const sequence = ++releaseLoadSequence.current
+      const stale = peekServiceViewCache<RepositoryReleaseData>(cacheKey)
+      if (stale && releaseSnapshotKeyRef.current !== cacheKey) {
+        announceCompletedBuilds(stale)
+        releaseSnapshotKeyRef.current = cacheKey
+        releaseStateRef.current = stale
+        setReleaseState(stale)
+        setReleaseLimit(Math.max(limit, stale.stagingReleases.length))
+      }
       if (!silent) {
-        setReleaseLoading(true)
+        setReleaseLoading(!stale && !releaseStateRef.current)
         setError('')
       }
       try {
@@ -469,7 +491,7 @@ export function ServiceOperations({
           )
         }
       } finally {
-        if (!silent && sequence === releaseLoadSequence.current) {
+        if (sequence === releaseLoadSequence.current) {
           setReleaseLoading(false)
         }
       }
@@ -601,44 +623,56 @@ export function ServiceOperations({
     const requests: Promise<void>[] = []
 
     if (needReleases) {
-      if (releaseSnapshotKeyRef.current === releaseCacheKey && releaseStateRef.current) {
+      const cached = resolveCachedValue<RepositoryReleaseData>(releaseCacheKey)
+      if (
+        cached.fresh &&
+        releaseSnapshotKeyRef.current === releaseCacheKey &&
+        releaseStateRef.current
+      ) {
         setReleaseLoading(false)
-      } else {
-        const cached = readServiceViewCache<RepositoryReleaseData>(releaseCacheKey)
+      } else if (cached.value) {
         releaseLoadSequence.current += 1
-        if (cached) {
-          releaseSnapshotKeyRef.current = releaseCacheKey
-          releaseStateRef.current = cached
-          setReleaseState(cached)
-          setReleaseLoading(false)
-        } else {
-          releaseSnapshotKeyRef.current = ''
-          releaseStateRef.current = undefined
-          setReleaseState(undefined)
-          setReleaseLoading(true)
-          requests.push(loadReleasesRef.current())
+        releaseSnapshotKeyRef.current = releaseCacheKey
+        releaseStateRef.current = cached.value
+        setReleaseState(cached.value)
+        setReleaseLoading(!cached.fresh)
+        if (!cached.fresh) {
+          requests.push(loadReleasesRef.current(true))
         }
+      } else {
+        releaseLoadSequence.current += 1
+        releaseSnapshotKeyRef.current = ''
+        releaseStateRef.current = undefined
+        setReleaseState(undefined)
+        setReleaseLoading(true)
+        requests.push(loadReleasesRef.current())
       }
     }
 
     if (needBranches) {
-      if (branchSnapshotKeyRef.current === branchCacheKey && branchStateRef.current) {
+      const cached = resolveCachedValue<RepositoryReleaseState>(branchCacheKey)
+      if (
+        cached.fresh &&
+        branchSnapshotKeyRef.current === branchCacheKey &&
+        branchStateRef.current
+      ) {
         setBranchLoading(false)
-      } else {
-        const cached = readServiceViewCache<RepositoryReleaseState>(branchCacheKey)
+      } else if (cached.value) {
         branchLoadSequence.current += 1
-        if (cached) {
-          branchSnapshotKeyRef.current = branchCacheKey
-          branchStateRef.current = cached
-          setState(cached)
-          setBranchLoading(false)
-        } else {
-          branchSnapshotKeyRef.current = ''
-          branchStateRef.current = undefined
-          setState(undefined)
-          setBranchLoading(true)
-          requests.push(loadBranchesRef.current())
+        branchSnapshotKeyRef.current = branchCacheKey
+        branchStateRef.current = cached.value
+        setState(cached.value)
+        setBranchLoading(!cached.fresh)
+        if (!cached.fresh) {
+          requests.push(loadBranchesRef.current(true))
         }
+      } else {
+        branchLoadSequence.current += 1
+        branchSnapshotKeyRef.current = ''
+        branchStateRef.current = undefined
+        setState(undefined)
+        setBranchLoading(true)
+        requests.push(loadBranchesRef.current())
       }
     }
 
@@ -1161,6 +1195,16 @@ export function ServiceOperations({
     }
   }
 
+  const releaseSnapshotIsCurrent = releaseState?.repository === repository
+  const showStagingPlaceholder =
+    !releaseState ||
+    !releaseSnapshotIsCurrent ||
+    (releaseLoading && releaseState.stagingReleases.length === 0)
+  const showProductionPlaceholder =
+    !releaseState ||
+    !releaseSnapshotIsCurrent ||
+    (releaseLoading && releaseState.productionReleases.length === 0)
+
   return (
     <div className="service-operations">
       {error && (
@@ -1261,7 +1305,7 @@ export function ServiceOperations({
           </p>
         )}
 
-        {releaseLoading && !releaseState ? (
+        {showStagingPlaceholder ? (
           <div className="operation-loading">
             <span className="spinner" /> Loading release builds…
           </div>
@@ -1386,7 +1430,7 @@ export function ServiceOperations({
             </div>
           </div>
 
-          {releaseLoading && !releaseState ? (
+          {showProductionPlaceholder ? (
             <div className="operation-loading">
               <span className="spinner" /> Loading production builds…
             </div>

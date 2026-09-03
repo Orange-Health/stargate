@@ -35,8 +35,6 @@ import {
   releaseNotesForDashboard,
   type ReleaseNotesFormat,
 } from "./releaseNotes";
-import { computeControlRoomProgress } from "./releaseProgress";
-import { ReleaseProgressBar } from "./ReleaseProgressBar";
 import {
   displaySyncPercent,
   EXPECTED_SYNC_MS_PER_SERVICE,
@@ -1394,32 +1392,6 @@ export function ReleaseDayOperations({
   const hasSavedProgress =
     session.logs.length > 0 ||
     Object.values(session.repositories).some((item) => item.productionRelease);
-  const controlRoomProgress = useMemo(
-    () =>
-      computeControlRoomProgress({
-        versionId: `${dashboard.version.id}:control-room`,
-        selectedRepositories: selected,
-        firstHop,
-        lastHop,
-        states,
-        productionReleases: Object.fromEntries(
-          selected.map((repository) => [
-            repository,
-            session.repositories[repository]?.productionRelease,
-          ]),
-        ),
-        releaseDate: session.releaseDate,
-      }),
-    [
-      dashboard.version.id,
-      firstHop,
-      lastHop,
-      selected,
-      session.releaseDate,
-      session.repositories,
-      states,
-    ],
-  );
   async function runAction(
     action: string,
     task: (repository: string) => Promise<void>,
@@ -2340,10 +2312,6 @@ export function ReleaseDayOperations({
             are available, but deploy buttons will remain disabled.
           </div>
         )}
-
-        <div className="release-day-progress">
-          <ReleaseProgressBar progress={controlRoomProgress} />
-        </div>
 
         <div className="release-day-steps">
           <article className="release-day-step">

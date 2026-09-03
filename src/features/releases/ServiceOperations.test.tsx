@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../shared/api'
 import type { RepositoryReleaseState } from '../../shared/types'
 import { ServiceOperations } from './ServiceOperations'
-import { clearServiceViewCache } from './serviceViewCache'
+import {
+  clearServiceViewCache,
+  releaseDataCacheKey,
+  writeServiceViewCache,
+} from './serviceViewCache'
 
 const repositoryState: RepositoryReleaseState = {
   repository: 'Orange-Health/service-api',
@@ -1102,5 +1106,133 @@ describe('ServiceOperations', () => {
     )
     await act(async () => {})
     expect(stateRequest).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not flash an empty v-release state while restoring a cached service', async () => {
+    const webState = {
+      ...repositoryState,
+      repository: 'Orange-Health/service-web',
+      stagingReleases: [
+        {
+          ...repositoryState.stagingReleases[0],
+          id: 99,
+          tag: 'v-qa-26.0801.1',
+        },
+      ],
+    }
+    const webReleases = releaseData(webState)
+    writeServiceViewCache(
+      releaseDataCacheKey('Orange-Health/service-web', true),
+      webReleases,
+    )
+
+    let resolveApi = (_value: ReturnType<typeof releaseData>) => {}
+    const hanging = new Promise<ReturnType<typeof releaseData>>((resolve) => {
+      resolveApi = resolve
+    })
+    vi.mocked(api.repositoryReleaseData).mockImplementation(
+      async (repository) => {
+        if (repository === 'Orange-Health/service-api') return hanging
+        return webReleases
+      },
+    )
+
+    const view = render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        includeAllVReleases
+        view="releases"
+      />,
+    )
+    expect(screen.getByText(/Loading release builds/)).toBeVisible()
+
+    view.rerender(
+      <ServiceOperations
+        repository="Orange-Health/service-web"
+        includeAllVReleases
+        view="releases"
+      />,
+    )
+
+    expect(screen.getByText('v-qa-26.0801.1')).toBeVisible()
+    expect(
+      screen.queryByText('No v- release builds found for this service.'),
+    ).not.toBeInTheDocument()
+
+    await act(async () => {
+      resolveApi(
+        releaseData({
+          ...repositoryState,
+          stagingReleases: [],
+        }),
+      )
+    })
+
+    expect(screen.getByText('v-qa-26.0801.1')).toBeVisible()
+    expect(
+      screen.queryByText('No v- release builds found for this service.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows loading instead of an empty v-release message when switching to an uncached service', async () => {
+    const view = render(
+      <ServiceOperations
+        repository="Orange-Health/service-api"
+        includeAllVReleases
+        view="releases"
+      />,
+    )
+    expect(await screen.findByText('v-qa-26.0713.2')).toBeVisible()
+
+    vi.mocked(api.repositoryReleaseData).mockReturnValue(new Promise(() => {}))
+    view.rerender(
+      <ServiceOperations
+        repository="Orange-Health/service-web"
+        includeAllVReleases
+        view="releases"
+      />,
+    )
+
+    expect(screen.getByText(/Loading release builds/)).toBeVisible()
+    expect(
+      screen.queryByText('No v- release builds found for this service.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('keeps expired v-release cache on screen while it revalidates', async () => {
+    vi.useFakeTimers()
+    const webReleases = releaseData({
+      ...repositoryState,
+      repository: 'Orange-Health/service-web',
+      stagingReleases: [
+        {
+          ...repositoryState.stagingReleases[0],
+          id: 99,
+          tag: 'v-qa-26.0801.1',
+        },
+      ],
+    })
+    writeServiceViewCache(
+      releaseDataCacheKey('Orange-Health/service-web', true),
+      webReleases,
+    )
+    vi.mocked(api.repositoryReleaseData).mockReturnValue(new Promise(() => {}))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+
+    render(
+      <ServiceOperations
+        repository="Orange-Health/service-web"
+        includeAllVReleases
+        view="releases"
+      />,
+    )
+
+    expect(screen.getByText('v-qa-26.0801.1')).toBeVisible()
+    expect(
+      screen.queryByText('No v- release builds found for this service.'),
+    ).not.toBeInTheDocument()
   })
 })
