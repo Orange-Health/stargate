@@ -1401,6 +1401,72 @@ describe('ReleaseDayOperations', () => {
     ).toBeVisible()
   })
 
+  it('shows review required instead of checks pending when approval is missing', async () => {
+    const pendingReviewState = repositoryState('pr_open', 'needs_pr')
+    pendingReviewState.promotionSteps[0] = {
+      ...pendingReviewState.promotionSteps[0],
+      pullRequest: {
+        ...pendingReviewState.promotionSteps[0].pullRequest!,
+        checks: 'pending',
+        mergeableState: 'blocked',
+        reviewDecision: 'review_required',
+      },
+    }
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(pendingReviewState)
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('Review required')).toBeVisible()
+    expect(screen.queryByText('Checks are pending')).not.toBeInTheDocument()
+  })
+
+  it('does not force merge when a review is still required', async () => {
+    const user = userEvent.setup()
+    const pendingReviewState = repositoryState('pr_open', 'needs_pr')
+    pendingReviewState.promotionSteps[0] = {
+      ...pendingReviewState.promotionSteps[0],
+      pullRequest: {
+        ...pendingReviewState.promotionSteps[0].pullRequest!,
+        checks: 'pending',
+        mergeableState: 'blocked',
+        reviewDecision: 'review_required',
+      },
+    }
+    const merge = vi.spyOn(api, 'mergePromotionPullRequest')
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(pendingReviewState)
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findByText('Review required')
+
+    const devMergeStep = screen
+      .getByText('Merge Dev → Release PRs')
+      .closest('article')
+    await user.click(
+      within(devMergeStep as HTMLElement).getByRole('button', {
+        name: 'Merge ready PRs',
+      }),
+    )
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByText('Review required on PR #12.').length,
+      ).toBeGreaterThan(0),
+    )
+    expect(merge).not.toHaveBeenCalled()
+  })
+
   it('creates PRs sequentially and patches state without full reconciliation', async () => {
     const user = userEvent.setup()
     const secondRepository = 'Orange-Health/service-web'
@@ -1740,6 +1806,47 @@ describe('ReleaseDayOperations', () => {
         route: 'dev-to-default',
       }),
     )
+  })
+
+  it('shows review required after PR creation when approval is still pending', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('needs_pr', 'needs_pr'),
+    )
+    vi.spyOn(api, 'createPromotionPullRequest').mockResolvedValue({
+      number: 21,
+      title: 'Promote dev to release',
+      url: 'https://github.test/pull/21',
+      baseBranch: 'release',
+      headBranch: 'dev',
+      draft: false,
+      mergeable: true,
+      mergeableState: 'blocked',
+      reviewDecision: 'review_required',
+      checks: 'pending',
+      resolution: 'created',
+    })
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+    await screen.findAllByText('PR needed')
+    const createStep = screen
+      .getByText('Create Dev → Release PRs')
+      .closest('article')
+    await user.click(
+      within(createStep as HTMLElement).getByRole('button', {
+        name: 'Create PRs',
+      }),
+    )
+
+    expect(await screen.findByText('Review required')).toBeVisible()
+    expect(screen.queryByText('Checks are pending')).not.toBeInTheDocument()
+    expect(screen.queryByText('PR #21')).not.toBeInTheDocument()
   })
 
   it('re-enables Refresh status after batch sync even if progress polling hangs', async () => {

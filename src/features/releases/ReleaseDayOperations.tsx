@@ -307,6 +307,12 @@ function checksSoftBlockReason(pull: PromotionPullRequest) {
   return undefined;
 }
 
+function reviewBlockReason(pull: PromotionPullRequest) {
+  if (pull.reviewDecision === "changes_requested") return "Changes requested";
+  if (pull.reviewDecision === "review_required") return "Review required";
+  return undefined;
+}
+
 function hasUnresolvedComments(pull: PromotionPullRequest) {
   return (pull.unresolvedReviewThreads ?? 0) > 0;
 }
@@ -319,12 +325,17 @@ function mergeBlockReason(pull: PromotionPullRequest) {
   if (hasUnresolvedComments(pull)) {
     return "Resolve unresolved review comments";
   }
-  return hardMergeBlockReason(pull) ?? checksSoftBlockReason(pull);
+  return (
+    hardMergeBlockReason(pull) ??
+    reviewBlockReason(pull) ??
+    checksSoftBlockReason(pull)
+  );
 }
 
 function canForceMergePull(pull: PromotionPullRequest) {
   return (
     !hardMergeBlockReason(pull) &&
+    !reviewBlockReason(pull) &&
     (Boolean(checksSoftBlockReason(pull)) ||
       hasForceMergeableUnresolvedComments(pull))
   );
@@ -355,8 +366,12 @@ function phaseState(
   const blocked = step.pullRequest
     ? mergeBlockReason(step.pullRequest)
     : "PR details unavailable";
-  if (mode === "merge" && blocked) {
-    return { label: blocked, tone: "error" };
+  if (blocked) {
+    const tone =
+      blocked === "Review required" || blocked === "Checks are pending"
+        ? "pending"
+        : "error";
+    return { label: blocked, tone };
   }
   return {
     label: step.pullRequest ? `PR #${step.pullRequest.number}` : "PR open",
