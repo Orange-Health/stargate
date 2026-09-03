@@ -92,20 +92,20 @@ describe('Jenkins service mapping', () => {
       'clr-web',
     ])
     expect(servicesForRepository('Orange-Health/scheduler-api')).toEqual([
-      'scheduler',
+      'scheduler-api',
     ])
     expect(
       deploymentSpec({
         repository: 'Orange-Health/scheduler-api',
-        service: 'scheduler',
+        service: 'scheduler-api',
         tag: 'v-qa-26.0820.1',
         environment: 'qa',
       }).parameters,
-    ).toMatchObject({ SERVICE: 'scheduler' })
+    ).toMatchObject({ SERVICE: 'scheduler-api' })
     expect(
       deploymentSpec({
         repository: 'Orange-Health/scheduler-api',
-        service: 'scheduler',
+        service: 'scheduler-api',
         tag: 'v-s3-26.0820.1',
         environment: 's3',
       }).parameters,
@@ -113,13 +113,13 @@ describe('Jenkins service mapping', () => {
     expect(
       productionDeploymentSpec({
         repository: 'Orange-Health/scheduler-api',
-        service: 'scheduler',
+        service: 'scheduler-api',
         imageTag: 'v26.0820.1',
         qaApprovalRequired: false,
         skipProdMigration: false,
         prodMigrationJob: 'Prod-new-cluster-migration',
       }).parameters,
-    ).toMatchObject({ SERVICE: 'scheduler' })
+    ).toMatchObject({ SERVICE: 'scheduler-api' })
     expect(servicesForRepository('Orange-Health/citrus')).toEqual(['citrus'])
     expect(servicesForRepository('Orange-Health/unknown')).toEqual([])
   })
@@ -541,6 +541,34 @@ describe('deployedTagsFromBuilds', () => {
         tag: 'v-prod-26.0716.6',
         environment: 'production',
         buildNumber: 2201,
+      }),
+    ])
+  })
+
+  it('maps production scheduler-api builds back to the scheduler-api dashboard service', () => {
+    expect(
+      productionDeployedTagsFromBuilds(
+        [
+          {
+            number: 2201,
+            result: 'SUCCESS',
+            actions: [
+              {
+                parameters: [
+                  { name: 'SERVICE', value: 'scheduler-api' },
+                  { name: 'IMAGE_TAG', value: 'v26.0820.1' },
+                ],
+              },
+            ],
+          },
+        ],
+        ['scheduler-api'],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        service: 'scheduler-api',
+        tag: 'v26.0820.1',
+        environment: 'production',
       }),
     ])
   })
