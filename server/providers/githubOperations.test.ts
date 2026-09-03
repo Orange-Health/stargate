@@ -728,6 +728,81 @@ describe('promotion PR force merge', () => {
     })
     expect(graphqlCalled).toBe(true)
   })
+
+  it('force merges when a back-merge compare 404s for a missing branch', async () => {
+    let graphqlCalled = false
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/repos/Orange-Health/cerebro-go')) {
+        return new Response(JSON.stringify({ default_branch: 'main' }), {
+          status: 200,
+        })
+      }
+      if (url.includes('/pulls?')) {
+        return new Response(JSON.stringify([]), { status: 200 })
+      }
+      if (url.includes('/compare/')) {
+        return new Response(JSON.stringify({ message: 'Not Found' }), {
+          status: 404,
+        })
+      }
+      if (url.endsWith('/pulls/43')) {
+        return new Response(
+          JSON.stringify({
+            number: 43,
+            node_id: 'PR_kwDOCerebroForce',
+            title: 'Promote dev to release',
+            body: null,
+            html_url: 'https://github.test/pull/43',
+            draft: false,
+            merged_at: null,
+            mergeable: true,
+            mergeable_state: 'blocked',
+            base: { ref: 'release' },
+            head: { ref: 'dev', sha: 'abc123' },
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === 'https://api.github.com/graphql') {
+        graphqlCalled = true
+        return new Response(
+          JSON.stringify({
+            data: {
+              mergePullRequest: {
+                pullRequest: {
+                  merged: true,
+                  mergeCommit: { oid: 'cerebroforce' },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`Unexpected GitHub request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const config: ConnectionConfig = {
+      jiraSite: 'https://jira.test',
+      jiraEmail: 'rm@test.com',
+      jiraToken: 'jira',
+      githubOrg: 'Orange-Health',
+      githubToken: 'github',
+      jenkinsUrl: 'https://jenkins.test',
+      jenkinsUsername: 'rm',
+      jenkinsToken: 'jenkins',
+    }
+
+    await expect(
+      mergePromotionPullRequest(config, 'Orange-Health/cerebro-go', 43, true),
+    ).resolves.toMatchObject({
+      merged: true,
+      message: 'Force-merged with branch protection bypass.',
+      sha: 'cerebroforce',
+    })
+    expect(graphqlCalled).toBe(true)
+  })
 })
 
 describe('feature PR force merge', () => {

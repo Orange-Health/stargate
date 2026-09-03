@@ -929,6 +929,26 @@ export function comparisonHasAnyFileChanges(
     : comparison.ahead_by > 0 || comparison.behind_by > 0
 }
 
+async function compareBranches(
+  config: ConnectionConfig,
+  repository: string,
+  base: string,
+  head: string,
+) {
+  try {
+    return await githubApi<GitHubBranchComparison>(
+      config,
+      `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+    )
+  } catch (error) {
+    // Missing refs or no merge base are 404s; treat as "no pending changes".
+    if (error instanceof ProviderError && error.status === 404) {
+      return undefined
+    }
+    throw error
+  }
+}
+
 async function promotionStep(
   config: ConnectionConfig,
   repository: string,
@@ -1005,12 +1025,9 @@ async function pendingBackMerges(
       const { fromBranch, toBranch } = backMergeBranches(route, defaultBranch)
       const [pulls, comparison] = await Promise.all([
         findPulls(config, repository, 'open', fromBranch, toBranch),
-        githubApi<GitHubBranchComparison>(
-          config,
-          `/repos/${repositoryPath(repository)}/compare/${encodeURIComponent(toBranch)}...${encodeURIComponent(fromBranch)}`,
-        ),
+        compareBranches(config, repository, toBranch, fromBranch),
       ])
-      if (!comparisonHasSourceFileChanges(comparison)) return []
+      if (!comparison || !comparisonHasSourceFileChanges(comparison)) return []
       return pulls.map((pull) => ({
         number: pull.number,
         title: pull.title,
@@ -2024,8 +2041,7 @@ export async function mergePromotionPullRequest(
         409,
       )
     }
-    const details = await promotionPullDetails(config, repository, pull)
-    if (details.mergeable === null) {
+    if (pull.mergeable === null) {
       throw new ProviderError(
         'GitHub is still calculating mergeability.',
         'PROMOTION_PR_NOT_MERGEABLE',
@@ -2033,7 +2049,7 @@ export async function mergePromotionPullRequest(
         409,
       )
     }
-    if (hasActualMergeConflict(details.mergeable, details.mergeableState)) {
+    if (hasActualMergeConflict(pull.mergeable, pull.mergeable_state)) {
       throw new ProviderError(
         'The promotion PR has merge conflicts.',
         'PROMOTION_PR_NOT_MERGEABLE',
