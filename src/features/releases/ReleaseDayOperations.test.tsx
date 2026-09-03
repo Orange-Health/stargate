@@ -1426,20 +1426,27 @@ describe('ReleaseDayOperations', () => {
     expect(screen.queryByText('Checks are pending')).not.toBeInTheDocument()
   })
 
-  it('does not force merge when a review is still required', async () => {
+  it('force merges when review is pending or checks are failing', async () => {
     const user = userEvent.setup()
-    const pendingReviewState = repositoryState('pr_open', 'needs_pr')
-    pendingReviewState.promotionSteps[0] = {
-      ...pendingReviewState.promotionSteps[0],
+    const blockedState = repositoryState('pr_open', 'needs_pr')
+    blockedState.promotionSteps[0] = {
+      ...blockedState.promotionSteps[0],
       pullRequest: {
-        ...pendingReviewState.promotionSteps[0].pullRequest!,
-        checks: 'pending',
+        ...blockedState.promotionSteps[0].pullRequest!,
+        checks: 'failure',
         mergeableState: 'blocked',
         reviewDecision: 'review_required',
       },
     }
-    const merge = vi.spyOn(api, 'mergePromotionPullRequest')
-    vi.spyOn(api, 'repositoryState').mockResolvedValue(pendingReviewState)
+    let state = blockedState
+    vi.spyOn(api, 'repositoryState').mockImplementation(async () => state)
+    const merge = vi
+      .spyOn(api, 'mergePromotionPullRequest')
+      .mockImplementation(async () => {
+        state = repositoryState('up_to_date', 'needs_pr')
+        return { merged: true, message: 'Force-merged' }
+      })
+    vi.spyOn(api, 'refreshRepository').mockResolvedValue()
 
     render(
       <ReleaseDayOperations
@@ -1460,11 +1467,15 @@ describe('ReleaseDayOperations', () => {
     )
 
     await waitFor(() =>
-      expect(
-        screen.getAllByText('Review required on PR #12.').length,
-      ).toBeGreaterThan(0),
+      expect(merge).toHaveBeenCalledWith({
+        repository,
+        pullNumber: 12,
+        bypassBranchProtection: true,
+      }),
     )
-    expect(merge).not.toHaveBeenCalled()
+    expect(
+      screen.getByText(/force-merging with branch-protection bypass/i),
+    ).toBeVisible()
   })
 
   it('creates PRs sequentially and patches state without full reconciliation', async () => {

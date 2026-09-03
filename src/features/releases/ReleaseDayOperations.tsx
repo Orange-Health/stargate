@@ -317,10 +317,6 @@ function hasUnresolvedComments(pull: PromotionPullRequest) {
   return (pull.unresolvedReviewThreads ?? 0) > 0;
 }
 
-function hasForceMergeableUnresolvedComments(pull: PromotionPullRequest) {
-  return hasUnresolvedComments(pull) && pull.reviewDecision === "approved";
-}
-
 function mergeBlockReason(pull: PromotionPullRequest) {
   if (hasUnresolvedComments(pull)) {
     return "Resolve unresolved review comments";
@@ -333,12 +329,7 @@ function mergeBlockReason(pull: PromotionPullRequest) {
 }
 
 function canForceMergePull(pull: PromotionPullRequest) {
-  return (
-    !hardMergeBlockReason(pull) &&
-    !reviewBlockReason(pull) &&
-    (Boolean(checksSoftBlockReason(pull)) ||
-      hasForceMergeableUnresolvedComments(pull))
-  );
+  return !hardMergeBlockReason(pull) && Boolean(mergeBlockReason(pull));
 }
 
 function phaseState(
@@ -1592,7 +1583,7 @@ export function ReleaseDayOperations({
         if (force) {
           log(
             "warning",
-            `Checks are blocking PR #${step.pullRequest.number}; force-merging with branch-protection bypass.`,
+            `${blocked ?? "Branch protection"} is blocking PR #${step.pullRequest.number}; force-merging with branch-protection bypass.`,
             repository,
           );
         } else {
