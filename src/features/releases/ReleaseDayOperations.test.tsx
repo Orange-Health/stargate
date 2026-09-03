@@ -1554,6 +1554,14 @@ describe('ReleaseDayOperations', () => {
     expect(creationOrder).toEqual([repository])
     expect(maxActiveStateRequests).toBe(2)
     expect(screen.getByText('Creating PR')).toBeVisible()
+    const createProgress = screen.getByRole('progressbar', {
+      name: 'Create Dev → Release PRs',
+    })
+    expect(createProgress).toHaveAttribute('aria-valuenow', '0')
+    expect(createProgress).toHaveAttribute('aria-valuetext', '0 of 2')
+    expect(
+      screen.getByRole('button', { name: 'Creating 0/2' }),
+    ).toBeDisabled()
     expect(
       screen.getByText(
         'Discovery: no open dev → release PR in loaded state.',
@@ -1574,6 +1582,11 @@ describe('ReleaseDayOperations', () => {
     expect(screen.getByText('GitHub created PR #21.')).toBeVisible()
     expect(screen.getByText('GitHub created PR #22.')).toBeVisible()
     expect(repositoryStateRequest).toHaveBeenCalledTimes(2)
+    expect(
+      screen.queryByRole('progressbar', {
+        name: 'Create Dev → Release PRs',
+      }),
+    ).not.toBeInTheDocument()
   })
 
   it('refreshes the newest eligible production tag instead of the saved tag', async () => {

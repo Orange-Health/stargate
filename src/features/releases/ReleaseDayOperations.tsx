@@ -398,6 +398,10 @@ export function ReleaseDayOperations({
   const [batchSyncProgress, setBatchSyncProgress] =
     useState<ReleaseControlSyncProgress>();
   const [busyAction, setBusyAction] = useState("");
+  const [actionProgress, setActionProgress] = useState<{
+    completed: number;
+    total: number;
+  }>();
   const [activeProductionRelease, setActiveProductionRelease] = useState("");
   const [checkingBuildRepository, setCheckingBuildRepository] = useState("");
   const [developerLists, setDeveloperLists] = useState<
@@ -1398,6 +1402,28 @@ export function ReleaseDayOperations({
   const hasSavedProgress =
     session.logs.length > 0 ||
     Object.values(session.repositories).some((item) => item.productionRelease);
+  const topProgress = actionProgress
+    ? {
+        label: busyAction,
+        percent:
+          actionProgress.total === 0
+            ? 0
+            : Math.round(
+                (actionProgress.completed / actionProgress.total) * 100,
+              ),
+        valuetext: `${actionProgress.completed} of ${actionProgress.total}`,
+      }
+    : syncInProgress
+      ? {
+          label: "Synchronizing release control room",
+          percent: syncProgress,
+          valuetext: `${syncCompleted} of ${selected.length}`,
+        }
+      : undefined;
+  function busyCountLabel(verb: string) {
+    if (!actionProgress) return `${verb}…`;
+    return `${verb} ${actionProgress.completed}/${actionProgress.total}`;
+  }
   async function runAction(
     action: string,
     task: (repository: string) => Promise<void>,
@@ -1412,6 +1438,7 @@ export function ReleaseDayOperations({
       .map((service) => service.repository)
       .filter((repository) => selectedSet.has(repository));
     setBusyAction(action);
+    setActionProgress({ completed: 0, total: repositories.length });
     log("info", `${action} started for ${repositories.length} services.`);
     const execute = async (repository: string, index: number) => {
       setRepositoryError(repository);
@@ -1427,23 +1454,33 @@ export function ReleaseDayOperations({
           reason instanceof Error ? reason.message : `${action} failed.`;
         setRepositoryError(repository, message);
         log("error", message, repository);
+      } finally {
+        setActionProgress((current) =>
+          current
+            ? { ...current, completed: current.completed + 1 }
+            : current,
+        );
       }
     };
-    if (options.sequential) {
-      for (const [index, repository] of repositories.entries()) {
-        await execute(repository, index);
+    try {
+      if (options.sequential) {
+        for (const [index, repository] of repositories.entries()) {
+          await execute(repository, index);
+        }
+      } else {
+        await mapConcurrent(repositories, async (repository) => {
+          await execute(repository, repositories.indexOf(repository));
+        });
       }
-    } else {
-      await mapConcurrent(repositories, async (repository) => {
-        await execute(repository, repositories.indexOf(repository));
-      });
+      if (options.reconcile !== false) await refreshStates(true);
+      log(
+        "info",
+        `${action} finished. Review flagged services before continuing.`,
+      );
+    } finally {
+      setBusyAction("");
+      setActionProgress(undefined);
     }
-    if (options.reconcile !== false) await refreshStates(true);
-    log(
-      "info",
-      `${action} finished. Review flagged services before continuing.`,
-    );
-    setBusyAction("");
   }
 
   async function createPullRequests(route: PromotionRoute) {
@@ -2158,16 +2195,17 @@ export function ReleaseDayOperations({
   return (
     <>
       <section className="release-day-page" aria-labelledby="release-day-title">
-        {syncInProgress && (
+        {topProgress && (
           <div
             className="release-day-sync-progress"
             role="progressbar"
-            aria-label="Synchronizing release control room"
+            aria-label={topProgress.label}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-valuenow={syncProgress}
+            aria-valuenow={topProgress.percent}
+            aria-valuetext={topProgress.valuetext}
           >
-            <span style={{ width: `${syncProgress}%` }} />
+            <span style={{ width: `${topProgress.percent}%` }} />
           </div>
         )}
         <header className="release-day-header">
@@ -2175,7 +2213,10 @@ export function ReleaseDayOperations({
             <h2 id="release-day-title">{dashboard.version.name}</h2>
             <span>
               {selected.length}/{dashboard.services.length} selected
-              {refreshing && ` · Syncing ${syncCompleted}/${selected.length}`}
+              {actionProgress
+                ? ` · ${busyAction} ${actionProgress.completed}/${actionProgress.total}`
+                : refreshing &&
+                  ` · Syncing ${syncCompleted}/${selected.length}`}
             </span>
           </div>
           <div className="release-day-toolbar">
@@ -2332,7 +2373,7 @@ export function ReleaseDayOperations({
               onClick={() => void createPullRequests(firstHop)}
             >
               {busyAction === `Create ${promotionRouteLabel(firstHop)} PRs`
-                ? "Creating…"
+                ? busyCountLabel("Creating")
                 : firstPrsReady
                   ? "Recheck / create"
                   : "Create PRs"}
@@ -2352,7 +2393,7 @@ export function ReleaseDayOperations({
               onClick={() => void mergePullRequests(firstHop)}
             >
               {busyAction === `Merge ${promotionRouteLabel(firstHop)} PRs`
-                ? "Merging…"
+                ? busyCountLabel("Merging")
                 : firstMerged
                   ? "All merged"
                   : "Merge ready PRs"}
@@ -2374,7 +2415,7 @@ export function ReleaseDayOperations({
                   onClick={() => void createPullRequests(lastHop)}
                 >
                   {busyAction === `Create ${promotionRouteLabel(lastHop)} PRs`
-                    ? "Creating…"
+                    ? busyCountLabel("Creating")
                     : lastPrsReady
                       ? "Recheck / create"
                       : "Create PRs"}
@@ -2396,7 +2437,7 @@ export function ReleaseDayOperations({
                   onClick={() => void mergePullRequests(lastHop)}
                 >
                   {busyAction === `Merge ${promotionRouteLabel(lastHop)} PRs`
-                    ? "Merging…"
+                    ? busyCountLabel("Merging")
                     : lastMerged
                       ? "All merged"
                       : "Merge ready PRs"}
@@ -2418,7 +2459,7 @@ export function ReleaseDayOperations({
               onClick={() => void createProductionReleases()}
             >
               {busyAction === "Create production releases"
-                ? "Creating…"
+                ? busyCountLabel("Creating")
                 : releasesCreated
                   ? "Reconcile releases"
                   : "Create releases"}
