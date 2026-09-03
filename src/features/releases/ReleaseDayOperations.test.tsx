@@ -1707,6 +1707,168 @@ describe('ReleaseDayOperations', () => {
     ).toBeVisible()
   })
 
+  it('keeps Deploy active for clr until both clr-api and clr-web are live', async () => {
+    const saved = {
+      id: 90,
+      repository,
+      tag: 'v26.0903.1',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/90',
+      createdAt: '2026-09-03T08:05:00Z',
+    }
+    const state = {
+      ...repositoryState('up_to_date', 'up_to_date'),
+      jenkinsServices: ['clr-api', 'clr-web'],
+      productionReleases: [
+        {
+          id: saved.id,
+          tag: saved.tag,
+          url: saved.url,
+          createdAt: saved.createdAt,
+          buildStatus: 'succeeded' as const,
+          runs: [],
+        },
+      ],
+      deployedTags: [
+        {
+          service: 'clr-api',
+          tag: saved.tag,
+          environment: 'production' as const,
+          status: 'succeeded' as const,
+          buildNumber: 2201,
+          buildUrl: 'https://jenkins.test/2201',
+          deployedAt: '2026-09-03T10:00:00Z',
+        },
+      ],
+    }
+    window.localStorage.setItem(
+      'release-day-operations:release-1',
+      JSON.stringify({
+        versionId: 'release-1',
+        operationId: 'operation-1',
+        releaseDate: '2026-09-03',
+        startedAt: '2026-09-03T08:00:00Z',
+        selectedRepositories: [repository],
+        repositories: {
+          [repository]: { productionRelease: saved },
+        },
+        logs: [],
+      }),
+    )
+    window.localStorage.setItem(
+      'release-day-repository-states:release-1',
+      JSON.stringify({
+        cachedAt: Date.now(),
+        states: { [repository]: state },
+      }),
+    )
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(state)
+
+    render(
+      <ReleaseDayOperations
+        dashboard={{
+          ...dashboard,
+          version: { ...dashboard.version, releaseDate: '2026-09-03' },
+        }}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByRole('button', { name: 'Deploy' })).toBeEnabled()
+    expect(
+      screen.getByRole('link', { name: 'Live: v26.0903.1 · clr-api ↗' }),
+    ).toBeVisible()
+  })
+
+  it('marks clr already deployed when both clr-api and clr-web are live', async () => {
+    const saved = {
+      id: 90,
+      repository,
+      tag: 'v26.0903.1',
+      sourceBranch: 'main',
+      url: 'https://github.test/releases/90',
+      createdAt: '2026-09-03T08:05:00Z',
+    }
+    const state = {
+      ...repositoryState('up_to_date', 'up_to_date'),
+      jenkinsServices: ['clr-api', 'clr-web'],
+      productionReleases: [
+        {
+          id: saved.id,
+          tag: saved.tag,
+          url: saved.url,
+          createdAt: saved.createdAt,
+          buildStatus: 'succeeded' as const,
+          runs: [],
+        },
+      ],
+      deployedTags: [
+        {
+          service: 'clr-api',
+          tag: saved.tag,
+          environment: 'production' as const,
+          status: 'succeeded' as const,
+          buildNumber: 2201,
+          buildUrl: 'https://jenkins.test/2201',
+          deployedAt: '2026-09-03T10:00:00Z',
+        },
+        {
+          service: 'clr-web',
+          tag: saved.tag,
+          environment: 'production' as const,
+          status: 'succeeded' as const,
+          buildNumber: 2202,
+          buildUrl: 'https://jenkins.test/2202',
+          deployedAt: '2026-09-03T10:05:00Z',
+        },
+      ],
+    }
+    window.localStorage.setItem(
+      'release-day-operations:release-1',
+      JSON.stringify({
+        versionId: 'release-1',
+        operationId: 'operation-1',
+        releaseDate: '2026-09-03',
+        startedAt: '2026-09-03T08:00:00Z',
+        selectedRepositories: [repository],
+        repositories: {
+          [repository]: { productionRelease: saved },
+        },
+        logs: [],
+      }),
+    )
+    window.localStorage.setItem(
+      'release-day-repository-states:release-1',
+      JSON.stringify({
+        cachedAt: Date.now(),
+        states: { [repository]: state },
+      }),
+    )
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(state)
+
+    render(
+      <ReleaseDayOperations
+        dashboard={{
+          ...dashboard,
+          version: { ...dashboard.version, releaseDate: '2026-09-03' },
+        }}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByRole('button', { name: 'Already deployed' }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole('link', { name: 'Live: v26.0903.1 · clr-api ↗' }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('link', { name: 'Live: v26.0903.1 · clr-web ↗' }),
+    ).toBeVisible()
+  })
+
   it('retries a failed production tag from its table cell', async () => {
     const user = userEvent.setup()
     const created = {

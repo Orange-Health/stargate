@@ -9,6 +9,7 @@ import {
   computeControlRoomProgress,
   computeReleaseProgress,
   isStepComplete,
+  productionTagDeployedToProd,
   progressRatio,
   readStoredReleaseProgress,
   releaseProgressDate,
@@ -203,6 +204,94 @@ describe('releaseProgress', () => {
     ).toBeUndefined()
   })
 
+})
+
+describe('productionTagDeployedToProd', () => {
+  const tag = 'v26.0903.1'
+
+  it('requires every mapped service to be live before treating clr as deployed', () => {
+    expect(
+      productionTagDeployedToProd(
+        tag,
+        controlRoomState('Orange-Health/clr', 'up_to_date', {
+          jenkinsServices: ['clr-api', 'clr-web'],
+          deployedTags: [
+            {
+              service: 'clr-api',
+              tag,
+              environment: 'production',
+              status: 'succeeded',
+              buildNumber: 1,
+              buildUrl: 'https://jenkins.test/1',
+              deployedAt: '2026-09-03T10:00:00Z',
+            },
+          ],
+        }),
+      ),
+    ).toBe(false)
+  })
+
+  it('treats clr as deployed only when clr-api and clr-web are both live', () => {
+    expect(
+      productionTagDeployedToProd(
+        tag,
+        controlRoomState('Orange-Health/clr', 'up_to_date', {
+          jenkinsServices: ['clr-api', 'clr-web'],
+          deployedTags: [
+            {
+              service: 'clr-api',
+              tag,
+              environment: 'production',
+              status: 'succeeded',
+              buildNumber: 1,
+              buildUrl: 'https://jenkins.test/1',
+              deployedAt: '2026-09-03T10:00:00Z',
+            },
+            {
+              service: 'clr-web',
+              tag,
+              environment: 'production',
+              status: 'succeeded',
+              buildNumber: 2,
+              buildUrl: 'https://jenkins.test/2',
+              deployedAt: '2026-09-03T10:05:00Z',
+            },
+          ],
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('keeps deploy available when another service is live on a different tag', () => {
+    expect(
+      productionTagDeployedToProd(
+        tag,
+        controlRoomState('Orange-Health/clr', 'up_to_date', {
+          jenkinsServices: ['clr-api', 'clr-web'],
+          deployedTags: [
+            {
+              service: 'clr-api',
+              tag,
+              environment: 'production',
+              status: 'succeeded',
+              buildNumber: 1,
+              buildUrl: 'https://jenkins.test/1',
+              deployedAt: '2026-09-03T10:00:00Z',
+            },
+            {
+              service: 'clr-web',
+              tag: 'v26.0820.1',
+              environment: 'production',
+              status: 'succeeded',
+              buildNumber: 2,
+              buildUrl: 'https://jenkins.test/2',
+              deployedAt: '2026-08-20T10:00:00Z',
+            },
+          ],
+        }),
+      ),
+    ).toBe(false)
+  })
 })
 
 function controlRoomState(

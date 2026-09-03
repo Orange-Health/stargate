@@ -94,6 +94,9 @@ describe('Jenkins service mapping', () => {
     expect(servicesForRepository('Orange-Health/scheduler-api')).toEqual([
       'scheduler-api',
     ])
+    expect(servicesForRepository('Orange-Health/scheduler')).toEqual([
+      'scheduler-web',
+    ])
     expect(
       deploymentSpec({
         repository: 'Orange-Health/scheduler-api',
@@ -109,6 +112,14 @@ describe('Jenkins service mapping', () => {
         tag: 'v-s3-26.0820.1',
         environment: 's3',
       }).parameters,
+    ).toMatchObject({ SERVICE_NAME: 'scheduler-api' })
+    expect(
+      deploymentSpec({
+        repository: 'Orange-Health/scheduler',
+        service: 'scheduler-web',
+        tag: 'v-s3-26.0820.1',
+        environment: 's3',
+      }).parameters,
     ).toMatchObject({ SERVICE_NAME: 'scheduler' })
     expect(
       productionDeploymentSpec({
@@ -120,6 +131,16 @@ describe('Jenkins service mapping', () => {
         prodMigrationJob: 'Prod-new-cluster-migration',
       }).parameters,
     ).toMatchObject({ SERVICE: 'scheduler-api' })
+    expect(
+      productionDeploymentSpec({
+        repository: 'Orange-Health/scheduler',
+        service: 'scheduler-web',
+        imageTag: 'v26.0820.1',
+        qaApprovalRequired: false,
+        skipProdMigration: false,
+        prodMigrationJob: 'Prod-new-cluster-migration',
+      }).parameters,
+    ).toMatchObject({ SERVICE: 'scheduler-web' })
     expect(servicesForRepository('Orange-Health/citrus')).toEqual(['citrus'])
     expect(servicesForRepository('Orange-Health/unknown')).toEqual([])
   })
@@ -541,6 +562,58 @@ describe('deployedTagsFromBuilds', () => {
         tag: 'v-prod-26.0716.6',
         environment: 'production',
         buildNumber: 2201,
+      }),
+    ])
+  })
+
+  it('maps production scheduler-web builds and staging scheduler name to the scheduler repo service', () => {
+    expect(
+      productionDeployedTagsFromBuilds(
+        [
+          {
+            number: 2201,
+            result: 'SUCCESS',
+            actions: [
+              {
+                parameters: [
+                  { name: 'SERVICE', value: 'scheduler-web' },
+                  { name: 'IMAGE_TAG', value: 'v26.0820.1' },
+                ],
+              },
+            ],
+          },
+        ],
+        ['scheduler-web'],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        service: 'scheduler-web',
+        tag: 'v26.0820.1',
+        environment: 'production',
+      }),
+    ])
+    expect(
+      productionDeployedTagsFromBuilds(
+        [
+          {
+            number: 2200,
+            result: 'SUCCESS',
+            actions: [
+              {
+                parameters: [
+                  { name: 'SERVICE', value: 'scheduler' },
+                  { name: 'IMAGE_TAG', value: 'v26.0820.1' },
+                ],
+              },
+            ],
+          },
+        ],
+        ['scheduler-web'],
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        service: 'scheduler-web',
+        tag: 'v26.0820.1',
       }),
     ])
   })

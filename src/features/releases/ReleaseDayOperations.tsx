@@ -35,6 +35,7 @@ import {
   releaseNotesForDashboard,
   type ReleaseNotesFormat,
 } from "./releaseNotes";
+import { productionTagDeployedToProd } from "./releaseProgress";
 import {
   displaySyncPercent,
   EXPECTED_SYNC_MS_PER_SERVICE,
@@ -2564,18 +2565,10 @@ export function ReleaseDayOperations({
                     productionDeployments.some(
                       (deployment) => deployment.status === "running",
                     ) || deploymentProgress?.status === "running";
-                  const latestTagAlreadyDeployed =
-                    Boolean(existingRelease) &&
-                    Boolean(repositoryState?.jenkinsServices.length) &&
-                    repositoryState?.jenkinsServices.every((jenkinsService) =>
-                      productionDeployments.some(
-                        (deployment) =>
-                          deployment.service === jenkinsService &&
-                          deployment.tag === existingRelease?.tag &&
-                          (deployment.status === undefined ||
-                            deployment.status === "succeeded"),
-                      ),
-                    );
+                  const latestTagAlreadyDeployed = productionTagDeployedToProd(
+                    existingRelease?.tag,
+                    repositoryState,
+                  );
                   const first = phaseState(
                     states[repository],
                     firstHop,
@@ -2967,7 +2960,8 @@ export function ReleaseDayOperations({
                                 }`}
                               >
                                 {productionDeploymentLabel(deployment)}
-                                {productionDeployments.length > 1
+                                {(repositoryState?.jenkinsServices.length ??
+                                  0) > 1
                                   ? ` · ${deployment.service}`
                                   : ""}{" "}
                                 ↗

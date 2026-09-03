@@ -117,7 +117,6 @@ const stagingDeployServiceNames: Record<string, string> = {
   "report-rebranding-api": "report-rebranding",
   "s3wrapper-api": "s3wrapper",
   sapphire: "sapphire-api",
-  "scheduler-api": "scheduler",
   "scheduler-web": "scheduler",
   "superlab-web": "amethyst",
   webhook: "webhook-service",
@@ -125,6 +124,15 @@ const stagingDeployServiceNames: Record<string, string> = {
 
 export function stagingDeployServiceName(service: string) {
   return stagingDeployServiceNames[service] ?? service;
+}
+
+/** Prod-cluster-deployment SERVICE values when they differ from dashboard keys. */
+const productionDeployServiceNames: Record<string, string> = {
+  "scheduler-web": "scheduler-web",
+};
+
+export function productionDeployServiceName(service: string) {
+  return productionDeployServiceNames[service] ?? service;
 }
 
 export function dashboardJenkinsServices() {
@@ -237,7 +245,9 @@ function resolveDashboardService(
   const direct = services.find((service) => service.toLowerCase() === lower);
   if (direct) return direct;
   return services.find(
-    (service) => stagingDeployServiceName(service).toLowerCase() === lower,
+    (service) =>
+      stagingDeployServiceName(service).toLowerCase() === lower ||
+      productionDeployServiceName(service).toLowerCase() === lower,
   );
 }
 
@@ -1094,7 +1104,7 @@ export function productionDeploymentSpec(
   return {
     jobName: "Prod Deployments/Prod-cluster-deployment",
     parameters: {
-      SERVICE: input.service,
+      SERVICE: productionDeployServiceName(input.service),
       IMAGE_TAG: input.imageTag,
       QA_APPROVAL_REQUIRED: input.qaApprovalRequired,
       QA_NAME: input.qaName?.trim() ?? "",
