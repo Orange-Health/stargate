@@ -7,17 +7,11 @@
 }
 
 .brand-mark {
-  align-items: center;
-  background: var(--surface-strong);
   border-radius: 12px;
-  color: var(--on-strong);
-  display: inline-flex;
-  font-family: var(--mono);
-  font-size: 16px;
-  font-weight: 700;
+  display: block;
+  flex-shrink: 0;
   height: 48px;
-  justify-content: center;
-  letter-spacing: -1px;
+  object-fit: cover;
   width: 48px;
 }
 
@@ -33,6 +27,14 @@
   height: 36px;
   object-fit: contain;
   width: auto;
+}
+
+.brand-icon {
+  display: block;
+  flex-shrink: 0;
+  height: 50px;
+  aspect-ratio: 1;
+  object-fit: cover;
 }
 
 .theme-toggle {
@@ -97,6 +99,11 @@
   border: 1px solid #93c5fd;
   color: #172554;
   font-weight: 700;
+}
+
+:root[data-theme="light"] .release-progress-step.current .release-progress-node {
+  background: #d1fae5;
+  color: #047857;
 }
 
 :root[data-theme="light"] .build-status.running {
@@ -522,12 +529,30 @@ button:disabled {
 .dashboard {
   margin: 0 auto;
   max-width: 1440px;
-  padding: 28px;
+  padding: 24px;
 }
 
 .release-toolbar {
-  justify-content: space-between;
-  margin-bottom: 18px;
+  --progress: #34d399;
+  --progress-ink: #06281c;
+  --progress-faint: #14392c;
+  --progress-track: var(--line-strong);
+  align-items: center;
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(210px, 1fr) auto;
+  margin-bottom: 12px;
+}
+
+.release-toolbar.has-progress {
+  grid-template-columns:
+    minmax(210px, 1fr)
+    minmax(460px, 640px)
+    minmax(210px, 1fr);
+}
+
+.release-toolbar-title {
+  min-width: 0;
 }
 
 .release-toolbar .eyebrow {
@@ -633,6 +658,7 @@ button:disabled {
 
 .release-meta {
   gap: 16px;
+  justify-self: end;
 }
 
 .release-meta .merge-feature-button {
@@ -642,20 +668,22 @@ button:disabled {
   white-space: nowrap;
 }
 
-.release-meta > span {
-  color: var(--muted);
+.release-refresh-control {
+  align-items: center;
   display: flex;
   flex-direction: column;
-  font-size: 10px;
   gap: 3px;
-  text-transform: uppercase;
 }
 
-.release-meta strong {
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: none;
+.release-refresh-control small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.release-refresh-control small span {
+  font-family: var(--mono);
 }
 
 .release-toolbar .secondary-button {
@@ -677,16 +705,12 @@ button:disabled {
 }
 
 .overview-strip {
-  --progress: #34d399;
-  --progress-ink: #06281c;
-  --progress-faint: #14392c;
-  --progress-track: #3d5474;
   background: var(--surface-strong);
   border-radius: 12px;
   color: var(--on-strong);
   display: flex;
   flex-direction: column;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   min-height: 0;
   overflow: visible;
   position: relative;
@@ -700,10 +724,14 @@ button:disabled {
 }
 
 .release-progress {
-  border-bottom: 1px solid var(--line-strong);
+  align-self: center;
   display: flex;
   gap: 0;
-  padding: 16px 22px 14px;
+  justify-self: center;
+  max-width: 640px;
+  min-width: 0;
+  padding: 2px 0;
+  width: 100%;
 }
 
 .release-progress-step {
@@ -726,16 +754,16 @@ button:disabled {
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 700;
-  height: 25px;
+  height: 21px;
   justify-content: center;
   position: relative;
-  width: 25px;
+  width: 21px;
   z-index: 1;
 }
 
 .release-progress-node svg {
-  height: 13px;
-  width: 13px;
+  height: 11px;
+  width: 11px;
 }
 
 .release-progress-step.complete .release-progress-node {
@@ -754,10 +782,10 @@ button:disabled {
   background: var(--progress-track);
   border-radius: 999px;
   height: 3px;
-  left: calc(50% + 16px);
+  left: calc(50% + 13px);
   position: absolute;
-  right: calc(-50% + 16px);
-  top: 11px;
+  right: calc(-50% + 13px);
+  top: 35px;
 }
 
 .release-progress-track span {
@@ -768,34 +796,33 @@ button:disabled {
   max-width: 100%;
 }
 
-.release-progress-copy {
-  align-items: center;
+.release-progress-label {
+  align-items: flex-end;
+  color: var(--ink);
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 7px;
-  min-width: 0;
-  padding: 0 6px;
-  text-align: center;
-}
-
-.release-progress-copy strong {
-  color: var(--on-strong);
   font-size: 9px;
   font-weight: 700;
+  justify-content: center;
   letter-spacing: 0.03em;
-  line-height: 1.3;
+  line-height: 1.2;
+  margin-bottom: 4px;
+  min-height: 22px;
+  min-width: 0;
+  padding: 0 4px;
+  text-align: center;
   text-transform: uppercase;
 }
 
-.release-progress-copy small {
-  color: var(--on-strong-muted);
+.release-progress-count {
+  color: var(--muted);
   font-family: var(--mono);
   font-size: 9px;
+  margin-top: 4px;
+  white-space: nowrap;
 }
 
-.release-progress-step.complete .release-progress-copy strong,
-.release-progress-step.current .release-progress-copy strong {
+.release-progress-step.complete .release-progress-label,
+.release-progress-step.current .release-progress-label {
   color: var(--progress);
 }
 
@@ -862,7 +889,7 @@ button:disabled {
   flex: 1;
   gap: 12px;
   min-width: 0;
-  padding: 10px 14px;
+  padding: 12px 14px 12px 18px;
 
   > div > p {
     margin: 0;
@@ -980,7 +1007,7 @@ button:disabled {
   align-self: start;
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 108px);
+  max-height: calc(100vh - 100px);
   overflow: visible;
   padding: 20px;
   position: sticky;
@@ -4733,6 +4760,18 @@ label {
   width: 1px;
 }
 
+@media (max-width: 1080px) {
+  .release-toolbar.has-progress {
+    gap: 10px 16px;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .release-toolbar.has-progress .release-progress {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
 @media (max-width: 980px) {
   .connection-layout {
     grid-template-columns: 1fr;
@@ -4893,8 +4932,7 @@ label {
     grid-template-columns: 1fr;
   }
 
-  .connected-label,
-  .release-meta > span {
+  .connected-label {
     display: none;
   }
 

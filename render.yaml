@@ -1,7 +1,7 @@
 services:
   - type: web
     runtime: node
-    name: lease-again
+    name: stargate
     plan: free
     # NOTE: If this service was created earlier, update Build Command in the
     # Render Dashboard (Settings → Build & Deploy). Blueprint edits do not

@@ -72,6 +72,7 @@ export function ReleaseProgressBar({ progress }: Props) {
             data-tooltip={hoverLabel}
             key={step.id}
           >
+            <strong className="release-progress-label">{step.label}</strong>
             <span className="release-progress-node">
               {complete ? <CheckIcon /> : index + 1}
             </span>
@@ -80,14 +81,11 @@ export function ReleaseProgressBar({ progress }: Props) {
                 <span style={{ width: `${fill}%` }} />
               </div>
             )}
-            <span className="release-progress-copy">
-              <strong>{step.label}</strong>
-              <small>
-                {step.total === 0
-                  ? '0 of 0'
-                  : `${step.current} of ${step.total}`}
-              </small>
-            </span>
+            <small className="release-progress-count">
+              {step.total === 0
+                ? '0 of 0'
+                : `${step.current} of ${step.total}`}
+            </small>
           </div>
         )
       })}

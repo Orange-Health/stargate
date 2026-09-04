@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import type { ConnectionConfig } from '../src/shared/types.js'
 
-const connectionCachePath = '/tmp/lease-again-connection.json'
+const connectionCachePath = '/tmp/stargate-connection.json'
 
 let connection: ConnectionConfig | undefined = loadCachedConnection()
 

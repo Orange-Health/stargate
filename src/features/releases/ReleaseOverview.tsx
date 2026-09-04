@@ -1479,6 +1479,11 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               src="https://assets.orangehealth.in/website/static/images/logo/vertical.svg?width=256&q=75&format=webp"
               alt="Orange Health Labs"
             />
+            <img
+              className="brand-icon"
+              src="/stargate-logo.png"
+              alt=""
+            />
             <span>
               <strong>Stargate</strong>
               <small>Release-day control room</small>
@@ -1513,6 +1518,11 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             src="https://assets.orangehealth.in/website/static/images/logo/vertical.svg?width=256&q=75&format=webp"
             alt="Orange Health Labs"
           />
+          <img
+            className="brand-icon"
+            src="/stargate-logo.png"
+            alt=""
+          />
           <span>
             <strong>Stargate</strong>
             <small>Operations console</small>
@@ -1536,8 +1546,10 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
       </header>
 
       <main className="dashboard">
-        <section className="release-toolbar">
-          <div>
+        <section
+          className={`release-toolbar${!allServicesSelected && dashboard && releaseProgress ? " has-progress" : ""}`}
+        >
+          <div className="release-toolbar-title">
             <p className="eyebrow">
               {allServicesSelected ? "Operations scope" : "Active release"}
             </p>
@@ -1555,42 +1567,39 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               }}
             />
           </div>
+          {!allServicesSelected && dashboard && releaseProgress && (
+            <ReleaseProgressBar progress={releaseProgress} />
+          )}
           <div className="release-meta">
-            {!allServicesSelected && (
-              <span>
-                Target
-                <strong>{formatDate(dashboard?.version.releaseDate)}</strong>
-              </span>
-            )}
-            {dashboard && (
-              <span>
-                Last synced
-                <strong>
-                  {relativeTime(dashboard.fetchedAt, syncedClock)}
-                </strong>
-              </span>
-            )}
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => {
-                if (allServicesSelected) {
-                  setRepositoriesReload((current) => current + 1);
-                } else {
-                  void onRefresh();
+            <div className="release-refresh-control">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => {
+                  if (allServicesSelected) {
+                    setRepositoriesReload((current) => current + 1);
+                  } else {
+                    void onRefresh();
+                  }
+                }}
+                disabled={
+                  loading ||
+                  (allServicesSelected && repositoriesLoading) ||
+                  bulkMerging ||
+                  !selectedVersionId
                 }
-              }}
-              disabled={
-                loading ||
-                (allServicesSelected && repositoriesLoading) ||
-                bulkMerging ||
-                !selectedVersionId
-              }
-            >
-              {loading || (allServicesSelected && repositoriesLoading)
-                ? "Syncing…"
-                : "↻ Refresh"}
-            </button>
+              >
+                {loading || (allServicesSelected && repositoriesLoading)
+                  ? "Syncing…"
+                  : "↻ Refresh"}
+              </button>
+              {dashboard && (
+                <small>
+                  Last synced{" "}
+                  <span>{relativeTime(dashboard.fetchedAt, syncedClock)}</span>
+                </small>
+              )}
+            </div>
           </div>
         </section>
 
@@ -1897,9 +1906,6 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
         {!allServicesSelected && dashboard && (
           <>
             <section className="overview-strip">
-              {releaseProgress && (
-                <ReleaseProgressBar progress={releaseProgress} />
-              )}
               <div className="overview-strip-body">
               <div className="readiness-score">
                 <div className="readiness-percent">
@@ -1974,10 +1980,6 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               <div className="stat">
                 <strong>{releaseTickets.length}</strong>
                 <span>Tickets</span>
-              </div>
-              <div className="stat">
-                <strong>{dashboard.githubRateLimit?.remaining ?? "—"}</strong>
-                <span>GitHub calls left</span>
               </div>
               {dashboard.cached && <span className="cache-pill">Cached</span>}
               </div>

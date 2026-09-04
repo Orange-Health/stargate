@@ -1,6 +1,10 @@
-# lease-again
+<p align="center">
+  <img src="public/stargate-logo.png" alt="Stargate" width="128" height="128" />
+</p>
 
-Orange Health release dashboard (UI brand: RD). Connects Jira versions, GitHub PRs/tags, and Jenkins deploys.
+<h1 align="center">stargate</h1>
+
+Orange Health release dashboard (UI brand: Stargate). Connects Jira versions, GitHub PRs/tags, and Jenkins deploys.
 
 ```bash
 npm install

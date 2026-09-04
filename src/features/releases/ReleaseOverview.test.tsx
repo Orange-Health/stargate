@@ -1719,6 +1719,7 @@ describe('ReleaseOverview', () => {
     const progress = await screen.findByRole('list', {
       name: 'Release progress',
     })
+    expect(progress.closest('.release-toolbar')).toBeInTheDocument()
     expect(progress).toHaveTextContent('Tickets finalised')
     expect(progress).toHaveTextContent("PR's merged")
     expect(progress).toHaveTextContent('Tags created')

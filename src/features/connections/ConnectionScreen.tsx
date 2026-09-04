@@ -117,7 +117,7 @@ export function ConnectionScreen({ onConnect }: Props) {
     <main className="connection-layout">
       <ThemeToggle className="connection-theme-toggle" />
       <section className="connection-intro">
-        <div className="brand-mark">RD</div>
+        <img className="brand-mark" src="/stargate-logo.png" alt="Stargate" />
         <p className="eyebrow">Release operations</p>
         <h1>One clear view of every release.</h1>
         <p className="intro-copy">

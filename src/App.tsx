@@ -215,7 +215,7 @@ function App() {
   if (checkingConnection) {
     return (
       <main className="boot-state">
-        <span className="brand-mark">RD</span>
+        <img className="brand-mark" src="/stargate-logo.png" alt="Stargate" />
         <span className="spinner" />
       </main>
     )
