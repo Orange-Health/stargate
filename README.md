@@ -4,7 +4,7 @@
 
 <h1 align="center">Stargate</h1>
 
-Stargate is Orange Health's release dashboard . Connects Jira versions, GitHub PRs/tags, and Jenkins deploys.
+Stargate is Orange Health's release dashboard. Connects Jira versions, GitHub PRs/tags, and Jenkins deploys.
 
 ```bash
 npm install
