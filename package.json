@@ -38,7 +38,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/supertest": "^7.2.0",
     "@vitejs/plugin-react": "^6.0.3",
-    "concurrently": "^10.0.3",
+    "concurrently": "^10.0.5",
     "jsdom": "^29.1.1",
     "oxlint": "^1.71.0",
     "supertest": "^7.2.2",
