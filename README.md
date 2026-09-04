@@ -2,7 +2,7 @@
   <img src="public/stargate-logo.png" alt="Stargate" width="180" height="180" />
 </p>
 
-<h1 align="center">stargate</h1>
+<h1 align="center">Stargate</h1>
 
 Stargate is Orange Health's release dashboard . Connects Jira versions, GitHub PRs/tags, and Jenkins deploys.
 
