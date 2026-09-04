@@ -124,6 +124,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+function stepCount(current: number, total: number) {
+  return (
+    <small
+      className="release-day-step-count"
+      aria-label={`${current} of ${total} services`}
+    >
+      {current}/{total}
+    </small>
+  );
+}
+
 function productionDeploymentLabel(deployment: JenkinsDeployedTag) {
   switch (deployment.status) {
     case "running":
@@ -247,13 +258,10 @@ function restoreSession(dashboard: ReleaseDashboard): BatchSession {
     ) {
       return newSession(dashboard);
     }
-    const available = new Set(
-      dashboard.services.map((service) => service.repository),
-    );
     return {
       ...saved,
-      selectedRepositories: saved.selectedRepositories.filter((repository) =>
-        available.has(repository),
+      selectedRepositories: dashboard.services.map(
+        (service) => service.repository,
       ),
       repositories: Object.fromEntries(
         dashboard.services.map((service) => [
@@ -470,6 +478,32 @@ export function ReleaseDayOperations({
       ).values(),
     ];
   }, [dashboard]);
+
+  useEffect(() => {
+    const available = dashboard.services.map((service) => service.repository);
+    setSession((current) => {
+      const known = new Set(Object.keys(current.repositories));
+      const selectedSet = new Set(current.selectedRepositories);
+      let changed = false;
+      const selectedRepositories = [...current.selectedRepositories];
+      const repositories = { ...current.repositories };
+
+      for (const repository of available) {
+        if (!(repository in repositories)) {
+          repositories[repository] = {};
+          changed = true;
+        }
+        if (!selectedSet.has(repository) && !known.has(repository)) {
+          selectedRepositories.push(repository);
+          selectedSet.add(repository);
+          changed = true;
+        }
+      }
+
+      if (!changed) return current;
+      return { ...current, selectedRepositories, repositories };
+    });
+  }, [dashboard.services]);
 
   useEffect(() => {
     sessionRef.current = session;
@@ -1319,6 +1353,11 @@ export function ReleaseDayOperations({
       selected.length > 0 && selected.every(predicate),
     [selected],
   );
+  const countSelected = useCallback(
+    (predicate: (repository: string) => boolean) =>
+      selected.filter(predicate).length,
+    [selected],
+  );
   const rowSyncCompleted = selected.filter((repository) =>
     ["synced", "failed"].includes(repositorySync[repository]),
   ).length;
@@ -1356,23 +1395,19 @@ export function ReleaseDayOperations({
     serviceCount: selected.length,
     priorMsPerService: syncPriorMsRef.current,
   });
-  const firstPrsReady = everySelected((repository) => {
+  const firstPrCreated = (repository: string) => {
     const step = routeStep(states[repository], firstHop);
     return step?.state === "pr_open" || step?.state === "up_to_date";
-  });
-  const firstMerged = everySelected(
-    (repository) =>
-      routeStep(states[repository], firstHop)?.state === "up_to_date",
-  );
-  const lastPrsReady = everySelected((repository) => {
+  };
+  const firstPrMerged = (repository: string) =>
+    routeStep(states[repository], firstHop)?.state === "up_to_date";
+  const lastPrCreated = (repository: string) => {
     const step = routeStep(states[repository], lastHop);
     return step?.state === "pr_open" || step?.state === "up_to_date";
-  });
-  const lastMerged = everySelected(
-    (repository) =>
-      routeStep(states[repository], lastHop)?.state === "up_to_date",
-  );
-  const releasesCreated = everySelected((repository) => {
+  };
+  const lastPrMerged = (repository: string) =>
+    routeStep(states[repository], lastHop)?.state === "up_to_date";
+  const productionReleaseCreated = (repository: string) => {
     const release = session.repositories[repository]?.productionRelease;
     if (
       !release ||
@@ -1385,8 +1420,8 @@ export function ReleaseDayOperations({
         (item) => item.tag === release.tag,
       )?.buildStatus !== "canceled"
     );
-  });
-  const buildsSucceeded = everySelected((repository) => {
+  };
+  const productionBuildSucceeded = (repository: string) => {
     const release = session.repositories[repository]?.productionRelease;
     if (
       !release ||
@@ -1399,10 +1434,20 @@ export function ReleaseDayOperations({
         (item) => item.tag === release.tag,
       )?.buildStatus === "succeeded"
     );
-  });
-  const hasSavedProgress =
-    session.logs.length > 0 ||
-    Object.values(session.repositories).some((item) => item.productionRelease);
+  };
+  const firstPrsReady = everySelected(firstPrCreated);
+  const firstMerged = everySelected(firstPrMerged);
+  const lastPrsReady = everySelected(lastPrCreated);
+  const lastMerged = everySelected(lastPrMerged);
+  const releasesCreated = everySelected(productionReleaseCreated);
+  const buildsSucceeded = everySelected(productionBuildSucceeded);
+  const selectedTotal = selected.length;
+  const firstPrsReadyCount = countSelected(firstPrCreated);
+  const firstMergedCount = countSelected(firstPrMerged);
+  const lastPrsReadyCount = countSelected(lastPrCreated);
+  const lastMergedCount = countSelected(lastPrMerged);
+  const releasesCreatedCount = countSelected(productionReleaseCreated);
+  const buildsSucceededCount = countSelected(productionBuildSucceeded);
   const topProgress = actionProgress
     ? {
         label: busyAction,
@@ -2174,25 +2219,6 @@ export function ReleaseDayOperations({
     }
   }
 
-  function resetSession() {
-    if (
-      hasSavedProgress &&
-      !window.confirm("Start a new run and clear the saved operation log?")
-    ) {
-      return;
-    }
-    const next = newSession(dashboard);
-    setSession(next);
-    sessionRef.current = next;
-    loadSequence.current += 1;
-    repositoryCacheTimestamp.current = 0;
-    setStates({});
-    setRepositorySync({});
-    window.localStorage.removeItem(
-      repositoryStateCacheKey(dashboard.version.id),
-    );
-  }
-
   return (
     <>
       <section className="release-day-page" aria-labelledby="release-day-title">
@@ -2235,14 +2261,6 @@ export function ReleaseDayOperations({
                 }
               />
             </label>
-            <button
-              className="text-button"
-              type="button"
-              disabled={refreshing || Boolean(busyAction)}
-              onClick={resetSession}
-            >
-              New run
-            </button>
             <button
               className="secondary-button"
               type="button"
@@ -2366,6 +2384,7 @@ export function ReleaseDayOperations({
             <span>1</span>
             <div>
               <strong>Create {promotionRouteLabel(firstHop)} PRs</strong>
+              {stepCount(firstPrsReadyCount, selectedTotal)}
             </div>
             <button
               className="primary-button"
@@ -2386,6 +2405,7 @@ export function ReleaseDayOperations({
             <span>2</span>
             <div>
               <strong>Merge {promotionRouteLabel(firstHop)} PRs</strong>
+              {stepCount(firstMergedCount, selectedTotal)}
             </div>
             <button
               className="primary-button"
@@ -2408,6 +2428,7 @@ export function ReleaseDayOperations({
                 <span>3</span>
                 <div>
                   <strong>Create {promotionRouteLabel(lastHop)} PRs</strong>
+                  {stepCount(lastPrsReadyCount, selectedTotal)}
                 </div>
                 <button
                   className="primary-button"
@@ -2428,6 +2449,7 @@ export function ReleaseDayOperations({
                 <span>4</span>
                 <div>
                   <strong>Merge {promotionRouteLabel(lastHop)} PRs</strong>
+                  {stepCount(lastMergedCount, selectedTotal)}
                 </div>
                 <button
                   className="primary-button"
@@ -2452,6 +2474,7 @@ export function ReleaseDayOperations({
             <span>{useReleaseBranch ? 5 : 3}</span>
             <div>
               <strong>Create production releases</strong>
+              {stepCount(releasesCreatedCount, selectedTotal)}
             </div>
             <button
               className="primary-button"
@@ -2472,6 +2495,7 @@ export function ReleaseDayOperations({
             <span>{useReleaseBranch ? 6 : 4}</span>
             <div>
               <strong>Monitor builds and deploy</strong>
+              {stepCount(buildsSucceededCount, selectedTotal)}
             </div>
             <span
               className={`batch-status ${buildsSucceeded ? "success" : "running"}`}

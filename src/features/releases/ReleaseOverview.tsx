@@ -1480,7 +1480,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               alt="Orange Health Labs"
             />
             <span>
-              <strong>Release Desk</strong>
+              <strong>Stargate</strong>
               <small>Release-day control room</small>
             </span>
           </div>
@@ -1514,7 +1514,7 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             alt="Orange Health Labs"
           />
           <span>
-            <strong>Release Desk</strong>
+            <strong>Stargate</strong>
             <small>Operations console</small>
           </span>
         </div>

@@ -3920,7 +3920,7 @@ label {
 }
 
 .release-day-title {
-  align-items: baseline;
+  align-items: center;
   display: flex;
   gap: 10px;
   min-width: 0;
@@ -4034,12 +4034,10 @@ label {
 }
 
 .release-day-steps {
-  display: grid;
+  display: flex;
   gap: 6px;
-  grid-template-columns: repeat(6, minmax(145px, 1fr));
   margin-bottom: 10px;
-  overflow-x: auto;
-  padding-bottom: 2px;
+  width: 100%;
 }
 
 .release-day-step {
@@ -4047,9 +4045,11 @@ label {
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
+  flex: 1 1 0;
   gap: 6px;
   grid-template-columns: 24px minmax(0, 1fr);
   min-height: 66px;
+  min-width: 0;
   padding: 7px;
 }
 
@@ -4082,6 +4082,14 @@ label {
 .release-day-step strong {
   font-size: 10px;
   line-height: 1.2;
+}
+
+.release-day-step-count {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.2;
+  margin-top: 2px;
 }
 
 .release-day-step .primary-button {
@@ -4826,7 +4834,11 @@ label {
   }
 
   .release-day-steps {
-    grid-template-columns: repeat(3, minmax(145px, 1fr));
+    flex-wrap: wrap;
+  }
+
+  .release-day-step {
+    flex: 1 1 calc((100% - 12px) / 3);
   }
 
   .release-day-app-shell {
@@ -4919,7 +4931,11 @@ label {
   }
 
   .release-day-steps {
-    grid-template-columns: 1fr;
+    flex-wrap: wrap;
+  }
+
+  .release-day-step {
+    flex: 1 1 100%;
   }
 
   .release-day-step .primary-button {

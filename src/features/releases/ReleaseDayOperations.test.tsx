@@ -167,7 +167,7 @@ describe('ReleaseDayOperations', () => {
     expect(serviceCheckbox).toBeChecked()
   })
 
-  it('does not request Jenkins deployments when no services are selected', async () => {
+  it('checks every service by default even if a previous session saved none selected', async () => {
     window.localStorage.setItem(
       'release-day-operations:release-1',
       JSON.stringify({
@@ -194,7 +194,99 @@ describe('ReleaseDayOperations', () => {
 
     expect(
       await screen.findByRole('checkbox', { name: `Include ${repository}` }),
+    ).toBeChecked()
+    expect(
+      screen.getByRole('checkbox', { name: 'Select all services' }),
+    ).toBeChecked()
+  })
+
+  it('keeps a service unchecked when the dashboard refreshes', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('needs_pr', 'needs_pr'),
+    )
+
+    const { rerender } = render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const serviceCheckbox = await screen.findByRole('checkbox', {
+      name: `Include ${repository}`,
+    })
+    await user.click(serviceCheckbox)
+    expect(serviceCheckbox).not.toBeChecked()
+
+    rerender(
+      <ReleaseDayOperations
+        dashboard={{ ...dashboard, fetchedAt: '2026-07-16T09:00:00Z' }}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      screen.getByRole('checkbox', { name: `Include ${repository}` }),
     ).not.toBeChecked()
+  })
+
+  it('selects services that appear after the control room opens', async () => {
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('needs_pr', 'needs_pr'),
+    )
+
+    const { rerender } = render(
+      <ReleaseDayOperations
+        dashboard={{ ...dashboard, services: [] }}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    rerender(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByRole('checkbox', { name: `Include ${repository}` }),
+    ).toBeChecked()
+    expect(
+      screen.getByRole('checkbox', { name: 'Select all services' }),
+    ).toBeChecked()
+  })
+
+  it('does not request Jenkins deployments when no services are selected', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(api, 'repositoryState').mockResolvedValue(
+      repositoryState('needs_pr', 'needs_pr'),
+    )
+
+    render(
+      <ReleaseDayOperations
+        dashboard={dashboard}
+        productionEnabled={true}
+        onClose={vi.fn()}
+      />,
+    )
+
+    const serviceCheckbox = await screen.findByRole('checkbox', {
+      name: `Include ${repository}`,
+    })
+    expect(serviceCheckbox).toBeChecked()
+    await user.click(serviceCheckbox)
+    expect(serviceCheckbox).not.toBeChecked()
+
+    vi.mocked(api.repositoryDeploymentStatuses).mockClear()
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
     expect(api.repositoryDeploymentStatuses).not.toHaveBeenCalled()
   })
 
@@ -1330,9 +1422,19 @@ describe('ReleaseDayOperations', () => {
     expect(
       screen.getByRole('button', { name: 'Create PRs' }),
     ).toBeDisabled()
+    const createStep = screen
+      .getByText('Create Dev → Release PRs')
+      .closest('article')
     const devMergeStep = screen
       .getByText('Merge Dev → Release PRs')
       .closest('article')
+    expect(createStep).not.toBeNull()
+    expect(
+      within(createStep as HTMLElement).getByLabelText('1 of 1 services'),
+    ).toHaveTextContent('1/1')
+    expect(
+      within(devMergeStep as HTMLElement).getByLabelText('0 of 1 services'),
+    ).toHaveTextContent('0/1')
     expect(devMergeStep).not.toBeNull()
     await user.click(
       within(devMergeStep as HTMLElement).getByRole('button', {
@@ -1346,6 +1448,9 @@ describe('ReleaseDayOperations', () => {
       ).toBeEnabled(),
     )
     expect(screen.getByText('Result: merged PR #12 into release.')).toBeVisible()
+    expect(
+      within(devMergeStep as HTMLElement).getByLabelText('1 of 1 services'),
+    ).toHaveTextContent('1/1')
     expect(api.refreshRepository).not.toHaveBeenCalled()
     expect(api.repositoryState).toHaveBeenCalledTimes(1)
   })
