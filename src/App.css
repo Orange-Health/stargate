@@ -432,11 +432,18 @@ button:disabled {
 }
 
 .alert {
+  animation: dismiss-alert 0s 5s forwards;
   border: 1px solid;
   border-radius: 9px;
   font-size: 13px;
   line-height: 1.5;
   padding: 12px 14px;
+}
+
+@keyframes dismiss-alert {
+  to {
+    display: none;
+  }
 }
 
 .alert.error {
