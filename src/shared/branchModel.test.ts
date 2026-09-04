@@ -14,12 +14,14 @@ import {
 } from './branchModel.js'
 
 describe('branchModel', () => {
-  it('defaults to using the release branch', () => {
+  it('skips the release branch unless the localStorage key opts in', () => {
     const storage = { getItem: () => null }
-    expect(readUseReleaseBranch(storage)).toBe(true)
-    expect(parseUseReleaseBranch(undefined)).toBe(true)
+    expect(readUseReleaseBranch(storage)).toBe(false)
+    expect(parseUseReleaseBranch(undefined)).toBe(false)
     expect(parseUseReleaseBranch('false')).toBe(false)
     expect(parseUseReleaseBranch(false)).toBe(false)
+    expect(parseUseReleaseBranch('true')).toBe(true)
+    expect(parseUseReleaseBranch(true)).toBe(true)
   })
 
   it('persists the localStorage preference', () => {

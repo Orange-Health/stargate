@@ -1103,7 +1103,7 @@ async function loadRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
   includeAllVReleases = false,
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ): Promise<RepositoryReleaseState> {
   assertConnectedRepository(config, repository)
   const metadata = await githubApi<GitHubRepository>(
@@ -1184,7 +1184,7 @@ export function getRepositoryReleaseState(
   config: ConnectionConfig,
   repository: string,
   includeAllVReleases = false,
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ): Promise<RepositoryReleaseState> {
   assertConnectedRepository(config, repository)
   const key = repositoryStateCacheKey(
@@ -1325,7 +1325,7 @@ async function loadReleaseControlRoomStateFromSnapshot(
   config: ConnectionConfig,
   repository: string,
   snapshot: ControlRoomGraphqlSnapshot,
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ): Promise<ReleaseControlRoomState> {
   const productionReleases = controlRoomProductionReleases(
     snapshot.releases,
@@ -1393,7 +1393,7 @@ async function enrichReleaseControlRoomState(
 async function loadReleaseControlRoomStateFast(
   config: ConnectionConfig,
   repository: string,
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ): Promise<ReleaseControlRoomState> {
   assertConnectedRepository(config, repository)
   const [metadata, releases, openPulls] = await Promise.all([
@@ -1437,7 +1437,7 @@ async function loadReleaseControlRoomStateFast(
 async function loadReleaseControlRoomState(
   config: ConnectionConfig,
   repository: string,
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ): Promise<ReleaseControlRoomState> {
   const fast = await loadReleaseControlRoomStateFast(
     config,
@@ -1454,7 +1454,7 @@ async function loadReleaseControlRoomState(
 export function getReleaseControlRoomState(
   config: ConnectionConfig,
   repository: string,
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ): Promise<ReleaseControlRoomState> {
   assertConnectedRepository(config, repository)
   const key = controlRoomCacheKey(config, repository, useReleaseBranch)
@@ -1519,7 +1519,7 @@ export async function getReleaseControlRoomStatesBatch(
   githubRateLimit: ReturnType<typeof getLatestGitHubRateLimit>
 }> {
   const startedAt = performance.now()
-  const useReleaseBranch = options?.useReleaseBranch ?? true
+  const useReleaseBranch = options?.useReleaseBranch ?? false
   const promotionCompareCount = promotionRoutes(useReleaseBranch).length
   const repositories = [...new Set(requestedRepositories)]
   const results = new Map<string, ReleaseControlSyncResult>()
@@ -1744,7 +1744,7 @@ export async function assertProductionBranchesIdentical(
 export async function getRepositoryBackMergeStatus(
   config: ConnectionConfig,
   repository: string,
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ) {
   assertConnectedRepository(config, repository)
   const key = riskCacheKey(config, repository, useReleaseBranch)
@@ -1787,7 +1787,7 @@ export async function getRepositoryBackMergeStatus(
 export async function getRepositoryRisks(
   config: ConnectionConfig,
   repositories: string[],
-  useReleaseBranch = true,
+  useReleaseBranch = false,
 ): Promise<RepositoryRisk[]> {
   const results: RepositoryRisk[] = new Array(repositories.length)
   let cursor = 0

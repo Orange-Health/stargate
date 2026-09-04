@@ -1052,6 +1052,7 @@ describe('repository state cache', () => {
     const state = await getReleaseControlRoomState(
       config,
       'Orange-Health/service-api',
+      true,
     )
 
     expect(state.productionReleases[0]).toMatchObject({
@@ -1100,8 +1101,8 @@ describe('repository state cache', () => {
     clearRepositoryCaches(config, 'Orange-Health/service-api')
 
     const [first, second] = await Promise.all([
-      getReleaseControlRoomState(config, 'Orange-Health/service-api'),
-      getReleaseControlRoomState(config, 'Orange-Health/service-api'),
+      getReleaseControlRoomState(config, 'Orange-Health/service-api', true),
+      getReleaseControlRoomState(config, 'Orange-Health/service-api', true),
     ])
 
     expect(first).toBe(second)
@@ -1211,7 +1212,13 @@ describe('repository state cache', () => {
       clearRepositoryCaches(config, repository)
     }
 
-    const result = await getReleaseControlRoomStatesBatch(config, repositories)
+    const result = await getReleaseControlRoomStatesBatch(
+      config,
+      repositories,
+      false,
+      undefined,
+      { useReleaseBranch: true },
+    )
 
     expect(result.results.map((item) => item.state?.repository)).toEqual(
       repositories,
@@ -1292,7 +1299,13 @@ describe('repository state cache', () => {
       clearRepositoryCaches(config, repository)
     }
 
-    const result = await getReleaseControlRoomStatesBatch(config, repositories)
+    const result = await getReleaseControlRoomStatesBatch(
+      config,
+      repositories,
+      false,
+      undefined,
+      { useReleaseBranch: true },
+    )
 
     expect(result.results).toHaveLength(20)
     expect(result.results.every((item) => item.state)).toBe(true)
@@ -1348,8 +1361,8 @@ describe('repository state cache', () => {
     clearRepositoryCaches(config, 'Orange-Health/service-api')
 
     const [first, second] = await Promise.all([
-      getRepositoryReleaseState(config, 'Orange-Health/service-api'),
-      getRepositoryReleaseState(config, 'Orange-Health/service-api'),
+      getRepositoryReleaseState(config, 'Orange-Health/service-api', false, true),
+      getRepositoryReleaseState(config, 'Orange-Health/service-api', false, true),
     ])
 
     expect(first).toBe(second)
@@ -1588,7 +1601,12 @@ describe('repository state cache', () => {
     }
     clearRepositoryCaches(config, repository)
 
-    const state = await getRepositoryReleaseState(config, repository)
+    const state = await getRepositoryReleaseState(
+      config,
+      repository,
+      false,
+      true,
+    )
 
     expect(
       state.promotionSteps.find(

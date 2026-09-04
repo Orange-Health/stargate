@@ -79,6 +79,7 @@ const dashboard: ReleaseDashboard = {
 describe('ReleaseOverview', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    window.localStorage.setItem('release-desk-use-release-branch', 'true')
     vi.spyOn(api, 'repositories').mockResolvedValue([])
     vi.spyOn(api, 'repositoryRisks').mockImplementation(async (repositories) =>
       repositories.map((repository) => ({

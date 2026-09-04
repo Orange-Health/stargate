@@ -1479,6 +1479,9 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
               src="https://assets.orangehealth.in/website/static/images/logo/vertical.svg?width=256&q=75&format=webp"
               alt="Orange Health Labs"
             />
+            <span className="brand-partner-mark" aria-hidden="true">
+              ×
+            </span>
             <img
               className="brand-icon"
               src="/stargate-logo.png"
@@ -1518,6 +1521,9 @@ ${releaseBulkRetargetCount} will be retargeted from the default branch first.`
             src="https://assets.orangehealth.in/website/static/images/logo/vertical.svg?width=256&q=75&format=webp"
             alt="Orange Health Labs"
           />
+          <span className="brand-partner-mark" aria-hidden="true">
+            ×
+          </span>
           <img
             className="brand-icon"
             src="/stargate-logo.png"

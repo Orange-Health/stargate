@@ -247,12 +247,12 @@ const eitriDeploymentSchema = z
 
 const repositoryRisksSchema = z.object({
   repositories: z.array(repositorySchema).max(100),
-  useReleaseBranch: z.boolean().optional().default(true),
+  useReleaseBranch: z.boolean().optional().default(false),
 })
 const repositoryBatchSchema = z.object({
   repositories: z.array(repositorySchema).min(1).max(100),
   forceRefresh: z.boolean().optional().default(false),
-  useReleaseBranch: z.boolean().optional().default(true),
+  useReleaseBranch: z.boolean().optional().default(false),
   progressId: z
     .string()
     .regex(/^[A-Za-z0-9_-]{8,80}$/)
@@ -281,7 +281,7 @@ const serviceRefreshSchema = z.object({
     .min(1)
     .max(200),
   includeRepositoryState: z.boolean().optional().default(true),
-  useReleaseBranch: z.boolean().optional().default(true),
+  useReleaseBranch: z.boolean().optional().default(false),
 })
 const ticketRefreshSchema = z.object({
   issueKey: z.string().regex(/^[A-Z][A-Z0-9]+-\d+$/i),

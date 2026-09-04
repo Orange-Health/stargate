@@ -6,9 +6,9 @@ export function readUseReleaseBranch(
   storage: Pick<Storage, 'getItem'> | null | undefined = globalThis.localStorage,
 ): boolean {
   try {
-    return storage?.getItem(USE_RELEASE_BRANCH_STORAGE_KEY) !== 'false'
+    return storage?.getItem(USE_RELEASE_BRANCH_STORAGE_KEY) === 'true'
   } catch {
-    return true
+    return false
   }
 }
 
@@ -28,7 +28,7 @@ export function writeUseReleaseBranch(
 
 export function parseUseReleaseBranch(value: unknown): boolean {
   if (Array.isArray(value)) return parseUseReleaseBranch(value[0])
-  return value !== false && value !== 'false'
+  return value === true || value === 'true'
 }
 
 export function promotionRoutes(useReleaseBranch: boolean): PromotionRoute[] {

@@ -140,6 +140,7 @@ function releaseData(
 }
 
 beforeEach(() => {
+  window.localStorage.setItem('release-desk-use-release-branch', 'true')
   vi.spyOn(api, 'repositoryReleaseData').mockResolvedValue(
     releaseData(repositoryState),
   )

@@ -105,6 +105,7 @@ function repositoryState(
 describe('ReleaseDayOperations', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    window.localStorage.setItem(USE_RELEASE_BRANCH_STORAGE_KEY, 'true')
     vi.spyOn(api, 'refreshRepository').mockResolvedValue()
     vi.spyOn(api, 'releaseControlState').mockImplementation((repository) =>
       api.repositoryState(repository),

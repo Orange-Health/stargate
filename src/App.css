@@ -32,7 +32,7 @@
 .brand-icon {
   display: block;
   flex-shrink: 0;
-  height: 50px;
+  height: 40px;
   aspect-ratio: 1;
   object-fit: cover;
 }
@@ -101,7 +101,9 @@
   font-weight: 700;
 }
 
-:root[data-theme="light"] .release-progress-step.current .release-progress-node {
+:root[data-theme="light"]
+  .release-progress-step.current
+  .release-progress-node {
   background: #d1fae5;
   color: #047857;
 }
@@ -116,6 +118,7 @@
 :root[data-theme="light"] .merge-feature-button,
 :root[data-theme="light"] .journey-action.merge {
   background: #1d4ed8;
+  border-color: #1e40af;
   color: #ffffff;
   box-shadow: 0 4px 12px rgb(29 78 216 / 18%);
 }
@@ -125,12 +128,14 @@
 :root[data-theme="light"] .merge-feature-button:hover:not(:disabled),
 :root[data-theme="light"] .journey-action.merge:hover:not(:disabled) {
   background: #1e40af;
+  border-color: #172554;
 }
 
 :root[data-theme="light"] .primary-button:disabled,
 :root[data-theme="light"] .merge-feature-button:disabled,
 :root[data-theme="light"] .journey-action.merge:disabled {
   background: #b9c5d6;
+  border-color: #8793a5;
   color: #5f6f85;
   box-shadow: none;
 }
@@ -401,7 +406,7 @@ button {
 
 .primary-button {
   background: var(--green);
-  border: 0;
+  border: 1px solid var(--green-light);
   color: #07111f;
   min-height: 48px;
   padding: 0 20px;
@@ -474,12 +479,20 @@ button:disabled {
 }
 
 .brand {
-  gap: 16px;
+  gap: 12px;
 
   > span {
     position: relative;
     top: 2px;
   }
+}
+
+.brand > .brand-partner-mark {
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1;
+  position: static;
 }
 
 .brand > span:last-child {
@@ -533,10 +546,6 @@ button:disabled {
 }
 
 .release-toolbar {
-  --progress: #34d399;
-  --progress-ink: #06281c;
-  --progress-faint: #14392c;
-  --progress-track: var(--line-strong);
   align-items: center;
   display: grid;
   gap: 20px;
@@ -887,7 +896,7 @@ button:disabled {
   align-items: center;
   display: flex;
   flex: 1;
-  gap: 12px;
+  gap: 16px;
   min-width: 0;
   padding: 12px 14px 12px 18px;
 
@@ -1433,7 +1442,7 @@ button:disabled {
 .create-release-button {
   align-items: center;
   background: var(--green);
-  border: 0;
+  border: 1px solid var(--green-light);
   border-radius: 8px;
   color: #07111f;
   cursor: pointer;
@@ -2103,7 +2112,7 @@ body[data-modal-open] {
 
 .merge-feature-button {
   background: var(--green);
-  border: 0;
+  border: 1px solid var(--green-light);
   border-radius: 7px;
   color: #07111f;
   cursor: pointer;
@@ -3658,6 +3667,7 @@ a.eitri-build-link {
 
 .journey-action.merge {
   background: var(--green);
+  border-color: var(--green-light);
   color: white;
 }
 

@@ -189,14 +189,14 @@ export const api = {
   repositoryState: (repository: string, includeAllVReleases = false) => {
     const query = new URLSearchParams({ repository })
     if (includeAllVReleases) query.set('includeAllVReleases', 'true')
-    if (!readUseReleaseBranch()) query.set('useReleaseBranch', 'false')
+    if (readUseReleaseBranch()) query.set('useReleaseBranch', 'true')
     return request<RepositoryReleaseState>(
       `/api/github/repository-state?${query}`,
     )
   },
   releaseControlState: (repository: string) => {
     const query = new URLSearchParams({ repository })
-    if (!readUseReleaseBranch()) query.set('useReleaseBranch', 'false')
+    if (readUseReleaseBranch()) query.set('useReleaseBranch', 'true')
     return request<ReleaseControlRoomState>(
       `/api/github/release-control-state?${query}`,
     )
