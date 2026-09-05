@@ -1487,7 +1487,10 @@ body[data-modal-open] {
   border: 1px solid var(--line);
   border-radius: 16px;
   box-shadow: 0 24px 80px rgb(0 0 0 / 52%);
+  max-height: 88dvh;
   max-width: 520px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 30px;
   position: relative;
   width: 100%;
